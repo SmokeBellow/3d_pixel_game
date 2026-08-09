@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  validate-framework:
+    name: Validate CCGS framework
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Every agent has YAML frontmatter with name + description
+        run: |
+          status=0
+          for f in .claude/agents/*.md; do
+            head=$(sed -n '2,20p' "$f" | sed -n '1,/^---$/p')
+            echo "$head" | grep -q '^name:' || { echo "::error file=$f::missing 'name' in frontmatter"; status=1; }
+            echo "$head" | grep -q '^description:' || { echo "::error file=$f::missing 'description' in frontmatter"; status=1; }
+          done
+          exit $status
+
+      - name: Every skill has a SKILL.md
+        run: |
+          status=0
+          for d in .claude/skills/*/; do
+            [ -f "${d}SKILL.md" ] || { echo "::error::${d} is missing SKILL.md"; status=1; }
+          done
+          exit $status
+
+      - name: YAML files parse
+        run: |
+          pip install --quiet pyyaml
+          status=0
+          while IFS= read -r -d '' f; do
+            python3 -c "import sys, yaml; yaml.safe_load(open(sys.argv[1]))" "$f" || { echo "::error file=$f::invalid YAML"; status=1; }
+          done < <(find . -name '*.yaml' -o -name '*.yml' -print0)
+          exit $status
+
+      - name: JSON files parse
+        run: |
+          status=0
+          while IFS= read -r -d '' f; do
+            python3 -m json.tool "$f" > /dev/null || { echo "::error file=$f::invalid JSON"; status=1; }
+          done < <(find . -name '*.json' -print0)
+          exit $status
