@@ -34,6 +34,12 @@ public class PlayerCombatController : MonoBehaviour
     public AttackHitbox attackHitbox;
     public Transform cameraTransform;
 
+    [Header("Swing Visual (placeholder — no real animation)")]
+    public Transform weaponVisual;
+    public float restAngle = -30f;    // idle, held to the side
+    public float windupAngle = -110f; // pulled back before the hit
+    public float followThroughAngle = 60f; // swung past the target after the hit
+
     CharacterController _controller;
     Vector3 _velocity;
 
@@ -73,6 +79,7 @@ public class PlayerCombatController : MonoBehaviour
 
         HandleComboTimers();
         HandleAttackInput();
+        UpdateWeaponVisual();
 
         if (!_isAttacking && !_isDodging && Input.GetButtonDown("Jump") && _dodgeCooldownTimer <= 0f)
         {
@@ -226,6 +233,48 @@ public class PlayerCombatController : MonoBehaviour
         if (_dodgeCooldownTimer > 0f)
             _dodgeCooldownTimer -= Time.deltaTime;
     }
+
+    // Procedural swing tween — windup, then a fast swing through the hitbox's active
+    // window, then recovery. No real animation; this exists purely to give the combo
+    // chain a visual timing cue so the player can read when a hit lands and when the
+    // next input window opens.
+    void UpdateWeaponVisual()
+    {
+        if (weaponVisual == null) return;
+
+        float targetAngle;
+        if (_isAttacking)
+        {
+            ComboStep step = comboSteps[_comboIndex];
+            float t = _comboStepTimer;
+
+            if (t <= step.activeStart)
+            {
+                float p = step.activeStart > 0f ? Mathf.Clamp01(t / step.activeStart) : 1f;
+                targetAngle = Mathf.Lerp(restAngle, windupAngle, EaseOutQuad(p));
+            }
+            else if (t <= step.activeEnd)
+            {
+                // The fast part of the swing — deliberately linear/snappy, this is the moment the hit registers.
+                float p = Mathf.Clamp01((t - step.activeStart) / Mathf.Max(0.0001f, step.activeEnd - step.activeStart));
+                targetAngle = Mathf.Lerp(windupAngle, followThroughAngle, p);
+            }
+            else
+            {
+                float p = Mathf.Clamp01((t - step.activeEnd) / Mathf.Max(0.0001f, step.totalDuration - step.activeEnd));
+                targetAngle = Mathf.Lerp(followThroughAngle, restAngle, EaseOutQuad(p));
+            }
+
+            weaponVisual.localRotation = Quaternion.Euler(0f, targetAngle, 0f);
+        }
+        else
+        {
+            Quaternion restRot = Quaternion.Euler(0f, restAngle, 0f);
+            weaponVisual.localRotation = Quaternion.Slerp(weaponVisual.localRotation, restRot, Time.deltaTime * 10f);
+        }
+    }
+
+    static float EaseOutQuad(float p) => 1f - (1f - p) * (1f - p);
 
     public bool IsInvulnerable => _isInvulnerable;
 

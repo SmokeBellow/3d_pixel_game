@@ -23,6 +23,7 @@ public static class CoreCombatSceneSetup
             if (!proceed) return;
         }
 
+        BuildEnvironment();
         GameObject player = BuildPlayer();
         BuildDummies();
         GameObject cameraRig = BuildCameraRig(player);
@@ -33,6 +34,35 @@ public static class CoreCombatSceneSetup
             "Core Combat Prototype",
             "Scene built. Press Play to test.\n\nWASD move, left mouse = attack (chain near end of swing), right mouse held + move = orbit camera, space = dodge.",
             "OK");
+    }
+
+    const float ArenaSize = 20f;
+    const float WallHeight = 3f;
+    const float WallThickness = 1f;
+
+    static void BuildEnvironment()
+    {
+        var env = new GameObject("Environment");
+
+        GameObject floor = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        floor.name = "Floor";
+        floor.transform.SetParent(env.transform);
+        floor.transform.position = new Vector3(0f, -0.5f, 0f);
+        floor.transform.localScale = new Vector3(ArenaSize, 1f, ArenaSize);
+
+        BuildWall(env.transform, "Wall_North", new Vector3(0f, WallHeight / 2f, ArenaSize / 2f), new Vector3(ArenaSize + WallThickness, WallHeight, WallThickness));
+        BuildWall(env.transform, "Wall_South", new Vector3(0f, WallHeight / 2f, -ArenaSize / 2f), new Vector3(ArenaSize + WallThickness, WallHeight, WallThickness));
+        BuildWall(env.transform, "Wall_East", new Vector3(ArenaSize / 2f, WallHeight / 2f, 0f), new Vector3(WallThickness, WallHeight, ArenaSize + WallThickness));
+        BuildWall(env.transform, "Wall_West", new Vector3(-ArenaSize / 2f, WallHeight / 2f, 0f), new Vector3(WallThickness, WallHeight, ArenaSize + WallThickness));
+    }
+
+    static void BuildWall(Transform parent, string name, Vector3 position, Vector3 scale)
+    {
+        GameObject wall = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        wall.name = name;
+        wall.transform.SetParent(parent);
+        wall.transform.position = position;
+        wall.transform.localScale = scale;
     }
 
     static GameObject BuildPlayer()
@@ -61,8 +91,33 @@ public static class CoreCombatSceneSetup
 
         var combat = player.AddComponent<PlayerCombatController>();
         combat.attackHitbox = hitbox;
+        combat.weaponVisual = BuildWeaponVisual(player.transform);
 
         return player;
+    }
+
+    static Transform BuildWeaponVisual(Transform player)
+    {
+        // Pivot at roughly shoulder height; the blade extends outward from it so
+        // rotating the pivot reads as a swing rather than a spin-in-place.
+        var pivot = new GameObject("WeaponPivot");
+        pivot.transform.SetParent(player);
+        pivot.transform.localPosition = new Vector3(0.4f, 1.3f, 0.1f);
+        pivot.transform.localRotation = Quaternion.identity;
+
+        GameObject blade = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        blade.name = "WeaponBlade";
+        Object.DestroyImmediate(blade.GetComponent<BoxCollider>());
+        blade.transform.SetParent(pivot.transform);
+        blade.transform.localPosition = new Vector3(0f, 0f, 0.65f);
+        blade.transform.localScale = new Vector3(0.12f, 0.12f, 1.3f);
+
+        var renderer = blade.GetComponent<Renderer>();
+        var mat = new Material(renderer.sharedMaterial);
+        mat.color = new Color(0.82f, 0.82f, 0.88f);
+        renderer.material = mat;
+
+        return pivot.transform;
     }
 
     static void BuildDummies()

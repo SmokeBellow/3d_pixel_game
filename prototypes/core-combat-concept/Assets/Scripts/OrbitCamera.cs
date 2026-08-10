@@ -26,6 +26,23 @@ public class OrbitCamera : MonoBehaviour
             _yaw = target.eulerAngles.y;
     }
 
+    void Update()
+    {
+        // Lock and hide the cursor while orbiting — without this, the cursor hits the
+        // screen edge during a drag and the next Mouse X delta reads as a large jump,
+        // which is what caused the reported "snap" during rotation.
+        if (Input.GetMouseButtonDown(1))
+        {
+            Cursor.lockState = CursorLockMode.Locked;
+            Cursor.visible = false;
+        }
+        else if (Input.GetMouseButtonUp(1))
+        {
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+        }
+    }
+
     void LateUpdate()
     {
         if (target == null) return;
