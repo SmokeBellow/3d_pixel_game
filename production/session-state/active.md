@@ -2,6 +2,22 @@
 
 *Last updated: 2026-08-10*
 
+## IN PROGRESS: /prototype core-combat
+
+- **Status**: Phase 5 — Implement (Engine path, Unity)
+- **Hypothesis**: Fast/responsive melee combat with combo chains in Unity can still feel weighty — a 3+ hit combo feels connected, hits give clear feedback with no perceived input lag.
+- **Riskiest assumption being tested**: combining "fast/responsive" with "weighty" in the same combat feel — first completed 3D project.
+- **Path**: Engine (Unity) — chosen because feel IS the hypothesis, browser latency would lie.
+- **Scope** (explicitly minimal):
+  - Capsule player, WASD movement, simple third-person orbit camera
+  - One weapon: 3-hit combo chain on left-click with input buffering
+  - Dodge roll with i-frames
+  - 2-3 stationary target dummy capsules: knockback + color flash + hit-stop (`Time.timeScale` blip) + camera shake on hit
+  - Placeholder hit sound (generated tone via `AudioSource`)
+- **Explicitly cut**: pixelation post-process shader (deferred to a separate future spike — it's a rendering question, not a combat-feel question), enemy AI, real animations (squash/stretch placeholder only), health/damage UI, menus, multiple weapons, dungeon environment.
+- **Output location**: `prototypes/core-combat-concept/`
+- **Next action if resuming**: check `prototypes/core-combat-concept/` for what's been written so far; continue the Engine-path multi-turn loop (write code → user runs in Unity Editor → reports errors/feel → iterate) until playable, then move to Phase 6 (Playtest Debrief).
+
 ## Current Stage
 
 - `production/stage.txt` = `Concept`
