@@ -9,7 +9,7 @@
 
 ## IN PROGRESS: /prototype core-combat
 
-- **Status**: Phase 5 — Implement (Engine path, Unity)
+- **Status**: Phase 5 — Implement (Engine path, Unity) — code is DONE and pushed. Blocked on the user actually running it in their local Unity Editor and reporting back. Nothing more to build until we get playtest feedback (Phase 6).
 - **Hypothesis**: Fast/responsive melee combat with combo chains in Unity can still feel weighty — a 3+ hit combo feels connected, hits give clear feedback with no perceived input lag.
 - **Riskiest assumption being tested**: combining "fast/responsive" with "weighty" in the same combat feel — first completed 3D project.
 - **Path**: Engine (Unity) — chosen because feel IS the hypothesis, browser latency would lie.
@@ -20,8 +20,15 @@
   - 2-3 stationary target dummy capsules: knockback + color flash + hit-stop (`Time.timeScale` blip) + camera shake on hit
   - Placeholder hit sound (generated tone via `AudioSource`)
 - **Explicitly cut**: pixelation post-process shader (deferred to a separate future spike — it's a rendering question, not a combat-feel question), enemy AI, real animations (squash/stretch placeholder only), health/damage UI, menus, multiple weapons, dungeon environment.
-- **Output location**: `prototypes/core-combat-concept/`
-- **Next action if resuming**: check `prototypes/core-combat-concept/` for what's been written so far; continue the Engine-path multi-turn loop (write code → user runs in Unity Editor → reports errors/feel → iterate) until playable, then move to Phase 6 (Playtest Debrief).
+- **Output location**: `prototypes/core-combat-concept/` — 6 gameplay scripts in `Assets/Scripts/` + `Assets/Scripts/Editor/CoreCombatSceneSetup.cs` (one-click scene builder, menu: Tools → Core Combat Prototype → Build Scene).
+- **What the user still needs to do** (last instructions given, in chat, not yet confirmed done):
+  1. Copy `prototypes/core-combat-concept/Assets/Scripts/` (incl. `Editor/` subfolder) into their Unity project's `Assets/Scripts/`
+  2. Let it compile
+  3. Tools → Core Combat Prototype → Build Scene (one click, builds player/dummies/camera/hit-feedback automatically)
+  4. Press Play, test combat for a few minutes
+  5. Report back — then we run Phase 6 Playtest Debrief (hypothesis check, best/worst moment, surprise, PROCEED/PIVOT/KILL verdict)
+- **Side quest in progress**: user ran out of disk space, reinstalled Unity 6.3 LTS on a different drive on Windows. Should now retry copying scripts in and building the scene.
+- **Next action if resuming**: ask the user whether the reinstall + scene build worked, and if they've played the prototype yet. If not yet run, re-share the numbered steps above. If run, proceed straight to the Phase 6 Playtest Debrief questions (one at a time: hypothesis check → best moment → worst moment → surprise → verdict).
 
 ## Current Stage
 
@@ -75,8 +82,17 @@ Per the game concept's "Next Steps" and the recommended **Path B — Prototype-F
 
 ## Recovery Instructions
 
-If starting a fresh session/chat:
+If starting a fresh session/chat (including a new **local** Claude Code CLI session on the
+user's Windows machine, run from inside the cloned repo — that session has direct filesystem
+access this cloud session does not, so it can copy the prototype scripts into the Unity
+project itself instead of just giving instructions):
+
 1. Read this file first.
 2. Read `design/gdd/game-concept.md` for full concept detail.
 3. Read `CLAUDE.md` and `.claude/docs/technical-preferences.md` to confirm engine config (Unity 6.3 LTS / C#).
-4. Resume at `/prototype core-combat`.
+4. Check "IN PROGRESS: /prototype core-combat" above — most likely resume point is either
+   (a) helping the user get the prototype running in Unity (copy scripts, run the Editor menu
+   scene builder, press Play), or (b) if it's already running, jump straight to the Phase 6
+   Playtest Debrief questions from the `/prototype` skill.
+5. Apply User Preferences above (Russian language; instructions in chat, not new repo files) —
+   this applies regardless of whether the session is cloud or local.
