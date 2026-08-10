@@ -1,6 +1,6 @@
 # Unity 6.3 — DOTS / Entities (ECS)
 
-**Last verified:** 2026-02-13
+**Last verified:** 2026-08-10
 **Status:** Production-Ready (Entities 1.3+, Unity 6.3 LTS)
 **Package:** `com.unity.entities` (Package Manager)
 

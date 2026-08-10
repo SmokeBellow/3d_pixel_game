@@ -1,6 +1,6 @@
 # Unity 6.3 LTS — Optional Packages & Systems
 
-**Last verified:** 2026-02-13
+**Last verified:** 2026-08-10
 
 This document indexes **optional packages and systems** available in Unity 6.3 LTS.
 These are NOT part of the core engine but are commonly used for specific game types.
@@ -245,6 +245,6 @@ For packages NOT listed above, use the following approach when users ask:
 
 ---
 
-**Last Updated:** 2026-02-13
+**Last Updated:** 2026-08-10
 **Engine Version:** Unity 6.3 LTS
 **LLM Knowledge Cutoff:** May 2025

@@ -1,6 +1,6 @@
 # Unity 6.3 — Addressables
 
-**Last verified:** 2026-02-13
+**Last verified:** 2026-08-10
 **Status:** Production-Ready
 **Package:** `com.unity.addressables` (Package Manager)
 

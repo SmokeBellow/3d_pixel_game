@@ -5,42 +5,42 @@
 
 ## Engine & Language
 
-- **Engine**: [TO BE CONFIGURED — run /setup-engine]
-- **Language**: [TO BE CONFIGURED]
-- **Rendering**: [TO BE CONFIGURED]
-- **Physics**: [TO BE CONFIGURED]
+- **Engine**: Unity 6.3 LTS
+- **Language**: C#
+- **Rendering**: Universal Render Pipeline (URP) + custom post-process pixelation shader
+- **Physics**: Unity Physics (PhysX 3D)
 
 ## Input & Platform
 
 <!-- Written by /setup-engine. Read by /ux-design, /ux-review, /test-setup, /team-ui, and /dev-story -->
 <!-- to scope interaction specs, test helpers, and implementation to the correct input methods. -->
 
-- **Target Platforms**: [TO BE CONFIGURED — e.g., PC, Console, Mobile, Web]
-- **Input Methods**: [TO BE CONFIGURED — e.g., Keyboard/Mouse, Gamepad, Touch, Mixed]
-- **Primary Input**: [TO BE CONFIGURED — the dominant input for this game]
-- **Gamepad Support**: [TO BE CONFIGURED — Full / Partial / None]
-- **Touch Support**: [TO BE CONFIGURED — Full / Partial / None]
-- **Platform Notes**: [TO BE CONFIGURED — any platform-specific UX constraints]
+- **Target Platforms**: PC (Steam / Epic)
+- **Input Methods**: Keyboard/Mouse, Gamepad (partial)
+- **Primary Input**: Keyboard/Mouse
+- **Gamepad Support**: Partial
+- **Touch Support**: None
+- **Platform Notes**: Combat targeting/dodge must work cleanly with mouse+keyboard; gamepad support is a nice-to-have, not launch-blocking.
 
 ## Naming Conventions
 
-- **Classes**: [TO BE CONFIGURED]
-- **Variables**: [TO BE CONFIGURED]
-- **Signals/Events**: [TO BE CONFIGURED]
-- **Files**: [TO BE CONFIGURED]
-- **Scenes/Prefabs**: [TO BE CONFIGURED]
-- **Constants**: [TO BE CONFIGURED]
+- **Classes**: PascalCase (e.g., `PlayerController`)
+- **Variables**: Public/properties PascalCase (`MoveSpeed`); private `_camelCase` (`_moveSpeed`)
+- **Signals/Events**: PascalCase + `EventHandler` suffix (e.g., `HealthChangedEventHandler`)
+- **Files**: PascalCase matching class (e.g., `PlayerController.cs`)
+- **Scenes/Prefabs**: PascalCase (e.g., `PlayerController.prefab`)
+- **Constants**: PascalCase or UPPER_SNAKE_CASE
 
 ## Performance Budgets
 
-- **Target Framerate**: [TO BE CONFIGURED]
-- **Frame Budget**: [TO BE CONFIGURED]
-- **Draw Calls**: [TO BE CONFIGURED]
-- **Memory Ceiling**: [TO BE CONFIGURED]
+- **Target Framerate**: 60 fps
+- **Frame Budget**: 16.6 ms
+- **Draw Calls**: ≤ 2000 (PC, stylized 3D — generous but disciplined default)
+- **Memory Ceiling**: [TO BE CONFIGURED — set once first dungeon scene exists]
 
 ## Testing
 
-- **Framework**: [TO BE CONFIGURED]
+- **Framework**: Unity Test Framework (NUnit)
 - **Minimum Coverage**: [TO BE CONFIGURED]
 - **Required Tests**: Balance formulas, gameplay systems, networking (if applicable)
 
@@ -65,12 +65,12 @@
 <!-- Read by /code-review, /architecture-decision, /architecture-review, and team skills -->
 <!-- to know which specialist to spawn for engine-specific validation. -->
 
-- **Primary**: [TO BE CONFIGURED — run /setup-engine]
-- **Language/Code Specialist**: [TO BE CONFIGURED]
-- **Shader Specialist**: [TO BE CONFIGURED]
-- **UI Specialist**: [TO BE CONFIGURED]
-- **Additional Specialists**: [TO BE CONFIGURED]
-- **Routing Notes**: [TO BE CONFIGURED]
+- **Primary**: unity-specialist
+- **Language/Code Specialist**: unity-specialist (C# review — primary covers it)
+- **Shader Specialist**: unity-shader-specialist (Shader Graph, HLSL, URP/HDRP materials — owns the pixelation/grain post-process shader)
+- **UI Specialist**: unity-ui-specialist (UI Toolkit UXML/USS, UGUI Canvas, runtime UI)
+- **Additional Specialists**: unity-dots-specialist (ECS, Jobs system, Burst compiler), unity-addressables-specialist (asset loading, memory management, content catalogs)
+- **Routing Notes**: Invoke primary for architecture and general C# code review. Invoke shader specialist for the pixelation/grain post-process effect and all materials. Invoke UI specialist for all interface implementation. Invoke DOTS/Addressables specialists only if those systems get used.
 
 ### File Extension Routing
 
@@ -79,9 +79,9 @@
 
 | File Extension / Type | Specialist to Spawn |
 |-----------------------|---------------------|
-| Game code (primary language) | [TO BE CONFIGURED] |
-| Shader / material files | [TO BE CONFIGURED] |
-| UI / screen files | [TO BE CONFIGURED] |
-| Scene / prefab / level files | [TO BE CONFIGURED] |
-| Native extension / plugin files | [TO BE CONFIGURED] |
-| General architecture review | Primary |
+| Game code (.cs files) | unity-specialist |
+| Shader / material files (.shader, .shadergraph, .mat) | unity-shader-specialist |
+| UI / screen files (.uxml, .uss, Canvas prefabs) | unity-ui-specialist |
+| Scene / prefab / level files (.unity, .prefab) | unity-specialist |
+| Native extension / plugin files (.dll, native plugins) | unity-specialist |
+| General architecture review | unity-specialist |

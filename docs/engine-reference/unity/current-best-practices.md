@@ -1,6 +1,6 @@
 # Unity 6.3 LTS — Current Best Practices
 
-**Last verified:** 2026-02-13
+**Last verified:** 2026-08-10
 
 Modern Unity 6 patterns that may not be in the LLM's training data.
 These are production-ready recommendations as of Unity 6.3 LTS.

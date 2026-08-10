@@ -1,6 +1,6 @@
 # Unity 6.3 — Rendering Module Reference
 
-**Last verified:** 2026-02-13
+**Last verified:** 2026-08-10
 **Knowledge Gap:** LLM trained on Unity 2022 LTS; Unity 6 has major rendering changes
 
 ---

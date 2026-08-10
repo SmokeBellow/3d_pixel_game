@@ -1,6 +1,6 @@
 # Unity 6.3 — Cinemachine
 
-**Last verified:** 2026-02-13
+**Last verified:** 2026-08-10
 **Status:** Production-Ready
 **Package:** `com.unity.cinemachine` v3.0+ (Package Manager)
 
