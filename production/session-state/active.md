@@ -7,28 +7,49 @@
 - Respond in Russian.
 - Deliver step-by-step instructions (setup guides, how-tos) directly in chat — do NOT create separate instructional files in the repo (e.g. no more SETUP.md-style docs). Code/config files that are part of the actual deliverable are fine; user-facing walkthroughs are not.
 
-## IN PROGRESS: /prototype core-combat
+## COMPLETE: /design-system input-system — GDD written, not yet reviewed
 
-- **Status**: Phase 5 — Implement (Engine path, Unity) — code is DONE and pushed. Blocked on the user actually running it in their local Unity Editor and reporting back. Nothing more to build until we get playtest feedback (Phase 6).
+- **Status**: `design/gdd/input-system.md` fully written (all 8 required sections + Visual/Audio, UI Requirements, Open Questions). Built on Unity's new Input System Package (Input Actions asset, Gameplay/UI action maps), NOT the legacy Input class the prototype used. Formulas cover mouse-look sensitivity, gamepad deadzone/curve, and frame-rate independence (mouse delta NOT scaled by deltaTime; gamepad stick IS). 19 GIVEN-WHEN-THEN acceptance criteria written with qa-lead input.
+- **Registry updated**: 5 constants + 3 formulas registered in `design/registry/entities.yaml` (sensitivity, base_scale, deadzone, curve_exponent, look_speed_deg_per_sec; mouse_look_rotation, gamepad_stick_response, gamepad_look_rotation) — Camera System GDD must reference these, not reinvent them.
+- **systems-index.md updated**: Input System status → Designed, linked, progress tracker updated (1/17 MVP systems designed).
+- **Not yet done**: `/design-review design/gdd/input-system.md` in a fresh session (never run in the same session as authoring).
+- **Next action if resuming**: either run `/design-review` on input-system.md in a fresh session, or continue to the next system in design order — **Camera System** (per systems-index.md Recommended Design Order) — now explicitly first-person/mouselook-only, no orbit rig. Camera System GDD should reference the registered sensitivity/deadzone/look-speed constants from Input System rather than redefining them.
+
+## COMPLETE (superseded architecture note, see above): /design-system input-system — resumed after first-person camera pivot
+
+- **Pivot resolved**: `game-concept.md` and `design/gdd/systems-index.md` both updated for the first-person (standard FPS mouselook, no third-person orbit) pivot. Camera perspective was never explicit in game-concept.md before — this is an addition, not a contradiction of prior text. Accepted risk documented in both files: core-combat prototype's PROCEED verdict was earned third-person; a follow-up spike to re-validate hit-feedback/combo-legibility in first-person is planned but NOT scheduled yet (explicit user decision — deal with it later, not now).
+- **Resuming**: `design/gdd/input-system.md` Section C (Detailed Design → Core Rules). Overview and Player Fantasy sections already written and don't need changes (camera-agnostic). Confirmed with user: mouse turns the character/view directly (standard FPS mouselook), not a locked-forward view.
+
+## PAUSED (resolved above): /design-system input-system — blocked on first-person camera pivot
+
+- **Status**: PAUSED mid-Section C. Overview and Player Fantasy sections written (indirect/infrastructure framing, no camera-look action assumed). While drafting Core Rules, the user confirmed a major pivot: **the game is switching from third-person orbit camera to first-person with NO camera rotation control at all** (player always looks forward). This contradicts the currently-approved `game-concept.md` (Core Mechanics explicitly describes third-person combat) and the core-combat prototype's PROCEED verdict (earned specifically for third-person feel — orbit camera, camera shake, hit-stop tuned for that perspective).
+- **User decision on sequencing**: update `game-concept.md` FIRST for the first-person pivot, then `systems-index.md` (Camera System entry needs rework — may become trivial/removed if there's truly no camera rotation), THEN return to finish `design/gdd/input-system.md` Section C onward.
+- **Next action if resuming**: if `game-concept.md` still says third-person/orbit, the pivot work hasn't been done yet — start there. If `game-concept.md` already reflects first-person, check `systems-index.md` next, then resume `/design-system input-system` from Section C (Core Rules) — Overview and Player Fantasy are already written and don't need first-person changes (they were written camera-agnostic).
+- **Open question not yet resolved with user**: what happens to the core-combat prototype's PROCEED verdict given it validated third-person feel specifically — does it need to be re-run in first-person before design continues, or is that risk accepted for now? Surface this explicitly during the game-concept.md pivot conversation.
+
+## COMPLETE: /map-systems — systems index written
+
+- **Status**: DONE. `design/gdd/systems-index.md` written — 18 systems enumerated, dependency-mapped, priority-tiered. 17 systems MVP, 1 (Skill Tree/Progression) Vertical Slice. Design order determined (see index's Recommended Design Order table) — starts with Input System, Camera System, Health & Damage, Save/Load, Pixelation Rendering Pipeline, Audio System (Foundation), then Combat System, Enemy AI, Checkpoint & Death (Core), then Feature-layer systems.
+- **Bottleneck systems flagged**: Combat System, Save/Load & Persistence, Guild Trial Dungeon System.
+- **High-risk systems flagged**: Enemy AI System (no dodge/block — must validate multi-enemy encounters), Combat System (combo legibility needs real animation budget), Pixelation Rendering Pipeline (technique never spiked), Guild Trial Dungeon System (level-design effort may be underestimated), Skill Tree (untested verb/number split).
+- **Next action if resuming**: run `/design-system [system-name]` starting with Input System (first in design order), or `/map-systems next` to auto-pick. `/gate-check systems-design` also available for a formal director sign-off (skipped this session — review-mode is lean, TD-SYSTEM-BOUNDARY/PR-SCOPE/CD-SYSTEMS gates all auto-skipped).
+
+## COMPLETE: /prototype core-combat — final verdict PROCEED (after 1 PIVOT iteration)
+
+- **Status**: DONE. Iteration 2 changes (procedural swing tween on `weaponVisual`, cursor-lock fix on `OrbitCamera`, placeholder weapon in scene builder) tested. Camera stutter fix confirmed working. Combo visual read still imperfect ("не хватает визуального отображения комбо") but tester judged the prototype acceptable overall — **final verdict: PROCEED**, with combo legibility flagged as a real-animation requirement to solve during production, not a fundamental feel blocker.
+- **Reports updated**: `prototypes/core-combat-concept/REPORT.md` (added Iteration 2 section + revised Recommendation/If Proceeding), `prototypes/index.md` (verdict now PROCEED after 1 PIVOT iteration).
+- **Key production-informing takeaway**: fast/responsive input + weighty hit feedback do NOT conflict — the project's biggest flagged risk is resolved. Combo chain legibility needs real windup/attack animation or motion-designed VFX/trail in production; a pure procedural tween wasn't enough on its own. The combat system GDD should call this out explicitly as an animation/VFX requirement.
+- **Next action if resuming**: proceed per the PROCEED path — `/design-review design/gdd/game-concept.md` → `/gate-check` → `/map-systems` → `/design-system [mechanic]` (embed combo-legibility learning in that GDD's Tuning Knobs/Formulas). CD review was skipped both iterations (review-mode = lean).
+
+## COMPLETE (iteration 1): /prototype core-combat — PIVOT
+
+- **Status**: DONE. Full run completed: Unity project set up (new drive, Active Input Handling switched to "Both" to support legacy Input Manager code), scripts copied in, scene built (floor + walls added mid-session after dummies fell through empty scene), played, and Phase 6 Playtest Debrief completed.
 - **Hypothesis**: Fast/responsive melee combat with combo chains in Unity can still feel weighty — a 3+ hit combo feels connected, hits give clear feedback with no perceived input lag.
-- **Riskiest assumption being tested**: combining "fast/responsive" with "weighty" in the same combat feel — first completed 3D project.
-- **Path**: Engine (Unity) — chosen because feel IS the hypothesis, browser latency would lie.
-- **Scope** (explicitly minimal):
-  - Capsule player, WASD movement, simple third-person orbit camera
-  - One weapon: 3-hit combo chain on left-click with input buffering
-  - Dodge roll with i-frames
-  - 2-3 stationary target dummy capsules: knockback + color flash + hit-stop (`Time.timeScale` blip) + camera shake on hit
-  - Placeholder hit sound (generated tone via `AudioSource`)
-- **Explicitly cut**: pixelation post-process shader (deferred to a separate future spike — it's a rendering question, not a combat-feel question), enemy AI, real animations (squash/stretch placeholder only), health/damage UI, menus, multiple weapons, dungeon environment.
-- **Output location**: `prototypes/core-combat-concept/` — 6 gameplay scripts in `Assets/Scripts/` + `Assets/Scripts/Editor/CoreCombatSceneSetup.cs` (one-click scene builder, menu: Tools → Core Combat Prototype → Build Scene).
-- **What the user still needs to do** (last instructions given, in chat, not yet confirmed done):
-  1. Copy `prototypes/core-combat-concept/Assets/Scripts/` (incl. `Editor/` subfolder) into their Unity project's `Assets/Scripts/`
-  2. Let it compile
-  3. Tools → Core Combat Prototype → Build Scene (one click, builds player/dummies/camera/hit-feedback automatically)
-  4. Press Play, test combat for a few minutes
-  5. Report back — then we run Phase 6 Playtest Debrief (hypothesis check, best/worst moment, surprise, PROCEED/PIVOT/KILL verdict)
-- **Side quest in progress**: user ran out of disk space, reinstalled Unity 6.3 LTS on a different drive on Windows. Should now retry copying scripts in and building the scene.
-- **Next action if resuming**: ask the user whether the reinstall + scene build worked, and if they've played the prototype yet. If not yet run, re-share the numbered steps above. If run, proceed straight to the Phase 6 Playtest Debrief questions (one at a time: hypothesis check → best moment → worst moment → surprise → verdict).
+- **Verdict**: PARTIALLY CONFIRMED hypothesis → **PIVOT** recommendation. Hit-feedback stack (knockback, flash, hit-stop, camera shake) landed well — called out as a pleasant surprise. Combo chain was "completely unclear" due to zero swing/windup animation. Camera orbit had an intermittent stutter, named as equally disruptive.
+- **Reports written**: `prototypes/core-combat-concept/REPORT.md` (full playtest report) and `prototypes/core-combat-concept/PIVOT-NOTE.md` (what to keep / what to change / revised hypothesis). `prototypes/index.md` created with the entry.
+- **What to keep for next iteration**: all current mechanics (movement, orbit camera, 3-hit combo + buffering, dodge roll, hit-feedback stack) — no changes needed there.
+- **What to change for next iteration**: add placeholder swing/windup + hit animation so combo timing is visually legible (crude procedural tween is enough — arc motion or squash/stretch); fix the camera orbit stutter.
+- **Next action if resuming**: run `/prototype core-combat` again (revised iteration) using the hypothesis in PIVOT-NOTE.md — this time include a minimal swing/windup animation from the start rather than treating animation as fully separable from the combo-feel question. CD review was skipped (review-mode = lean).
 
 ## Current Stage
 
