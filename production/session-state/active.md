@@ -2,6 +2,11 @@
 
 *Last updated: 2026-08-10*
 
+## User Preferences (durable — apply every session)
+
+- Respond in Russian.
+- Deliver step-by-step instructions (setup guides, how-tos) directly in chat — do NOT create separate instructional files in the repo (e.g. no more SETUP.md-style docs). Code/config files that are part of the actual deliverable are fine; user-facing walkthroughs are not.
+
 ## IN PROGRESS: /prototype core-combat
 
 - **Status**: Phase 5 — Implement (Engine path, Unity)
