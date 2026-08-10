@@ -37,7 +37,7 @@
 #   Each entry: name, status, source, referenced_by[], attributes{}, added, revised
 
 version: 1
-last_updated: ""
+last_updated: "2026-08-10"
 
 # ─── ENTITIES ────────────────────────────────────────────────────────────────
 # Named game-world objects: enemies, NPCs, characters, factions, bosses.
@@ -106,7 +106,53 @@ items: []
 #   output_range[min, max], added
 # Optional: expression (the actual formula), notes
 
-formulas: []
+formulas:
+  - name: mouse_look_rotation
+    status: active
+    source: design/gdd/input-system.md
+    referenced_by:
+      - design/gdd/input-system.md
+    variables:
+      - raw_delta
+      - sensitivity
+      - base_scale
+    output_range: ["unbounded", "clamped +-89 deg pitch"]
+    expression: "raw_delta * sensitivity * base_scale"
+    notes: "Not scaled by Time.deltaTime — mouse delta is a per-frame absolute
+      value, not a rate. Camera System will consume this directly once designed."
+    added: 2026-08-10
+    revised: ""
+
+  - name: gamepad_stick_response
+    status: active
+    source: design/gdd/input-system.md
+    referenced_by:
+      - design/gdd/input-system.md
+    variables:
+      - magnitude
+      - deadzone
+      - curve_exponent
+      - direction
+    output_range: [0.0, 1.0]
+    expression: "0 if magnitude <= deadzone else ((magnitude - deadzone) / (1 - deadzone))^curve_exponent * direction"
+    added: 2026-08-10
+    revised: ""
+
+  - name: gamepad_look_rotation
+    status: active
+    source: design/gdd/input-system.md
+    referenced_by:
+      - design/gdd/input-system.md
+    variables:
+      - gamepad_stick_response
+      - look_speed_deg_per_sec
+      - delta_time
+    output_range: [0, "look_speed_deg_per_sec * delta_time"]
+    expression: "gamepad_stick_response * look_speed_deg_per_sec * delta_time"
+    notes: "Scaled by Time.deltaTime (unscaled) unlike mouse_look_rotation —
+      gamepad stick represents a held rate, mouse delta does not."
+    added: 2026-08-10
+    revised: ""
 
 # Example:
 #
@@ -139,7 +185,56 @@ formulas: []
 #
 # Required fields: name, status, source, referenced_by, value, unit, added
 
-constants: []
+constants:
+  - name: sensitivity
+    status: active
+    source: design/gdd/input-system.md
+    referenced_by:
+      - design/gdd/input-system.md
+    value: 1.0
+    unit: "multiplier (range 0.1-10.0)"
+    added: 2026-08-10
+    revised: ""
+
+  - name: base_scale
+    status: active
+    source: design/gdd/input-system.md
+    referenced_by:
+      - design/gdd/input-system.md
+    value: 0.02
+    unit: "deg/px"
+    added: 2026-08-10
+    revised: ""
+
+  - name: deadzone
+    status: active
+    source: design/gdd/input-system.md
+    referenced_by:
+      - design/gdd/input-system.md
+    value: 0.12
+    unit: "stick magnitude (range 0.05-0.20)"
+    added: 2026-08-10
+    revised: ""
+
+  - name: curve_exponent
+    status: active
+    source: design/gdd/input-system.md
+    referenced_by:
+      - design/gdd/input-system.md
+    value: 1.5
+    unit: "exponent (range 1.0-3.0)"
+    added: 2026-08-10
+    revised: ""
+
+  - name: look_speed_deg_per_sec
+    status: active
+    source: design/gdd/input-system.md
+    referenced_by:
+      - design/gdd/input-system.md
+    value: 180
+    unit: "deg/sec (range 90-270)"
+    added: 2026-08-10
+    revised: ""
 
 # Example:
 #
