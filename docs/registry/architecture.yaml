@@ -43,7 +43,17 @@ last_updated: ""
 # interface: how other systems access this state (read-only property, method call,
 #   signal, shared resource, etc.) — this is the contract other ADRs depend on.
 
-state_ownership: []
+state_ownership:
+  - state: elemental_status_flags
+    status: active
+    owner_system: network-system
+    adr: docs/architecture/adr-0001-networking-stack.md
+    interface: "NetworkVariable<ElementalStatusFlags> (read-only for all clients; server writes only via ServerRpc handlers)"
+    write_access: server-only
+    referenced_by:
+      - docs/architecture/adr-0001-networking-stack.md
+    added: 2026-08-26
+    revised: ""
 
 # Example:
 #
@@ -131,7 +141,17 @@ performance_budgets: []
 # Register an API decision when the choice is non-obvious and other ADRs might
 # make a different choice for the same purpose without knowing this was decided.
 
-api_decisions: []
+api_decisions:
+  - purpose: networking_framework
+    status: active
+    api: Unity Netcode for GameObjects (com.unity.netcode.gameobjects) + Unity Transport 2.x + Unity Relay
+    not: Photon Fusion, FishNet, Mirror, UNet (legacy — removed in Unity 6)
+    adr: docs/architecture/adr-0001-networking-stack.md
+    reason: "Official Unity 6.3 LTS framework with Boss Room co-op dungeon reference; free with pay-as-you-go Relay; no CCU pricing risk for indie budget"
+    referenced_by:
+      - docs/architecture/adr-0001-networking-stack.md
+    added: 2026-08-26
+    revised: ""
 
 # Example:
 #
@@ -157,7 +177,13 @@ api_decisions: []
 # Register a pattern when an ADR explicitly bans it AND other ADRs might
 # unknowingly use it (i.e., it's a tempting but wrong approach for this project).
 
-forbidden_patterns: []
+forbidden_patterns:
+  - pattern: instantiate_for_network_objects
+    status: active
+    description: "Never use Unity's Instantiate() to create networked game objects (enemies, pickups, projectiles, players). Use NetworkObject.Spawn() on the server instead."
+    why: "Instantiated objects do not get network IDs and cannot participate in RPCs or NetworkVariable sync. Each client would get an independent local copy invisible to others."
+    adr: docs/architecture/adr-0001-networking-stack.md
+    added: 2026-08-26
 
 # Example:
 #

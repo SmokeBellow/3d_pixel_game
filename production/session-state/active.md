@@ -1,119 +1,269 @@
-# Session State — Hollow Vow
+# Session State — Covenant of Mages
 
-*Last updated: 2026-08-10*
+*Last updated: 2026-08-26*
 
 ## User Preferences (durable — apply every session)
 
 - Respond in Russian.
 - Deliver step-by-step instructions (setup guides, how-tos) directly in chat — do NOT create separate instructional files in the repo (e.g. no more SETUP.md-style docs). Code/config files that are part of the actual deliverable are fine; user-facing walkthroughs are not.
 
-## COMPLETE: /design-system input-system — GDD written, not yet reviewed
+---
 
-- **Status**: `design/gdd/input-system.md` fully written (all 8 required sections + Visual/Audio, UI Requirements, Open Questions). Built on Unity's new Input System Package (Input Actions asset, Gameplay/UI action maps), NOT the legacy Input class the prototype used. Formulas cover mouse-look sensitivity, gamepad deadzone/curve, and frame-rate independence (mouse delta NOT scaled by deltaTime; gamepad stick IS). 19 GIVEN-WHEN-THEN acceptance criteria written with qa-lead input.
-- **Registry updated**: 5 constants + 3 formulas registered in `design/registry/entities.yaml` (sensitivity, base_scale, deadzone, curve_exponent, look_speed_deg_per_sec; mouse_look_rotation, gamepad_stick_response, gamepad_look_rotation) — Camera System GDD must reference these, not reinvent them.
-- **systems-index.md updated**: Input System status → Designed, linked, progress tracker updated (1/17 MVP systems designed).
-- **Not yet done**: `/design-review design/gdd/input-system.md` in a fresh session (never run in the same session as authoring).
-- **Next action if resuming**: either run `/design-review` on input-system.md in a fresh session, or continue to the next system in design order — **Camera System** (per systems-index.md Recommended Design Order) — now explicitly first-person/mouselook-only, no orbit rig. Camera System GDD should reference the registered sensitivity/deadzone/look-speed constants from Input System rather than redefining them.
+## COMPLETE: /brainstorm — Covenant of Mages concept written
 
-## COMPLETE (superseded architecture note, see above): /design-system input-system — resumed after first-person camera pivot
+- **Status**: DONE. `design/gdd/game-concept.md` fully rewritten (2026-08-26).
+  This is a **full replacement** of the prior "Hollow Vow" single-player concept.
+- **New concept**: Co-op session-based first-person dungeon crawler, 4-5 players,
+  all mages with elemental spell schools (fire, water, lightning, nature, light, dark, air, etc.),
+  class roles (damage, tank, support, debuffer). 25-30 min sessions.
+  Cross-player elemental synergies are the core mechanic.
+- **Pillars**: Магия лучше вместе · Каждая смерть — история · Быстрый вход глубокая глубина · Подземелье — живой противник
+- **Death mechanic**: dead = spectator until fight ends (no in-fight revive)
+- **Dungeon structure**: hand-crafted base + randomized enemies/loot
+- **Visual**: pixel-art 3D + grain in dungeons (retained from Hollow Vow concept)
+- **Engine**: Unity 6.3 LTS (already configured — still valid)
+- **MVP**: 1 dungeon, 3 magic schools (fire/water/lightning), 2-3 synergies, co-op 2-4 players
 
-- **Pivot resolved**: `game-concept.md` and `design/gdd/systems-index.md` both updated for the first-person (standard FPS mouselook, no third-person orbit) pivot. Camera perspective was never explicit in game-concept.md before — this is an addition, not a contradiction of prior text. Accepted risk documented in both files: core-combat prototype's PROCEED verdict was earned third-person; a follow-up spike to re-validate hit-feedback/combo-legibility in first-person is planned but NOT scheduled yet (explicit user decision — deal with it later, not now).
-- **Resuming**: `design/gdd/input-system.md` Section C (Detailed Design → Core Rules). Overview and Player Fantasy sections already written and don't need changes (camera-agnostic). Confirmed with user: mouse turns the character/view directly (standard FPS mouselook), not a locked-forward view.
+## SUPERSEDED / REQUIRES REVIEW: Old Hollow Vow files
 
-## PAUSED (resolved above): /design-system input-system — blocked on first-person camera pivot
+The following files were written for the old single-player concept and need to be
+either archived or replaced before design work continues:
 
-- **Status**: PAUSED mid-Section C. Overview and Player Fantasy sections written (indirect/infrastructure framing, no camera-look action assumed). While drafting Core Rules, the user confirmed a major pivot: **the game is switching from third-person orbit camera to first-person with NO camera rotation control at all** (player always looks forward). This contradicts the currently-approved `game-concept.md` (Core Mechanics explicitly describes third-person combat) and the core-combat prototype's PROCEED verdict (earned specifically for third-person feel — orbit camera, camera shake, hit-stop tuned for that perspective).
-- **User decision on sequencing**: update `game-concept.md` FIRST for the first-person pivot, then `systems-index.md` (Camera System entry needs rework — may become trivial/removed if there's truly no camera rotation), THEN return to finish `design/gdd/input-system.md` Section C onward.
-- **Next action if resuming**: if `game-concept.md` still says third-person/orbit, the pivot work hasn't been done yet — start there. If `game-concept.md` already reflects first-person, check `systems-index.md` next, then resume `/design-system input-system` from Section C (Core Rules) — Overview and Player Fantasy are already written and don't need first-person changes (they were written camera-agnostic).
-- **Open question not yet resolved with user**: what happens to the core-combat prototype's PROCEED verdict given it validated third-person feel specifically — does it need to be re-run in first-person before design continues, or is that risk accepted for now? Surface this explicitly during the game-concept.md pivot conversation.
+- **`design/gdd/systems-index.md`** — FULLY INVALID for new concept. Must be regenerated
+  with `/map-systems`. New critical system: Networking (now the highest-risk bottleneck).
+- **`design/gdd/input-system.md`** — ✅ RESOLVED (retrofit completed 2026-08-26).
+  See "COMPLETE: Input System Retrofit" section below.
+- **`design/registry/entities.yaml`** — constants/formulas from input-system.md
+  (sensitivity, base_scale, deadzone, look_speed_deg_per_sec) confirmed unchanged
+  and still accurate after the retrofit.
 
-## COMPLETE: /map-systems — systems index written
+## COMPLETE: ADR-0001 — Networking Stack
 
-- **Status**: DONE. `design/gdd/systems-index.md` written — 18 systems enumerated, dependency-mapped, priority-tiered. 17 systems MVP, 1 (Skill Tree/Progression) Vertical Slice. Design order determined (see index's Recommended Design Order table) — starts with Input System, Camera System, Health & Damage, Save/Load, Pixelation Rendering Pipeline, Audio System (Foundation), then Combat System, Enemy AI, Checkpoint & Death (Core), then Feature-layer systems.
-- **Bottleneck systems flagged**: Combat System, Save/Load & Persistence, Guild Trial Dungeon System.
-- **High-risk systems flagged**: Enemy AI System (no dodge/block — must validate multi-enemy encounters), Combat System (combo legibility needs real animation budget), Pixelation Rendering Pipeline (technique never spiked), Guild Trial Dungeon System (level-design effort may be underestimated), Skill Tree (untested verb/number split).
-- **Next action if resuming**: run `/design-system [system-name]` starting with Input System (first in design order), or `/map-systems next` to auto-pick. `/gate-check systems-design` also available for a formal director sign-off (skipped this session — review-mode is lean, TD-SYSTEM-BOUNDARY/PR-SCOPE/CD-SYSTEMS gates all auto-skipped).
+- **Status**: DONE. `docs/architecture/adr-0001-networking-stack.md` written (2026-08-26). Status: **Accepted** (2026-08-26) — programming may proceed against this decision.
+- **Decision**: Unity Netcode for GameObjects (NGO) + Unity Transport 2.x + Unity Relay
+- **Topology**: Listen-server (host-client). Host disconnect = session ends (documented design decision).
+- **Key interfaces**: `NetworkVariable<ElementalStatusFlags>`, `CastSpellServerRpc`, `TriggerSynergyClientRpc` (uses `NetworkObjectReference`), `NetworkVariable<bool> _isDead`
+- **Registry updated**: 3 стансии в `docs/registry/architecture.yaml` (api_decision, state_ownership, forbidden_pattern)
+- **Validated by**: unity-specialist (MINOR NOTES только — внесены в ADR)
 
-## COMPLETE: /prototype core-combat — final verdict PROCEED (after 1 PIVOT iteration)
+## COMPLETE: Prototype — Co-op Spellcasting
 
-- **Status**: DONE. Iteration 2 changes (procedural swing tween on `weaponVisual`, cursor-lock fix on `OrbitCamera`, placeholder weapon in scene builder) tested. Camera stutter fix confirmed working. Combo visual read still imperfect ("не хватает визуального отображения комбо") but tester judged the prototype acceptable overall — **final verdict: PROCEED**, with combo legibility flagged as a real-animation requirement to solve during production, not a fundamental feel blocker.
-- **Reports updated**: `prototypes/core-combat-concept/REPORT.md` (added Iteration 2 section + revised Recommendation/If Proceeding), `prototypes/index.md` (verdict now PROCEED after 1 PIVOT iteration).
-- **Key production-informing takeaway**: fast/responsive input + weighty hit feedback do NOT conflict — the project's biggest flagged risk is resolved. Combo chain legibility needs real windup/attack animation or motion-designed VFX/trail in production; a pure procedural tween wasn't enough on its own. The combat system GDD should call this out explicitly as an animation/VFX requirement.
-- **Next action if resuming**: proceed per the PROCEED path — `/design-review design/gdd/game-concept.md` → `/gate-check` → `/map-systems` → `/design-system [mechanic]` (embed combo-legibility learning in that GDD's Tuning Knobs/Formulas). CD review was skipped both iterations (review-mode = lean).
+- **Concept**: `prototypes/co-op-spellcasting-concept/`
+- **Verdict**: **PROCEED (with a required follow-up)** — full detail in
+  `prototypes/co-op-spellcasting-concept/REPORT.md`, indexed in `prototypes/index.md`.
+- **Hypothesis**: Cross-player elemental synergy (Water soaks a target, Lightning
+  triggers 3x-damage Chain Shock that jumps to nearby enemies) discovered independently
+  by two players in real time feels spontaneous and fun.
+- **Result**: Mechanic confirmed technically correct after two bug/behavior fixes
+  (see below). Core hypothesis about *two independent players* spontaneously
+  discovering the combo was **not exercised** — testing this session was solo only.
+  Tester's solo read: mechanic is conceptually interesting.
+- **Bugs found & fixed**:
+  1. `EnemyDummy.Die()` deactivated the whole GameObject before starting the respawn
+     coroutine — Unity can't run a coroutine on an inactive object, so dummies never
+     respawned. Fixed by hiding renderer/collider/label instead of the whole object.
+  2. Auto-targeting (`FindNearestEnemy()`) is called independently per cast, so Water
+     and Lightning can silently land on different dummies if the player moves between
+     casts — this breaks the combo with no error/feedback. Diagnosed via a `[TARGET]`
+     debug log; not a code bug, but flagged as a **real production risk**: production
+     needs visible target feedback (reticle/highlight) so players can reliably set up
+     synergies on purpose. Carry this into `input-system.md` / combat GDD.
+- **Required follow-up**: run a real 2-player (or async 2-session) test of this same
+  build before treating the co-op-discovery hypothesis as validated.
+- **Files**: `Assets/Scripts/*.cs` + `Editor/CoOpSpellcastingSceneSetup.cs` +
+  `README.md` + `REPORT.md` (all complete). Live-project copies also placed in
+  root `Assets/Scripts/` for testing (coexists with `core-combat-concept` scripts —
+  no naming conflicts).
 
-## COMPLETE (iteration 1): /prototype core-combat — PIVOT
+## COMPLETE: Input System Retrofit
 
-- **Status**: DONE. Full run completed: Unity project set up (new drive, Active Input Handling switched to "Both" to support legacy Input Manager code), scripts copied in, scene built (floor + walls added mid-session after dummies fell through empty scene), played, and Phase 6 Playtest Debrief completed.
-- **Hypothesis**: Fast/responsive melee combat with combo chains in Unity can still feel weighty — a 3+ hit combo feels connected, hits give clear feedback with no perceived input lag.
-- **Verdict**: PARTIALLY CONFIRMED hypothesis → **PIVOT** recommendation. Hit-feedback stack (knockback, flash, hit-stop, camera shake) landed well — called out as a pleasant surprise. Combo chain was "completely unclear" due to zero swing/windup animation. Camera orbit had an intermittent stutter, named as equally disruptive.
-- **Reports written**: `prototypes/core-combat-concept/REPORT.md` (full playtest report) and `prototypes/core-combat-concept/PIVOT-NOTE.md` (what to keep / what to change / revised hypothesis). `prototypes/index.md` created with the entry.
-- **What to keep for next iteration**: all current mechanics (movement, orbit camera, 3-hit combo + buffering, dodge roll, hit-feedback stack) — no changes needed there.
-- **What to change for next iteration**: add placeholder swing/windup + hit animation so combo timing is visually legible (crude procedural tween is enough — arc motion or squash/stretch); fix the camera orbit stutter.
-- **Next action if resuming**: run `/prototype core-combat` again (revised iteration) using the hypothesis in PIVOT-NOTE.md — this time include a minimal swing/windup animation from the start rather than treating animation as fully separable from the combo-feel question. CD review was skipped (review-mode = lean).
+- **Status**: DONE (2026-08-26). Chose **retrofit** over rewrite — ~80% of the
+  document (all 3 formulas, all 6 edge cases, tuning knobs, player fantasy) was
+  still valid; only 5 targeted edits were needed.
+- **Spell slot control scheme decided**: "Active slot + cast" — `CastSpell`
+  (LMB / gamepad South) casts the currently active slot; `ScrollSpell` (mouse
+  wheel + Q + gamepad LB/RB) cycles the active slot 1→2→3→1. Chosen over
+  direct 3-button binding and numeric-key binding.
+- **Edits applied**: (1) Overview — Combat System → Spell Casting System,
+  "responsive combat" → "responsive spellcasting"; (2) Core Rules — `Attack`
+  replaced with `CastSpell`/`ScrollSpell`, combo-buffer language replaced with
+  cooldown/slot/synergy language; (3) Interactions — renamed Combat System →
+  Spell Casting System, added **Target Feedback System** as a provisional
+  dependency (carries the prototype's "visible current target" requirement:
+  Input `Look` → Camera System → Target Feedback System), added an explicit
+  ADR-0001 networking-boundary note (Input System is client-side only,
+  Spell Casting System owns the `CastSpellServerRpc` call); (4) Dependencies —
+  same renames + Target Feedback System added; (5) Acceptance Criteria —
+  updated criterion #3, added 4 new criteria (3a–3d) for CastSpell/ScrollSpell.
+- **Registry**: no changes needed — all 3 formulas and 5 constants in
+  `design/registry/entities.yaml` were already accurate and untouched.
+- **`design/gdd/systems-index.md`** updated: Input System status → "Designed
+  (retrofitted 2026-08-26)", Next Steps checklist items for ADR-0001 and the
+  retrofit decision both checked off, Progress Tracker MVP count → 1/28.
+
+## COMPLETE: Camera System GDD
+
+- **Status**: DONE (2026-08-26). All 8 required sections + Visual/Audio, UI
+  Requirements, Open Questions written to `design/gdd/camera-system.md`.
+  Status header: "Designed (pending review)".
+- **Confirmed constraint**: pure first-person camera (FPS aiming), no
+  third-person orbit rig — per game-concept.md Technical Considerations table.
+- **Key design decisions**:
+  - Body owns yaw, camera pivot (child, at eye height) owns pitch only —
+    avoids gimbal issues, keeps `Move` direction sane at any look angle.
+  - Camera System is the accumulator/clamp owner for pitch (±89°) and yaw
+    (0–360° wrap) — Input System only supplies stateless per-frame deltas.
+  - Camera shake and FOV kick driven by Cinemachine Impulse
+    (`CinemachineImpulseSource`/`Listener`) — other systems trigger shake
+    without any reference to Camera System's internals.
+  - Death→Spectator transition is an **instant snap** (no blend) — resolved
+    this way specifically to keep it GWT-testable (qa-lead flagged "smooth"
+    as an undefined threshold; instant snap removed the ambiguity).
+  - Spectator *target selection* logic is explicitly out of scope — deferred
+    to the not-yet-designed Spectator/Death System; Camera System only
+    exposes `SetSpectatorTarget(Transform)`.
+- **Formulas** (4, all registered in `design/registry/entities.yaml`):
+  `pitch_accumulation`, `yaw_accumulation`, `fov_kick_response`, `current_fov`.
+  Proposed by `systems-designer` agent.
+- **Acceptance Criteria**: 22 GIVEN-WHEN-THEN criteria, proposed and validated
+  by `qa-lead` agent. Two testability gaps found and resolved before writing:
+  shake amplitude/duration scoped to Visual/Feel evidence (not GWT, by
+  design); "smooth" re-parenting resolved to instant snap (see above).
+- **Registry updates**: 4 new formulas + 5 new constants (`base_fov`,
+  `eye_height_offset`, `kick_peak_offset_deg`, `kick_attack_time`,
+  `kick_decay_time`) added to `design/registry/entities.yaml`; `input-system.md`'s
+  `mouse_look_rotation`/`gamepad_look_rotation` entries updated with
+  `camera-system.md` in `referenced_by`.
+- **Open Questions carried forward**: spectator target-selection (owner:
+  Spectator/Death System GDD), sprint FOV offset (owner: Player Controller
+  GDD), per-character eye height, Cinemachine Impulse per-event tuning values
+  (owner: technical-artist, target: Vertical Slice).
+- **Systems index updated**: status → "Designed (pending review, 2026-08-26)",
+  Progress Tracker → 2/28 MVP systems designed.
+- **Not yet run**: `/design-review design/gdd/camera-system.md` — must be run
+  in a fresh session (never in the authoring session).
+
+## COMPLETE: Health & Damage System GDD
+
+- **Status**: DONE (2026-08-26). All 8 required sections + Visual/Audio
+  (mandatory for this category, done via `art-director`), UI Requirements,
+  Open Questions written to `design/gdd/health-damage-system.md`. Status
+  header: "Designed (pending review)".
+- **Bottleneck-first order (user request)**: Health & Damage ✅ →
+  Networking Foundation → Elemental Status → Spell Casting → Target Feedback
+  → Elemental Synergy. Dungeon Structure System deferred (its own
+  dependencies — Enemy AI, Player Controller, Checkpoint System — aren't
+  bottleneck-flagged and need separate resolution first).
+- **Key design decisions**:
+  - `currentHP` follows the exact `NetworkVariable<bool> _isDead` pattern
+    ADR-0001 already established — server-authoritative, clients read-only.
+  - `maxHP` is explicitly NOT owned by this system — external data from
+    whichever system spawns the entity (Enemy AI / Player Controller /
+    Character Progression), matching the game concept's "difficulty via
+    enemy combination, not raw HP scaling" intent.
+  - `ApplyHeal` included in MVP scope now (even though no healer school
+    exists at MVP) so the API shape doesn't need to change later.
+  - Defense/mitigation formula **explicitly deferred** — documented
+    multiplicative extension point (`mitigation_multiplier`, default 1.0),
+    not implemented, since no equipment/defense stat spec exists yet.
+  - `OnDeath` fires exactly once per entity; enemies despawn via
+    `NetworkObject.Despawn()` (never `Destroy()`); players mirror
+    ADR-0001's `_isDead`. This system doesn't own despawn timing (Enemy AI)
+    or the death→spectator camera transition (already locked in
+    `camera-system.md`).
+  - Disconnection ≠ death — `IsDead` means "reached 0 HP," not "left the
+    session" (Networking Foundation's concern).
+  - This system has **zero tuning knobs of its own** — every balance-
+    relevant number (maxHP, synergy multipliers, mitigation, DoT cadence) is
+    deliberately owned by other systems. Recorded as a deliberate outcome,
+    not a gap.
+- **Formulas** (2, registered): `synergy_damage_multiplier`, `hp_clamp`.
+  Proposed by `systems-designer`. The "3.0" Chain Shock reference value is
+  explicitly NOT locked — passthrough example only, pending Elemental
+  Synergy System.
+- **Acceptance Criteria**: 21 GIVEN-WHEN-THEN criteria from `qa-lead`. Two
+  gaps found and resolved: mitigation formula has no criterion (nothing to
+  test — unimplemented by design); `NetworkVariable<float> currentHP`
+  replication bandwidth under frequent DoT ticks has no defined budget —
+  accepted as a documented risk (Open Questions), deferred to Networking
+  Foundation GDD (next in the bottleneck-first order).
+- **Visual/Audio** (mandatory for Combat/damage/health category) — proposed
+  by `art-director`: dual-layer hit feedback (visual + audio always
+  together), synergy hits get an *additive* accent layer (never a palette
+  swap), damage numbers are secondary/reinforcement not primary signal,
+  player death respects `camera-system.md`'s instant-cut (no fade/vignette
+  layered on top). Clear provisional-vs-locked split pending `art-bible.md`.
+- **Registry updates**: 2 new formulas added to
+  `design/registry/entities.yaml`. No new constants (the 3.0 reference value
+  deliberately NOT registered as authoritative per specialist recommendation).
+- **Not yet run**: `/design-review design/gdd/health-damage-system.md` —
+  must run in a fresh session.
 
 ## Current Stage
 
 - `production/stage.txt` = `Concept`
-- `production/review-mode.txt` = `lean` (director reviews only at phase gates)
+- `production/review-mode.txt` = `lean`
 
 ## What's Done
 
-1. **Agent framework installed**: Claude Code Game Studios (49 agents, 73 skills, hooks, rules) extracted into `.claude/` from the bundled zip. See `README.md` and `.claude/docs/quick-start.md`.
-2. **CI**: `.github/workflows/ci.yml` validates agent/skill frontmatter and YAML/JSON across the repo on every PR/push to `main`. This is a placeholder gate until `/test-setup` scaffolds the real Unity test runner.
-3. **Auto-merge**: user creates PRs manually; ask this session (or a future one) to call `enable_pr_auto_merge` on a PR to have GitHub merge it automatically once CI is green. Two one-time manual steps are still needed in GitHub repo settings (not achievable via available tools): enable "Allow auto-merge" (Settings → General → Pull Requests), and add a branch protection rule on `main` requiring the `Validate CCGS framework` check.
-4. **Visual references**: `references/` contains dark-fantasy pixel-art and "Project: Shadowglass"-style screenshots (grainy first-person dungeon crawl aesthetic) — these informed the Visual Identity Anchor below.
-5. **`/start` onboarding completed**: user has a clear concept, chose to formalize via `/brainstorm` first, review mode set to `lean`.
-6. **`/brainstorm` completed**: full game concept written to `design/gdd/game-concept.md` (commit `07f384e`).
-7. **`/setup-engine` completed**: Unity 6.3 LTS + C# chosen (commit `09ed40d`). See Engine Setup section below.
+1. **Agent framework**: Claude Code Game Studios (49 agents, 73 skills) in `.claude/`
+2. **CI**: `.github/workflows/ci.yml` validates agent/skill frontmatter on PR/push to main
+3. **Engine setup**: Unity 6.3 LTS, C#, URP (still valid for new concept)
+4. **Visual references**: `references/` — dark-fantasy pixel-art + grainy first-person dungeon
+5. **New game concept**: `design/gdd/game-concept.md` — Covenant of Mages (2026-08-26)
 
-## Game Concept Summary (Hollow Vow)
+## Game Concept Summary (Covenant of Mages)
 
-- **Genre**: Dark-fantasy 3D action RPG / dungeon crawler, single-player, PC (Steam/Epic).
-- **Core fantasy**: prove yourself to the last surviving guilds of a dying kingdom by descending into hand-crafted trial dungeons; each ends in a staged dark→gold "payoff room" where you earn your class's signature ability.
-- **Progression**: free-spend skill tree per class for general growth + guild-trial-earned signature abilities for class-defining power (deliberately NOT gated behind a rigid tree only — hybrid, see Pillar 2).
-- **Pillars**: Earned Identity · Structured Growth, Earned Mastery · Darkness Earns Light · Compact but Deep · Fellowship of Rivals.
-- **Visual Identity Anchor**: combination — clean pixel-art as the base render style, with Project: Shadowglass-style grain/scanline texture inside dungeons; golden, clean pixel-art in payoff rooms/hub for contrast.
-- **Biggest risk flagged**: this would be the user's first *completed* 3D project (prior unfinished work: a Godot 2D RPG and a Hogwarts-management sim) and the timeline target is "months" — aggressive for 3D combat + staged lighting set-pieces. Recommended mitigation: prototype core combat before writing full GDDs.
-- Full detail in `design/gdd/game-concept.md` — read that file for the complete document (Core Loop, MDA analysis, MVP definition, Scope Tiers, Risks).
+- **Genre**: Co-op session-based first-person dungeon crawler / action RPG, 4-5 players, PC.
+- **Core fantasy**: Be an irreplaceable part of a mage quartet where your elemental school
+  synergizes with teammates — win through spontaneous combo coordination, not pre-planned builds.
+- **Spell schools**: fire, water, lightning, nature, air, light, dark (MVP: 3 schools)
+- **Cross-player synergies**: water+lightning=chain bolt, water extinguishes fire, etc.
+- **Spell loadout**: 3 active slots per player, switchable in combat; expanded via manuscripts
+- **Progression**: manuscripts (found/bought) unlock spells; equipment gives passive stats;
+  player level gives passive bonuses only (not new spells); max 2 schools per player (MVP: 1)
+- **Death**: dead = spectator until fight ends; full team wipe = checkpoint respawn
+- **Dungeons**: hand-crafted base structure + randomized enemies/loot; mix of arenas,
+  corridors, puzzle sections, platformer segments (platformer: post-MVP)
+- **Biggest risk**: networking for 4-5 players on developer's first 3D project
+- **MDA**: Fellowship (1) + Challenge (2) + Discovery (3)
+- Full detail in `design/gdd/game-concept.md`
 
-## Engine Setup Summary
+## Engine Setup Summary (unchanged from Hollow Vow session)
 
-- **Engine**: Unity 6.3 LTS, C#, URP + custom post-process pixelation shader, Unity Physics.
-- **Why Unity over Godot/Unreal**: the project's biggest technical risk is responsive real-time melee combat with combo chains on a first completed 3D project — Unity's asset-store/tutorial ecosystem for action combat outweighed Godot's gentler learning curve and free-forever licensing for this specific risk. Unreal ruled out (overkill for pixelated stylized art, steepest learning curve).
-- **Platform/Input**: PC only (Steam/Epic), keyboard/mouse primary, partial gamepad support.
-- **Performance budget**: 60fps / 16.6ms frame budget, ≤2000 draw calls (defaults set now).
-- **Testing**: Unity Test Framework (NUnit) — not yet scaffolded (`/test-setup` not run yet).
-- **Reference docs**: `docs/engine-reference/unity/` already had accurate Unity 6.3 LTS data pre-populated in the framework; verification dates refreshed to 2026-08-10 after a fresh WebSearch confirmed no changes since Feb 2026.
-- **Specialist routing**: `unity-specialist` (primary), `unity-shader-specialist` (owns the pixelation post-process shader), `unity-ui-specialist`, `unity-dots-specialist` / `unity-addressables-specialist` (only if those systems get used). Version Awareness sections added to all 5 agent files.
-- Full detail in `CLAUDE.md` Technology Stack and `.claude/docs/technical-preferences.md`.
+- **Engine**: Unity 6.3 LTS, C#, URP + custom post-process pixelation shader
+- **Platform**: PC (Steam/Epic)
+- **Input**: keyboard/mouse primary, partial gamepad
+- **Performance budget**: 60fps / 16.6ms, ≤2000 draw calls
+- Full detail in `CLAUDE.md` and `.claude/docs/technical-preferences.md`
 
-## Next Step (not started yet)
+## Next Steps (priority order)
 
-Per the game concept's "Next Steps" and the recommended **Path B — Prototype-First**:
-
-1. `/prototype core-combat` — validate combat feel (fast/responsive melee + combo chains) and the pixelated 3D rendering approach are achievable in Unity before writing any system GDDs. This is the resolution step for the project's single biggest risk.
-2. If prototype PROCEEDS → `/art-bible` → `/map-systems` → `/design-system [system]` per system
-3. If prototype PIVOTS → back to `/brainstorm` with learnings
-
-## Open Questions (from game-concept.md Risks section)
-
-- Is the fast-but-weighty combat feel achievable within the timeline in Unity? (→ resolve via `/prototype core-combat`)
-- 2 or 3 classes/guilds realistic for MVP? (→ resolve after prototype gives a real per-dungeon time cost)
-- Exact pixelation/rendering technique (render-target downscaling vs. shader pixelation vs. vertex snapping)? (→ needs a technical spike inside the prototype — this is now a Unity-specific question, e.g. custom URP Renderer Feature vs. simple post-process shader)
+1. **[DONE] ADR-0001: networking stack** — Netcode for GameObjects выбран. `docs/architecture/adr-0001-networking-stack.md`. Статус: **Accepted** (2026-08-26) — можно начинать программирование по этой архитектуре.
+2. **[DONE] `/prototype co-op-spellcasting`** — Verdict: PROCEED (with required
+   follow-up real 2-player test — not yet scheduled). See "COMPLETE: Prototype —
+   Co-op Spellcasting" section above for full detail, including the target-feedback
+   risk that must feed into input-system.md / combat design.
+3. **[DONE] `/map-systems`** — 30 систем, карта зависимостей, порядок проектирования.
+   `design/gdd/systems-index.md` перезаписан под Covenant of Mages (заменил Hollow Vow).
+4. **[DONE] Resolve input-system.md** — retrofit completed 2026-08-26. See
+   "COMPLETE: Input System Retrofit" section above.
+5. **[DONE] `/design-system camera-system`** — completed 2026-08-26. See
+   "COMPLETE: Camera System GDD" section above.
+6. **[DONE] `/design-system health-damage-system`** — completed 2026-08-26.
+   See "COMPLETE: Health & Damage System GDD" section above.
+7. **`/design-system networking-foundation`** — next in bottleneck-first
+   order (user request). ⚠️ Critical bottleneck, ADR-0001 already Accepted.
+   After that: Elemental Status System → Spell Casting System → Target
+   Feedback System → Elemental Synergy System.
+8. **[FOLLOW-UP, not blocking]** Schedule a real 2-player test of
+   `prototypes/co-op-spellcasting-concept/` to validate the co-op-discovery hypothesis
+   before finalizing the synergy-dependent parts of the combat GDD.
 
 ## Recovery Instructions
 
-If starting a fresh session/chat (including a new **local** Claude Code CLI session on the
-user's Windows machine, run from inside the cloned repo — that session has direct filesystem
-access this cloud session does not, so it can copy the prototype scripts into the Unity
-project itself instead of just giving instructions):
-
-1. Read this file first.
-2. Read `design/gdd/game-concept.md` for full concept detail.
-3. Read `CLAUDE.md` and `.claude/docs/technical-preferences.md` to confirm engine config (Unity 6.3 LTS / C#).
-4. Check "IN PROGRESS: /prototype core-combat" above — most likely resume point is either
-   (a) helping the user get the prototype running in Unity (copy scripts, run the Editor menu
-   scene builder, press Play), or (b) if it's already running, jump straight to the Phase 6
-   Playtest Debrief questions from the `/prototype` skill.
-5. Apply User Preferences above (Russian language; instructions in chat, not new repo files) —
-   this applies regardless of whether the session is cloud or local.
+1. Read this file.
+2. Read `design/gdd/game-concept.md` for full new concept.
+3. Read `CLAUDE.md` and `.claude/docs/technical-preferences.md` for engine config.
+4. See "SUPERSEDED" and "BLOCKING" sections above for what needs attention first.
+5. Apply User Preferences (Russian language; instructions in chat, not new repo files).

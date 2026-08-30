@@ -1,8 +1,8 @@
 # Input System
 
-> **Status**: In Design
+> **Status**: In Design (Retrofitted for Covenant of Mages — 2026-08-26)
 > **Author**: user + agents
-> **Last Updated**: 2026-08-10
+> **Last Updated**: 2026-08-26
 > **Implements Pillar**: Foundation (enables Challenge/Fantasy aesthetics — responsive input is a prerequisite for "fast, responsive combat")
 > **Creative Director Review (CD-GDD-ALIGN)**: skipped — Lean mode
 
@@ -10,14 +10,13 @@
 
 The Input System is the foundation layer that translates raw device input
 (keyboard, mouse, and partial gamepad) into abstract, named actions that
-gameplay systems consume — Combat System, Camera System, and eventually Skill
-Tree/Hub navigation all read from this layer rather than polling devices
-directly. Built on Unity's Input System Package (Input Actions asset +
-generated C# wrapper class), not the legacy `Input` class the core-combat
-prototype used for speed. This system has no player fantasy of its own —
-players don't "feel" the Input System, they feel the responsiveness of Combat
-and Camera, which this system exists to make possible without perceptible
-lag.
+gameplay systems consume — Spell Casting System, Camera System, and eventually
+Hub navigation all read from this layer rather than polling devices directly.
+Built on Unity's Input System Package (Input Actions asset + generated C#
+wrapper class), not the legacy `Input` class the core-combat prototype used
+for speed. This system has no player fantasy of its own — players don't "feel"
+the Input System, they feel the responsiveness of spellcasting and Camera,
+which this system exists to make possible without perceptible lag.
 
 ## Player Fantasy
 
@@ -35,9 +34,10 @@ compliment.
 1. A single Input Actions asset (`PlayerControls`) defines two Action Maps:
    **Gameplay** and **UI**.
 2. Gameplay map actions: `Move` (Vector2 — WASD + gamepad left stick), `Look`
-   (Vector2 — mouse delta + gamepad right stick), `Attack` (Button — LMB +
-   gamepad face button), `Interact` (Button — E + gamepad face button),
-   `Pause` (Button — Escape + gamepad Start).
+   (Vector2 — mouse delta + gamepad right stick), `CastSpell` (Button — LMB +
+   gamepad South button), `ScrollSpell` (Axis — mouse scroll wheel + Q key for
+   backward cycle + gamepad LB/RB), `Interact` (Button — E + gamepad West
+   button), `Pause` (Button — Escape + gamepad Start).
 3. Gameplay code reads actions through the generated C# wrapper class, never
    by polling `Keyboard`/`Mouse` singletons directly — this is Unity's
    recommended pattern and keeps gameplay code decoupled from device specifics.
@@ -45,8 +45,9 @@ compliment.
    There is no separate camera-only free-look mode, since the game has no
    third-person orbit rig (see game-concept.md Technical Considerations →
    Camera Perspective).
-5. Input System reports only raw `Attack` press/release events. All combo
-   buffering and timing logic lives in Combat System — Input System does not
+5. Input System reports only raw `CastSpell` press/release events and
+   `ScrollSpell` axis deltas. All spell selection logic, cooldown checking,
+   and synergy detection live in Spell Casting System — Input System does not
    interpret input beyond translating device signals into named actions.
 6. Active device (keyboard/mouse vs. gamepad) is auto-detected from the last
    input received, to drive on-screen prompt/icon switching.
@@ -65,12 +66,29 @@ movement/attack input from leaking through under an open menu.
 
 - **Camera System** (not yet designed) — consumes `Look` directly to drive
   view rotation.
-- **Combat System** (not yet designed) — consumes `Move` and `Attack`
-  press/release events; owns all combo timing logic itself.
+- **Spell Casting System** (not yet designed) — consumes `CastSpell` and
+  `ScrollSpell` for spell activation and active-slot switching; also consumes
+  `Move` for movement-during-cast context (e.g., whether casting roots the
+  player). Owns all cooldown, slot-state, and synergy-detection logic itself.
+- **Target Feedback System** (not yet designed, provisional) — does not
+  consume Input directly; it receives the camera forward vector from Camera
+  System to compute the currently aimed-at enemy. The data chain is
+  Input (`Look`) → Camera System → Target Feedback System. Called out here
+  because the co-op-spellcasting prototype (2026-08-26) surfaced a real
+  production risk: independent per-cast "nearest enemy" auto-targeting can
+  silently pick different targets between two casts, breaking cross-player
+  elemental synergies with no player-visible feedback. Target Feedback System
+  must expose a stable, visible "current target" the player can see before
+  casting.
 - **Hub Sanctuary System / Guild Narrative Delivery** (not yet designed) —
   consume `Interact`.
-- **Combat/Trial UI** (not yet designed) — owns the pause menu itself; Input
+- **Session UI** (not yet designed) — owns the pause menu itself; Input
   System only reports the `Pause` press event.
+
+**Networking boundary (ADR-0001 — Accepted)**: Input System is fully
+client-side and has no network awareness. `CastSpell` events are read locally
+by Spell Casting System, which converts a valid cast into a `CastSpellServerRpc`
+call to the host. Input System never touches `NetworkVariable`s or RPCs itself.
 
 These are provisional assumptions about undesigned dependencies — their
 exact interfaces may be refined once those systems are designed.
@@ -157,9 +175,11 @@ frame time:
 
 **Depended On By** (hard dependencies — cannot function without this system):
 - **Camera System** — consumes `Look`
-- **Combat System** — consumes `Move`, `Attack`
+- **Spell Casting System** — consumes `CastSpell`, `ScrollSpell`, `Move`
+- **Target Feedback System** (provisional) — indirectly depends on `Look` via
+  Camera System's forward vector; no direct Input dependency
 - **Hub Sanctuary System / Guild Narrative Delivery** — consume `Interact`
-- **Combat/Trial UI** — consumes `Pause`
+- **Session UI** — consumes `Pause`
 
 ## Tuning Knobs
 
@@ -202,7 +222,13 @@ this system's actions but own their own presentation.
 **Action Maps**
 1. GIVEN the Gameplay map is active, WHEN `Pause` is pressed, THEN the UI map becomes active and the Gameplay map is disabled.
 2. GIVEN the UI map is active, WHEN Resume/Close is triggered, THEN the Gameplay map becomes active and the UI map is disabled.
-3. GIVEN the UI map is active, WHEN `Move`/`Attack`/`Interact` inputs are pressed, THEN no Gameplay-side action fires (map mutual exclusivity holds).
+3. GIVEN the UI map is active, WHEN `Move`/`CastSpell`/`ScrollSpell`/`Interact` inputs are pressed, THEN no Gameplay-side action fires (map mutual exclusivity holds).
+
+**Spell Casting Actions**
+3a. GIVEN the Gameplay map is active, WHEN LMB is pressed, THEN `CastSpell` fires exactly once (no auto-repeat while held).
+3b. GIVEN the Gameplay map is active, WHEN the mouse scroll wheel rotates up one tick, THEN the active spell slot advances by 1 (1→2, 2→3, 3→1 wraps).
+3c. GIVEN the active spell slot is 3, WHEN the scroll wheel rotates up one tick, THEN the active slot wraps to 1.
+3d. GIVEN the Gameplay map is active, WHEN Q is pressed, THEN the active spell slot retreats by 1 (same effect as scrolling down).
 
 **Mouse Look**
 4. GIVEN a fixed raw mouse delta of 15px, sensitivity 2.0, base_scale 0.02, WHEN one frame elapses, THEN rotation = 0.6° regardless of frame rate.

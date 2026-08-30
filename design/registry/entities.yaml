@@ -112,6 +112,7 @@ formulas:
     source: design/gdd/input-system.md
     referenced_by:
       - design/gdd/input-system.md
+      - design/gdd/camera-system.md
     variables:
       - raw_delta
       - sensitivity
@@ -119,7 +120,9 @@ formulas:
     output_range: ["unbounded", "clamped +-89 deg pitch"]
     expression: "raw_delta * sensitivity * base_scale"
     notes: "Not scaled by Time.deltaTime — mouse delta is a per-frame absolute
-      value, not a rate. Camera System will consume this directly once designed."
+      value, not a rate. Consumed by camera-system.md's pitch_accumulation/
+      yaw_accumulation as pitch_delta/yaw_delta (the actual clamp/wrap is
+      owned by Camera System, not Input System, which is stateless)."
     added: 2026-08-10
     revised: ""
 
@@ -143,6 +146,7 @@ formulas:
     source: design/gdd/input-system.md
     referenced_by:
       - design/gdd/input-system.md
+      - design/gdd/camera-system.md
     variables:
       - gamepad_stick_response
       - look_speed_deg_per_sec
@@ -150,8 +154,111 @@ formulas:
     output_range: [0, "look_speed_deg_per_sec * delta_time"]
     expression: "gamepad_stick_response * look_speed_deg_per_sec * delta_time"
     notes: "Scaled by Time.deltaTime (unscaled) unlike mouse_look_rotation —
-      gamepad stick represents a held rate, mouse delta does not."
+      gamepad stick represents a held rate, mouse delta does not. Consumed by
+      camera-system.md's pitch_accumulation/yaw_accumulation as pitch_delta/
+      yaw_delta."
     added: 2026-08-10
+    revised: ""
+
+  - name: pitch_accumulation
+    status: active
+    source: design/gdd/camera-system.md
+    referenced_by:
+      - design/gdd/camera-system.md
+    variables:
+      - pitch_accumulated_prev
+      - pitch_delta
+    output_range: [-89, 89]
+    expression: "clamp(pitch_accumulated_prev + pitch_delta, -89, 89)"
+    notes: "Consumes mouse_look_rotation/gamepad_look_rotation from
+      input-system.md as pitch_delta. Camera System owns this state; Input
+      System is stateless and does not accumulate or clamp."
+    added: 2026-08-26
+    revised: ""
+
+  - name: yaw_accumulation
+    status: active
+    source: design/gdd/camera-system.md
+    referenced_by:
+      - design/gdd/camera-system.md
+    variables:
+      - yaw_accumulated_prev
+      - yaw_delta
+    output_range: [0, 360]
+    expression: "((yaw_accumulated_prev + yaw_delta) mod 360 + 360) mod 360"
+    notes: "Consumes mouse_look_rotation/gamepad_look_rotation from
+      input-system.md as yaw_delta. Applied to the character body transform,
+      not the camera pivot (see input-system.md's Core Rules for the
+      body/camera split)."
+    added: 2026-08-26
+    revised: ""
+
+  - name: fov_kick_response
+    status: active
+    source: design/gdd/camera-system.md
+    referenced_by:
+      - design/gdd/camera-system.md
+    variables:
+      - t_since_trigger
+      - kick_peak_offset_deg
+      - kick_attack_time
+      - kick_decay_time
+    output_range: [0, "kick_peak_offset_deg"]
+    expression: "kick_peak_offset_deg * kick_envelope(t_since_trigger)"
+    notes: "Two-phase linear attack/decay envelope, triggered on CastSpell.
+      Re-triggering resets t_since_trigger to 0 (no additive stacking)."
+    added: 2026-08-26
+    revised: ""
+
+  - name: current_fov
+    status: active
+    source: design/gdd/camera-system.md
+    referenced_by:
+      - design/gdd/camera-system.md
+    variables:
+      - base_fov
+      - current_fov_offset
+      - sprint_fov_offset
+    output_range: ["base_fov", "base_fov + kick_peak_offset_deg (sprint TBD)"]
+    expression: "base_fov + current_fov_offset + sprint_fov_offset"
+    notes: "sprint_fov_offset is hardcoded 0 until a Sprint mechanic is
+      designed in Player Controller GDD — flagged as an Open Question in
+      camera-system.md."
+    added: 2026-08-26
+    revised: ""
+
+  - name: synergy_damage_multiplier
+    status: active
+    source: design/gdd/health-damage-system.md
+    referenced_by:
+      - design/gdd/health-damage-system.md
+    variables:
+      - base_damage
+      - synergy_multiplier
+    output_range: [0, "unbounded"]
+    expression: "final_damage_amount = base_damage * synergy_multiplier"
+    notes: "synergy_multiplier defaults to 1.0 for normal hits. The 3.0
+      reference value (Chain Shock) is a passthrough example only, NOT an
+      authoritative design value — Elemental Synergy System (not yet
+      designed) owns which combos exist and what multiplier each produces.
+      Do not treat 3.0 as locked until that GDD confirms it."
+    added: 2026-08-26
+    revised: ""
+
+  - name: hp_clamp
+    status: active
+    source: design/gdd/health-damage-system.md
+    referenced_by:
+      - design/gdd/health-damage-system.md
+    variables:
+      - currentHP_prev
+      - delta_amount
+      - maxHP
+    output_range: [0, "maxHP"]
+    expression: "currentHP_new = clamp(currentHP_prev + delta_amount, 0, maxHP)"
+    notes: "delta_amount = -final_damage_amount for damage, +heal_amount for
+      heal. No overheal banking — excess heal is discarded, not stored."
+    added: 2026-08-26
     revised: ""
 
 # Example:
@@ -234,6 +341,56 @@ constants:
     value: 180
     unit: "deg/sec (range 90-270)"
     added: 2026-08-10
+    revised: ""
+
+  - name: base_fov
+    status: active
+    source: design/gdd/camera-system.md
+    referenced_by:
+      - design/gdd/camera-system.md
+    value: 90
+    unit: "degrees (range 70-100)"
+    added: 2026-08-26
+    revised: ""
+
+  - name: eye_height_offset
+    status: active
+    source: design/gdd/camera-system.md
+    referenced_by:
+      - design/gdd/camera-system.md
+    value: 1.65
+    unit: "meters (range 1.4-1.8)"
+    added: 2026-08-26
+    revised: ""
+
+  - name: kick_peak_offset_deg
+    status: active
+    source: design/gdd/camera-system.md
+    referenced_by:
+      - design/gdd/camera-system.md
+    value: 5
+    unit: "degrees (range 2-8)"
+    added: 2026-08-26
+    revised: ""
+
+  - name: kick_attack_time
+    status: active
+    source: design/gdd/camera-system.md
+    referenced_by:
+      - design/gdd/camera-system.md
+    value: 0.05
+    unit: "seconds (range 0.03-0.08)"
+    added: 2026-08-26
+    revised: ""
+
+  - name: kick_decay_time
+    status: active
+    source: design/gdd/camera-system.md
+    referenced_by:
+      - design/gdd/camera-system.md
+    value: 0.20
+    unit: "seconds (range 0.15-0.30)"
+    added: 2026-08-26
     revised: ""
 
 # Example:
