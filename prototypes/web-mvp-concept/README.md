@@ -75,14 +75,18 @@ Real multi-client test pending.
   guarantees enough XP for the next party level; leveling raises everyone's
   max HP; every other level (3, 5, 7…) offers a passive-skill choice (mentor).
   The tier-2 spell is **not** auto-granted — it must be bought at the shop
-  stand, same as leveling up an existing spell
+  stand for a flat **50💰** (pegged to the average gold a solo player earns
+  clearing level 1: 5 enemies × avg 10g/kill), same as leveling up an
+  existing spell
 - **Physical shop/mentor in the hub room**: no modal dialog — glowing stands
   with floating price tags you interact with via E (buy your next spell,
   level up your active spell, pick a passive when one's pending, or step to
   the portal to continue); continuing spawns the next level with more
   enemies (scaled HP) and respawns everyone at that level's spawn point.
-  Trying to buy/level up without enough gold flashes the price tag and a
-  bottom-screen prompt red instead of silently failing
+  The bottom-screen interact prompt names the exact spell/action (not just
+  "Buy"/"Level up") so the visually similar buy and mentor stands can't be
+  mixed up. Trying to buy/level up without enough gold flashes the price
+  tag and prompt red instead of silently failing
 - **Sessions**: a level ends when all its enemies are dead; no more
   auto-respawning enemies mid-level
 - Humanoid enemies with walk + attack-lunge animation; AI: patrol (wander
@@ -161,4 +165,12 @@ Real multi-client test pending.
   happens to be on-screen, which only gates the tag's own visibility). This
   sidesteps the pointer-lock/click problem entirely since there's no DOM
   button to click during gameplay, and reads as more diegetic.
+- **Bug report: "bought spell didn't appear in the hotbar"** — turned out
+  the player pressed E on the mentor stand (leveled up their active spell)
+  while thinking they were at the buy stand — gold was deducted, so nothing
+  was actually broken, but the two orb-pedestals look similar enough to
+  confuse under dim hub lighting. Fixed by making the bottom-screen interact
+  prompt name the exact spell/action ("Купить 💥 Огненный шар — 50💰") instead
+  of a generic verb, so it's unambiguous which stand you're about to use
+  without needing to look up at the floating tag.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)

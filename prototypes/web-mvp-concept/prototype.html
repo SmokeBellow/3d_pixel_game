@@ -196,6 +196,11 @@ function zoneOf(id) { return ZONES[id]; }
 const ZONE_PILLARS = {}; // filled by buildArena() per zone — absolute world [x,z] pairs
 const ELEMENT_COLOR = { Fire: 0xff5533, Water: 0x2288ee, Lightning: 0xffdd33 };
 const XP_PER_KILL = 20;
+const GOLD_PER_KILL_MIN = 5, GOLD_PER_KILL_MAX = 15; // hostOnEnemyKilled rolls in this range
+// Tier-2 spell cost — pegged to the average gold a solo player earns
+// clearing level 1 (5 enemies × avg 10g/kill), per user request: the second
+// spell should be affordable right after your first level, not a long grind.
+const SPELL2_COST = 5 * (GOLD_PER_KILL_MIN + GOLD_PER_KILL_MAX) / 2;
 function xpNeeded(level) { return level * 100; }
 
 // One element per player (fixed at lobby) — each school's own small unlock
@@ -513,13 +518,16 @@ function updateShopStands() {
     labelBuy.style.display = 'block';
     if (canBuy) {
       const next = pool[mySpells.length];
-      const cost = 100 + 40 * mySpells.length;
+      const cost = SPELL2_COST;
       labelBuy.textContent = `${next.icon} ${next.name} — ${cost}💰`;
     } else {
       labelBuy.textContent = 'Все заклинания школы открыты';
     }
   } else labelBuy.style.display = 'none';
-  if (canBuy) consider({ kind: 'buy' }, distXZ(playerPos, shopBuyStand));
+  if (canBuy) {
+    const next = pool[mySpells.length];
+    consider({ kind: 'buy', label: `Купить ${next.icon} ${next.name} — ${SPELL2_COST}💰` }, distXZ(playerPos, shopBuyStand));
+  }
 
   // Mentor stand — levels up whichever spell is in your active hotbar slot
   const activeSpell = mySpells[activeSlot];
@@ -528,7 +536,10 @@ function updateShopStands() {
     const cost = 30 * activeSpell.level;
     labelMentor.textContent = `${activeSpell.icon} ${activeSpell.name} ур.${activeSpell.level}→${activeSpell.level + 1} — ${cost}💰`;
   } else labelMentor.style.display = 'none';
-  if (activeSpell) consider({ kind: 'mentor', idx: activeSlot }, distXZ(playerPos, shopMentorStand));
+  if (activeSpell) {
+    const cost = 30 * activeSpell.level;
+    consider({ kind: 'mentor', idx: activeSlot, label: `Прокачать ${activeSpell.icon} ${activeSpell.name} до ур.${activeSpell.level + 1} — ${cost}💰` }, distXZ(playerPos, shopMentorStand));
+  }
 
   // Passive stands — only appear when a passive choice is pending (odd party levels)
   if (myPendingPassive) {
@@ -538,12 +549,12 @@ function updateShopStands() {
       labelPassiveA.style.display = 'block';
       labelPassiveA.textContent = `${defA.name} — ${defA.desc}`;
     } else labelPassiveA.style.display = 'none';
-    if (defA) consider({ kind: 'passive', id: defA.id }, distXZ(playerPos, shopPassiveStandA));
+    if (defA) consider({ kind: 'passive', id: defA.id, label: `Выбрать «${defA.name}» — ${defA.desc}` }, distXZ(playerPos, shopPassiveStandA));
     if (defB && positionLabel(labelPassiveB, shopPassiveStandB)) {
       labelPassiveB.style.display = 'block';
       labelPassiveB.textContent = `${defB.name} — ${defB.desc}`;
     } else labelPassiveB.style.display = 'none';
-    if (defB) consider({ kind: 'passive', id: defB.id }, distXZ(playerPos, shopPassiveStandB));
+    if (defB) consider({ kind: 'passive', id: defB.id, label: `Выбрать «${defB.name}» — ${defB.desc}` }, distXZ(playerPos, shopPassiveStandB));
   } else {
     labelPassiveA.style.display = 'none';
     labelPassiveB.style.display = 'none';
@@ -556,7 +567,7 @@ function updateShopStands() {
     labelContinue.style.display = 'block';
     labelContinue.textContent = 'Пройти дальше';
   } else labelContinue.style.display = 'none';
-  consider({ kind: 'continue' }, distXZ(playerPos, shopContinuePortal));
+  consider({ kind: 'continue', label: 'Пройти дальше' }, distXZ(playerPos, shopContinuePortal));
 
   activeStandAction = nearest;
   const prompt = document.getElementById('interactPrompt');
@@ -570,11 +581,10 @@ function updateShopStands() {
   } else {
     prompt.classList.remove('error');
     if (nearest) {
-      const verb = nearest.kind === 'buy' ? 'Купить'
-        : nearest.kind === 'mentor' ? 'Прокачать'
-        : nearest.kind === 'passive' ? 'Выбрать'
-        : 'Пройти дальше';
-      prompt.innerHTML = `<b>[E]</b> ${verb}`;
+      // Full item name + cost right in the prompt (not just a generic verb)
+      // so it's unambiguous which stand you're about to interact with —
+      // buy and mentor stands look similar enough to mix up otherwise.
+      prompt.innerHTML = `<b>[E]</b> ${nearest.label}`;
       prompt.style.display = 'block';
     } else {
       prompt.style.display = 'none';
@@ -596,8 +606,7 @@ function tryInteract() {
   const a = activeStandAction;
   if (a.kind === 'buy') {
     const pool = myElement ? SCHOOL_SPELLS[myElement] : [];
-    const cost = 100 + 40 * mySpells.length;
-    if (mySpells.length < pool.length && myGold < cost) { flashInsufficientFunds(document.getElementById('labelBuy')); return; }
+    if (mySpells.length < pool.length && myGold < SPELL2_COST) { flashInsufficientFunds(document.getElementById('labelBuy')); return; }
     requestBuySpell();
   } else if (a.kind === 'mentor') {
     const s = mySpells[a.idx];
@@ -1248,7 +1257,7 @@ function cheatKillAllEnemies() {
 
 function hostOnEnemyKilled(e, casterPid) {
   e.alive = false;
-  const gold = 5 + Math.floor(Math.random() * 11);
+  const gold = GOLD_PER_KILL_MIN + Math.floor(Math.random() * (GOLD_PER_KILL_MAX - GOLD_PER_KILL_MIN + 1));
   if (playerData[casterPid]) playerData[casterPid].gold += gold;
   hostLog(`☠ Враг уничтожен (${nameFor(casterPid)}) +${gold}💰`);
   partyXp += XP_PER_KILL;
@@ -1362,7 +1371,7 @@ function hostBuySpell(pid) {
   if (!pd) return;
   const pool = SCHOOL_SPELLS[pd.element];
   if (pd.spells.length >= pool.length) return;
-  const cost = 100 + 40 * pd.spells.length;
+  const cost = SPELL2_COST;
   if (pd.gold < cost) return;
   pd.gold -= cost;
   pd.spells.push(cloneSpell(pool[pd.spells.length]));
