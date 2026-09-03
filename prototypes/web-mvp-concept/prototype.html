@@ -1,0 +1,1578 @@
+<!DOCTYPE html>
+<!-- PROTOTYPE - NOT FOR PRODUCTION -->
+<!-- Question: Does the co-op elemental synergy MVP (one element per player, shared progression, shop/mentor between levels) work in-browser with real friends joining over the internet? -->
+<!-- Date: 2026-08-30 -->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Covenant of Mages — Web MVP Prototype</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0a0a0f; font-family: 'Segoe UI', sans-serif; }
+  #hud { position: fixed; inset: 0; pointer-events: none; color: #eee; }
+  #crosshair { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 20px; color: rgba(255,255,255,0.8); }
+  #slots { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); display: flex; gap: 10px; }
+  .slot { width: 64px; height: 64px; border: 2px solid #555; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 30px; background: rgba(0,0,0,0.5); transition: border-color .1s, transform .1s; }
+  .slot.active { border-color: #fff; transform: scale(1.15); }
+  #status { position: absolute; top: 12px; left: 12px; font-size: 14px; text-shadow: 0 1px 2px #000; white-space: pre-line; }
+  #combatlog { position: absolute; bottom: 148px; left: 12px; font-size: 13px; text-shadow: 0 1px 2px #000; opacity: .9; }
+  #hpWrap { position: absolute; bottom: 24px; left: 12px; width: 200px; }
+  #hpLabel { font-size: 12px; margin-bottom: 3px; text-shadow: 0 1px 2px #000; display: flex; justify-content: space-between; }
+  #hpBarBg { width: 100%; height: 16px; background: rgba(0,0,0,0.5); border: 1px solid #611; border-radius: 4px; overflow: hidden; }
+  #hpBarFill { height: 100%; width: 100%; background: linear-gradient(90deg, #d92e2e, #ff5a3c); transition: width .15s; }
+  #xpBarBg { width: 100%; height: 8px; background: rgba(0,0,0,0.5); border: 1px solid #333; border-radius: 4px; overflow: hidden; margin-top: 4px; }
+  #xpBarFill { height: 100%; width: 0%; background: linear-gradient(90deg, #7a5cff, #b98cff); transition: width .2s; }
+  #downedOverlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(80,0,0,0.35); color: #ffdede; font-size: 28px; font-weight: bold; text-shadow: 0 2px 6px #000; }
+  #vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(circle at center, rgba(0,0,0,0) 30%, rgba(0,0,0,0.85) 100%); }
+  #cheatHint { position: absolute; top: 12px; right: 12px; font-size: 11px; opacity: .5; text-shadow: 0 1px 2px #000; }
+  #menu, #elementPanel, #shopPanel { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  #menu { background: radial-gradient(circle at center, #1a1530, #0a0a0f); }
+  #elementPanel, #shopPanel { display: none; background: rgba(5,5,15,0.7); z-index: 5; }
+  .panel { background: rgba(20,18,35,0.97); border: 1px solid #444; border-radius: 12px; padding: 32px 40px; color: #eee; text-align: center; min-width: 340px; max-width: 460px; }
+  .panel h1 { margin: 0 0 4px; font-size: 26px; color: #c9b8ff; }
+  .panel h2 { margin: 0 0 24px; font-size: 13px; font-weight: normal; color: #888; }
+  .panel button { display: block; width: 100%; margin: 8px 0; padding: 12px; font-size: 16px; border: 1px solid #665599; background: #2a2347; color: #eee; border-radius: 8px; cursor: pointer; }
+  .panel button:hover { background: #3a3060; }
+  .panel button:disabled { opacity: .4; cursor: default; }
+  .panel input { width: 100%; box-sizing: border-box; padding: 10px; font-size: 16px; margin: 8px 0; border-radius: 8px; border: 1px solid #555; background: #171426; color: #eee; text-align: center; text-transform: uppercase; }
+  .panel .code { font-size: 32px; letter-spacing: 6px; color: #ffd76a; margin: 12px 0; font-weight: bold; }
+  .panel .hint { font-size: 12px; color: #999; margin-top: 16px; line-height: 1.5; }
+  .panel .err { color: #ff7a7a; font-size: 13px; min-height: 18px; }
+  .elBtn { font-size: 22px !important; }
+  .shopSection { text-align: left; background: rgba(0,0,0,0.25); border-radius: 8px; padding: 10px 14px; margin: 10px 0; font-size: 14px; }
+  .shopSection h3 { margin: 0 0 8px; font-size: 14px; color: #c9b8ff; }
+  .shopRow { display: flex; justify-content: space-between; align-items: center; margin: 6px 0; gap: 8px; }
+  .shopRow button { width: auto; margin: 0; padding: 6px 10px; font-size: 13px; }
+  .chatLog { height: 110px; overflow-y: auto; background: rgba(0,0,0,0.3); border-radius: 6px; padding: 6px 8px; font-size: 12px; text-align: left; color: #ccc; margin-top: 8px; }
+  .chatLog div { margin: 2px 0; word-wrap: break-word; }
+  .chatRow { display: flex; gap: 6px; margin-top: 6px; }
+  .chatRow input { flex: 1; margin: 0 !important; }
+  .chatRow button { width: auto !important; margin: 0 !important; padding: 10px 14px !important; }
+</style>
+</head>
+<body>
+<div id="menu">
+  <div class="panel" id="panelMain">
+    <h1>Covenant of Mages</h1>
+    <h2>web MVP prototype — co-op spell synergy</h2>
+    <input id="nameInput" maxlength="12" placeholder="Твоё имя" style="text-transform:none">
+    <button id="btnHost">Создать игру (хост)</button>
+    <button id="btnShowJoin">Присоединиться по коду</button>
+    <div id="joinRow" style="display:none">
+      <input id="codeInput" maxlength="4" placeholder="КОД">
+      <button id="btnJoin">Войти</button>
+    </div>
+    <div class="err" id="menuErr"></div>
+    <div class="hint">Хост создаёт комнату и говорит друзьям код.<br>Друзья открывают этот же файл и вводят код.<br>Соединение — P2P (WebRTC), сервер не нужен.</div>
+  </div>
+  <div class="panel" id="panelLobby" style="display:none">
+    <h1>Комната создана</h1>
+    <div>Код для друзей:</div>
+    <div class="code" id="roomCode">----</div>
+    <div id="lobbyPlayers" style="margin:12px 0; color:#aaa"></div>
+    <button id="btnStart" disabled>Выбери стихию, чтобы начать</button>
+    <div class="hint">Игроки смогут подключаться и после старта.</div>
+    <div id="lobbyChatLog" class="chatLog"></div>
+    <div class="chatRow">
+      <input id="lobbyChatInput" placeholder="Сообщение..." style="text-transform:none">
+      <button id="lobbyChatSend">➤</button>
+    </div>
+  </div>
+  <div class="panel" id="panelWaitingClient" style="display:none">
+    <h1>Ждём хоста…</h1>
+    <h2>Хост запустит игру, когда все будут готовы</h2>
+    <div id="waitingPlayers" style="margin:12px 0; color:#aaa"></div>
+    <div id="waitingChatLog" class="chatLog"></div>
+    <div class="chatRow">
+      <input id="waitingChatInput" placeholder="Сообщение..." style="text-transform:none">
+      <button id="waitingChatSend">➤</button>
+    </div>
+  </div>
+</div>
+<div id="elementPanel">
+  <div class="panel">
+    <h1>Выбери стихию</h1>
+    <h2>Заклинания твоей школы будут доступны только тебе — комбинируй со стихиями союзников</h2>
+    <button class="elBtn" data-el="Fire">🔥 Огонь</button>
+    <button class="elBtn" data-el="Water">💧 Вода</button>
+    <button class="elBtn" data-el="Lightning">⚡ Молния</button>
+  </div>
+</div>
+<div id="shopPanel">
+  <div class="panel">
+    <h1>Между уровнями</h1>
+    <div id="shopLevelInfo" style="color:#aaa"></div>
+    <div id="shopGold" style="margin:8px 0; color:#ffd76a; font-weight:bold"></div>
+    <div id="shopPassiveChoice" class="shopSection" style="display:none">
+      <h3>Наставник предлагает выбрать пассивное умение</h3>
+      <div id="shopPassiveButtons"></div>
+    </div>
+    <div class="shopSection">
+      <h3>Магазин — новое заклинание</h3>
+      <div id="shopBuySection"></div>
+    </div>
+    <div class="shopSection">
+      <h3>Наставник — прокачать имеющееся</h3>
+      <div id="shopMentorSection"></div>
+    </div>
+    <button id="btnShopContinue">Продолжить →</button>
+  </div>
+</div>
+<div id="hud" style="display:none">
+  <div id="vignette"></div>
+  <div id="crosshair">+</div>
+  <div id="status"></div>
+  <div id="cheatHint">L — вкл/выкл затемнение (дебаг)</div>
+  <div id="combatlog"></div>
+  <div id="hpWrap">
+    <div id="hpLabel"><span id="hpLabelText">HP</span><span id="goldLabel">💰 0</span></div>
+    <div id="hpBarBg"><div id="hpBarFill"></div></div>
+    <div id="xpBarBg"><div id="xpBarFill"></div></div>
+  </div>
+  <div id="slots">
+    <div class="slot" id="slot0">🔥</div>
+    <div class="slot" id="slot1">💧</div>
+    <div class="slot" id="slot2">⚡</div>
+  </div>
+  <div id="downedOverlay">Вы повержены… возрождение через <span id="respawnT">4</span>с</div>
+</div>
+
+<script src="https://unpkg.com/three@0.149.0/build/three.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+<script>
+'use strict';
+// ============================================================
+// Tuning (sourced from GDDs where they exist)
+// ============================================================
+const EYE_HEIGHT = 1.65;          // camera-system.md eye_height_offset
+const PITCH_CLAMP = 89 * Math.PI / 180; // camera-system.md pitch clamp
+const BASE_FOV = 80;              // vertical FOV (three.js), ~90 horizontal
+const KICK_PEAK = 5, KICK_ATTACK = 0.05, KICK_DECAY = 0.20; // fov_kick_response
+const BASE_SENSITIVITY = 0.0022;
+let sensitivity = BASE_SENSITIVITY; // shared camera/mouse sensitivity — TODO: expose as a settings slider
+const LOOK_KEY_SPEED = 2.0; // rad/sec baseline at BASE_SENSITIVITY, scales with `sensitivity`
+const MOVE_SPEED = 6;
+const ARENA_HALF = 19;
+const ENEMY_MAX_HP = 100;
+const WET_DURATION_S = 6;
+const CHAIN_RADIUS = 6;
+const ENEMY_WANDER_SPEED = 1.2;
+const ENEMY_CHASE_SPEED = 2.6;
+const AGGRO_RADIUS = 7;          // enemy notices a player within this range
+const PATROL_LEASH_RADIUS = 13;  // > AGGRO_RADIUS: enemy gives up chase beyond this (measured from its home)
+const STOP_RANGE = 2.1;          // enemy stops closing once this near — stays visible instead of hugging the player
+const ATTACK_RANGE = 2.6;        // can still land a hit slightly beyond STOP_RANGE
+const ATTACK_ANIM_DURATION = 0.35;
+const MELEE_DAMAGE = 8;
+const MELEE_COOLDOWN = 1.1;
+const PLAYER_MAX_HP = 100;
+const PLAYER_RESPAWN_S = 4;
+const SPAWN_POINT = [0, 12]; // the one pentagram location — everyone spawns/respawns here
+const SYNERGY_MULT = 3;           // health-damage-system.md synergy_damage_multiplier
+const ELEMENT_COLOR = { Fire: 0xff5533, Water: 0x2288ee, Lightning: 0xffdd33 };
+const XP_PER_KILL = 20;
+function xpNeeded(level) { return level * 100; }
+
+// One element per player (fixed at lobby) — each school's own small unlock
+// ladder. Level 1 = only the first entry. Level-up unlocks the next entry
+// automatically; the shop lets you buy it early for gold instead of waiting.
+const SCHOOL_SPELLS = {
+  Fire:      [ { name: 'Искра',          school: 'Fire',      dmg: 15, cooldown: 0.6, speed: 16, color: 0xff6622 },
+               { name: 'Огненный шар',   school: 'Fire',      dmg: 24, cooldown: 0.9, speed: 13, color: 0xff3300 } ],
+  Water:     [ { name: 'Плеск',          school: 'Water',     dmg: 5,  cooldown: 0.5, speed: 12, color: 0x3388ee },
+               { name: 'Волна',          school: 'Water',     dmg: 9,  cooldown: 0.8, speed: 10, color: 0x2266cc } ],
+  Lightning: [ { name: 'Разряд',         school: 'Lightning', dmg: 12, cooldown: 0.8, speed: 0,  color: 0xffe14d },
+               { name: 'Цепная молния',  school: 'Lightning', dmg: 16, cooldown: 1.0, speed: 0,  color: 0xffdd00 } ],
+};
+const PASSIVE_POOL = [
+  { id: 'vitality',  name: 'Живучесть',       desc: '+20 макс. HP',        apply: p => { p.maxHpBonus += 20; } },
+  { id: 'quickcast', name: 'Скорость каста',  desc: '-15% КД заклинаний',  apply: p => { p.cooldownMult *= 0.85; } },
+  { id: 'potency',   name: 'Мощь',            desc: '+15% урона',          apply: p => { p.dmgMult *= 1.15; } },
+];
+function elementEmoji(school) { return school === 'Fire' ? '🔥' : school === 'Water' ? '💧' : '⚡'; }
+function cloneSpell(def) { return { ...def, level: 1, useHits: 0 }; }
+function shuffle(arr) { return arr.map(v => [Math.random(), v]).sort((a, b) => a[0] - b[0]).map(v => v[1]); }
+
+// ============================================================
+// Three.js scene
+// ============================================================
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x030308);
+const FOG_NEAR = 11, FOG_FAR = 30; // "dark beyond the lit circle" — tuned brighter than the first pass
+scene.fog = new THREE.Fog(0x030308, FOG_NEAR, FOG_FAR);
+const camera = new THREE.PerspectiveCamera(BASE_FOV, innerWidth / innerHeight, 0.1, 200);
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(0.6); // chunky pixels — nod to the pixelation art direction
+document.body.appendChild(renderer.domElement);
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// First-person arms — parented to the camera so they follow the view
+scene.add(camera);
+const armMat = new THREE.MeshLambertMaterial({ color: 0x2a2347 });
+const handMat = new THREE.MeshLambertMaterial({ color: 0xc9a07a });
+function makeFpArm(side) {
+  const arm = new THREE.Group();
+  const forearm = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.42), armMat);
+  forearm.rotation.x = -0.25;
+  arm.add(forearm);
+  const hand = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 8), handMat);
+  hand.position.set(0, 0.05, -0.24);
+  arm.add(hand);
+  arm.position.set(side * 0.32, -0.32, -0.55);
+  camera.add(arm);
+  return arm;
+}
+const fpArmL = makeFpArm(-1);
+const fpArmR = makeFpArm(1);
+const orbMat = new THREE.MeshBasicMaterial({ color: 0xff6622 });
+const fpOrb = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), orbMat);
+fpOrb.position.set(0, 0.1, -0.3);
+fpArmR.add(fpOrb);
+const orbLight = new THREE.PointLight(0xff6622, 0.6, 2);
+fpOrb.add(orbLight);
+const FP_ARM_BASE_Y = -0.32, FP_ARM_BASE_Z = -0.55;
+let castRecoilT = Infinity, walkBobT = 0;
+
+// Ambient is deliberately dim — visibility comes from torches + the player's
+// own glow, not flat scene-wide lighting (needed for the vignette to read).
+// Brightened from the first pass per playtest feedback ("too dark").
+const hemiLight = new THREE.HemisphereLight(0x554a77, 0x0a0810, 0.32);
+scene.add(hemiLight);
+const HEMI_BASE = 0.32, DIR_BASE = 0.22;
+const dirLight = new THREE.DirectionalLight(0xffeedd, DIR_BASE);
+dirLight.position.set(10, 20, 5);
+scene.add(dirLight);
+// The mage's own faint magical glow — a small lit bubble that always follows the player.
+const playerGlow = new THREE.PointLight(0xb0a0ff, 0.9, 9, 2);
+camera.add(playerGlow);
+
+// Cheat: press L to fully disable darkness/vignette for debugging.
+let lightsDebugFull = false;
+function applyLightingMode() {
+  if (lightsDebugFull) {
+    hemiLight.intensity = 1.0; dirLight.intensity = 0.6;
+    scene.fog.near = 300; scene.fog.far = 600;
+    document.getElementById('vignette').style.display = 'none';
+  } else {
+    hemiLight.intensity = HEMI_BASE; dirLight.intensity = DIR_BASE;
+    scene.fog.near = FOG_NEAR; scene.fog.far = FOG_FAR;
+    document.getElementById('vignette').style.display = 'block';
+  }
+}
+
+// ============================================================
+// Procedural stone-brick textures (canvas-generated, no external assets)
+// ============================================================
+function makeStoneTexture(baseHex, mortarHex, size) {
+  size = size || 256;
+  const cnv = document.createElement('canvas');
+  cnv.width = cnv.height = size;
+  const ctx = cnv.getContext('2d');
+  const base = new THREE.Color(baseHex);
+  ctx.fillStyle = '#' + new THREE.Color(mortarHex).getHexString();
+  ctx.fillRect(0, 0, size, size);
+  const cols = 4, rows = 6, brickW = size / cols, brickH = size / rows, gap = 3;
+  for (let row = 0; row < rows; row++) {
+    const offset = (row % 2) * (brickW / 2);
+    for (let x = -brickW; x < size + brickW; x += brickW) {
+      const shade = 0.8 + Math.random() * 0.35;
+      ctx.fillStyle = '#' + base.clone().multiplyScalar(shade).getHexString();
+      const bx = x + offset, by = row * brickH;
+      ctx.fillRect(bx + gap, by + gap, brickW - gap * 2, brickH - gap * 2);
+      for (let n = 0; n < 8; n++) {
+        ctx.fillStyle = `rgba(0,0,0,${(Math.random() * 0.18).toFixed(2)})`;
+        ctx.fillRect(bx + gap + Math.random() * (brickW - gap * 2), by + gap + Math.random() * (brickH - gap * 2), 2, 2);
+      }
+    }
+  }
+  const tex = new THREE.CanvasTexture(cnv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.NearestFilter; // keeps the chunky pixel-art look
+  return tex;
+}
+function stoneMaterial(baseHex, mortarHex, repeatX, repeatY) {
+  const tex = makeStoneTexture(baseHex, mortarHex);
+  tex.repeat.set(repeatX, repeatY);
+  return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95, metalness: 0 });
+}
+
+// Arena
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(ARENA_HALF * 2 + 2, ARENA_HALF * 2 + 2),
+  stoneMaterial(0x4a4550, 0x1c1a22, 12, 12));
+floor.rotation.x = -Math.PI / 2;
+scene.add(floor);
+for (const [x, z, w, d] of [[0, -20, 42, 1], [0, 20, 42, 1], [-20, 0, 1, 42], [20, 0, 1, 42]]) {
+  const wall = new THREE.Mesh(new THREE.BoxGeometry(w, 4, d), stoneMaterial(0x3a3542, 0x18161e, Math.max(w, d) / 3, 2));
+  wall.position.set(x, 2, z);
+  scene.add(wall);
+}
+const pillarMat = stoneMaterial(0x4a4358, 0x201e28, 2, 3);
+const pillarPositions = [[-8, -8], [8, -8], [-8, 8], [8, 8]];
+for (const [x, z] of pillarPositions) {
+  const p = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 1, 5, 8), pillarMat);
+  p.position.set(x, 2.5, z);
+  scene.add(p);
+}
+const PILLAR_CLEARANCE = 1.3; // pillar radius (~1) + a bit of enemy body radius
+const SPAWN_SAFE_RADIUS = 4;  // enemies can't enter the pentagram's ward
+// Enemy chase/wander above is pure steering with no obstacle awareness —
+// this is the only thing stopping them walking through walls/pillars/the ward.
+function clampEnemyToArena(e) {
+  const bound = ARENA_HALF - 1;
+  e.mesh.position.x = Math.max(-bound, Math.min(bound, e.mesh.position.x));
+  e.mesh.position.z = Math.max(-bound, Math.min(bound, e.mesh.position.z));
+  for (const [px, pz] of pillarPositions) {
+    const dx = e.mesh.position.x - px, dz = e.mesh.position.z - pz;
+    const distSq = dx * dx + dz * dz;
+    if (distSq < PILLAR_CLEARANCE * PILLAR_CLEARANCE && distSq > 1e-6) {
+      const dist = Math.sqrt(distSq);
+      const push = PILLAR_CLEARANCE - dist;
+      e.mesh.position.x += (dx / dist) * push;
+      e.mesh.position.z += (dz / dist) * push;
+    }
+  }
+  const sdx = e.mesh.position.x - SPAWN_POINT[0], sdz = e.mesh.position.z - SPAWN_POINT[1];
+  const sDistSq = sdx * sdx + sdz * sdz;
+  if (sDistSq < SPAWN_SAFE_RADIUS * SPAWN_SAFE_RADIUS) {
+    const sDist = Math.sqrt(sDistSq) || 0.001; // guard against landing exactly on the point
+    const push = SPAWN_SAFE_RADIUS - sDist;
+    e.mesh.position.x += (sdx / sDist) * push;
+    e.mesh.position.z += (sdz / sDist) * push;
+  }
+}
+
+// ============================================================
+// Torches — the primary light sources (brightened per playtest feedback)
+// ============================================================
+const torches = [];
+function makeTorch(x, y, z) {
+  const group = new THREE.Group();
+  const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.6, 6), new THREE.MeshLambertMaterial({ color: 0x3a2a1a }));
+  stick.position.y = 0.3;
+  group.add(stick);
+  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.4, 8), new THREE.MeshBasicMaterial({ color: 0xffaa44, transparent: true, opacity: 0.9 }));
+  flame.position.y = 0.78;
+  group.add(flame);
+  const light = new THREE.PointLight(0xff8822, 2.4, 13, 2);
+  light.position.y = 0.78;
+  group.add(light);
+  group.position.set(x, y, z);
+  scene.add(group);
+  torches.push({ flame, light, phase: Math.random() * 10, baseIntensity: 2.4 });
+}
+for (const [x, z] of pillarPositions) makeTorch(x, 4.6, z);
+for (const [x, z] of [[0, -19.4], [0, 19.4], [-19.4, 0], [19.4, 0]]) makeTorch(x, 2.4, z);
+// ============================================================
+// Spawn/respawn pentagram — canvas-drawn glyph decal on the floor at
+// SPAWN_POINT (no external image needed, same trick as the stone textures).
+// ============================================================
+function makePentagramTexture(size) {
+  size = size || 512;
+  const cnv = document.createElement('canvas');
+  cnv.width = cnv.height = size;
+  const ctx = cnv.getContext('2d');
+  const cx = size / 2, cy = size / 2, r = size * 0.42;
+  // soft outer glow
+  const glow = ctx.createRadialGradient(cx, cy, r * 0.5, cx, cy, r * 1.2);
+  glow.addColorStop(0, 'rgba(160,120,255,0.35)');
+  glow.addColorStop(1, 'rgba(160,120,255,0)');
+  ctx.fillStyle = glow;
+  ctx.beginPath(); ctx.arc(cx, cy, r * 1.2, 0, Math.PI * 2); ctx.fill();
+
+  ctx.strokeStyle = 'rgba(205,180,255,0.95)';
+  ctx.lineWidth = size * 0.012;
+  ctx.shadowColor = 'rgba(180,140,255,0.9)';
+  ctx.shadowBlur = size * 0.02;
+
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy, r * 0.86, 0, Math.PI * 2); ctx.stroke();
+
+  // five-pointed star: connect every 2nd vertex of a pentagon
+  const pts = [];
+  for (let i = 0; i < 5; i++) {
+    const a = -Math.PI / 2 + i * (2 * Math.PI / 5);
+    pts.push([cx + Math.cos(a) * r * 0.86, cy + Math.sin(a) * r * 0.86]);
+  }
+  ctx.beginPath();
+  for (let i = 0; i <= 5; i++) {
+    const [x, y] = pts[(i * 2) % 5];
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.stroke();
+
+  // small runic dots ringing the outer circle
+  ctx.shadowBlur = size * 0.01;
+  for (let i = 0; i < 12; i++) {
+    const a = i * (Math.PI * 2 / 12);
+    ctx.beginPath();
+    ctx.arc(cx + Math.cos(a) * r * 1.05, cy + Math.sin(a) * r * 1.05, size * 0.007, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(220,195,255,0.9)';
+    ctx.fill();
+  }
+
+  return new THREE.CanvasTexture(cnv);
+}
+const pentagramMat = new THREE.MeshBasicMaterial({ map: makePentagramTexture(), transparent: true, depthWrite: false });
+const pentagramMesh = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 3.2), pentagramMat);
+pentagramMesh.rotation.x = -Math.PI / 2;
+pentagramMesh.position.set(SPAWN_POINT[0], 0.02, SPAWN_POINT[1]); // just above the floor to avoid z-fighting
+scene.add(pentagramMesh);
+const pentagramLight = new THREE.PointLight(0xb090ff, 0.7, 6, 2);
+pentagramLight.position.set(SPAWN_POINT[0], 0.6, SPAWN_POINT[1]);
+scene.add(pentagramLight);
+function updatePentagram(t) {
+  const pulse = 0.75 + 0.25 * Math.sin(t * 1.5);
+  pentagramMat.opacity = pulse;
+  pentagramLight.intensity = 0.7 * pulse;
+}
+
+function updateTorches(t) {
+  for (const torch of torches) {
+    const flicker = 0.85 + 0.15 * Math.sin(t * 9 + torch.phase) + (Math.random() - 0.5) * 0.05;
+    torch.light.intensity = torch.baseIntensity * flicker;
+    torch.flame.scale.set(flicker, flicker * 1.15, flicker);
+  }
+}
+
+// ============================================================
+// Local player state
+// ============================================================
+let yaw = 0, pitch = 0;
+const playerPos = new THREE.Vector3(0, 0, 10);
+const keys = {};
+let activeSlot = 0;
+const cooldowns = [0, 0, 0];
+let fovKickT = Infinity; // fov_kick_response timer
+let myName = 'Маг';
+let myElement = null;
+let myHp = PLAYER_MAX_HP, myDowned = false, wasDowned = false, myGold = 0;
+let mySpells = [];
+let myPendingPassive = null;
+let myMaxHp = PLAYER_MAX_HP;
+function respawnLocalPlayer() {
+  // Small random jitter within the pentagram so a full-party respawn doesn't
+  // stack everyone on the exact same point, while still reading as "the same place".
+  const angle = Math.random() * Math.PI * 2, r = Math.random() * 1.0;
+  playerPos.set(SPAWN_POINT[0] + Math.cos(angle) * r, 0, SPAWN_POINT[1] + Math.sin(angle) * r);
+}
+
+// ============================================================
+// Enemies — rebuilt fresh each level (buildLevelEnemies). Visuals everywhere;
+// AI/HP simulation is host-only; clients mirror via 'state' broadcasts.
+// ============================================================
+const SKIN_COLOR = 0x8a8075, CLOTH_COLOR = 0x4a3f5c;
+const SKIN_WET = 0x4d79c9, CLOTH_WET = 0x33507a;
+let enemies = [];
+function makeEnemy(id, x, z, maxHp) {
+  const group = new THREE.Group();
+  const skinMat = new THREE.MeshLambertMaterial({ color: SKIN_COLOR });
+  const clothMat = new THREE.MeshLambertMaterial({ color: CLOTH_COLOR });
+  const parts = [];
+  function part(geo, material, px, py, pz) {
+    const m = new THREE.Mesh(geo, material);
+    m.position.set(px, py, pz);
+    m.userData.enemyId = id;
+    group.add(m); parts.push(m);
+    return m;
+  }
+  part(new THREE.BoxGeometry(0.6, 0.7, 0.3), clothMat, 0, 1.25, 0);            // torso
+  part(new THREE.SphereGeometry(0.22, 8, 8), skinMat, 0, 1.85, 0);             // head
+  const eyeMat = new THREE.MeshBasicMaterial({ color: 0xff3333 });
+  const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 6), eyeMat);
+  eyeL.position.set(-0.08, 1.88, 0.19); group.add(eyeL);
+  const eyeR = eyeL.clone(); eyeR.position.x = 0.08; group.add(eyeR);
+  const armGeo = new THREE.BoxGeometry(0.15, 0.6, 0.15); armGeo.translate(0, -0.3, 0);
+  const legGeo = new THREE.BoxGeometry(0.18, 0.9, 0.18); legGeo.translate(0, -0.45, 0);
+  const armL = part(armGeo, skinMat, -0.42, 1.55, 0);
+  const armR = part(armGeo.clone(), skinMat, 0.42, 1.55, 0);
+  const legL = part(legGeo, clothMat, -0.16, 0.9, 0);
+  const legR = part(legGeo.clone(), clothMat, 0.16, 0.9, 0);
+  const barBg = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.12, 0.05), new THREE.MeshBasicMaterial({ color: 0x441111 }));
+  barBg.position.y = 2.4;
+  group.add(barBg);
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.12, 0.06), new THREE.MeshBasicMaterial({ color: 0x33dd44 }));
+  bar.position.y = 2.4;
+  group.add(bar);
+  group.position.set(x, 0, z);
+  scene.add(group);
+  return { id, mesh: group, parts, skinMat, clothMat, hpBar: bar, hp: maxHp, maxHp, wet: 0, alive: true,
+           home: new THREE.Vector3(x, 0, z), wanderTarget: new THREE.Vector3(x, 0, z),
+           limbs: { armL, armR, legL, legR }, walkPhase: Math.random() * 6.28,
+           lastPos: new THREE.Vector3(x, 0, z),
+           aiState: 'patrol', targetPeerId: null, attackCooldown: 0,
+           attackAnimT: Infinity, justAttacked: false };
+}
+function computeSpawnsForLevel(level) {
+  const count = Math.min(4 + level, 12);
+  const spawns = [];
+  for (let i = 0; i < count; i++) {
+    const angle = (i / count) * Math.PI * 2;
+    const radius = 9 + (i % 3) * 2.2;
+    spawns.push([Math.cos(angle) * radius, Math.sin(angle) * radius * 0.9 - 3]);
+  }
+  return spawns;
+}
+function buildLevelEnemies(level) {
+  for (const e of enemies) scene.remove(e.mesh);
+  enemies = [];
+  const maxHp = ENEMY_MAX_HP + (level - 1) * 20;
+  computeSpawnsForLevel(level).forEach(([x, z], i) => enemies.push(makeEnemy(i, x, z, maxHp)));
+}
+function updateEnemyVisual(e) {
+  e.mesh.visible = e.alive;
+  e.hpBar.scale.x = Math.max(0.001, e.hp / e.maxHp);
+  e.skinMat.color.setHex(e.wet > 0 ? SKIN_WET : SKIN_COLOR);
+  e.clothMat.color.setHex(e.wet > 0 ? CLOTH_WET : CLOTH_COLOR);
+}
+
+// ============================================================
+// Remote players
+// ============================================================
+const remotePlayers = {}; // peerId -> {mesh, target:{p,ry}, downed}
+function makeNameSprite(text, colorHex) {
+  const cnv = document.createElement('canvas');
+  cnv.width = 256; cnv.height = 64;
+  const ctx = cnv.getContext('2d');
+  ctx.font = 'bold 32px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#' + colorHex.toString(16).padStart(6, '0');
+  ctx.fillText(text, 128, 42);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cnv), transparent: true }));
+  sprite.scale.set(2.5, 0.6, 1);
+  return sprite;
+}
+function makeRemotePlayer(name, element) {
+  const group = new THREE.Group();
+  const color = ELEMENT_COLOR[element] || 0xaaaaaa;
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 1.6, 8), new THREE.MeshLambertMaterial({ color }));
+  body.position.y = 0.9;
+  group.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 8), new THREE.MeshLambertMaterial({ color }));
+  head.position.y = 1.9;
+  group.add(head);
+  const label = makeNameSprite(name, color);
+  label.position.y = 2.6;
+  group.add(label);
+  scene.add(group);
+  return { mesh: group, target: { p: [0, 0, 0], ry: 0 }, downed: false };
+}
+
+// ============================================================
+// FX: tracers and chain lines (everyone renders, host broadcasts)
+// ============================================================
+const fx = []; // {obj, life}
+function spawnTracer(from, to, colorHex) {
+  const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...from), new THREE.Vector3(...to)]);
+  const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: colorHex, transparent: true }));
+  scene.add(line);
+  fx.push({ obj: line, life: 0.15 });
+}
+// Lightning-specific visual: a jagged zigzag between the exact same two
+// points a straight tracer would use — the hit detection (raycast) is
+// unchanged, only the rendering of the bolt is different.
+function spawnLightningBolt(fromArr, toArr, colorHex) {
+  const from = new THREE.Vector3(...fromArr), to = new THREE.Vector3(...toArr);
+  const dir = to.clone().sub(from);
+  const len = dir.length() || 0.001;
+  dir.normalize();
+  let perp1 = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0, 1, 0));
+  if (perp1.lengthSq() < 1e-4) perp1 = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(1, 0, 0));
+  perp1.normalize();
+  const perp2 = new THREE.Vector3().crossVectors(dir, perp1).normalize();
+  const segments = 7;
+  const points = [from.clone()];
+  for (let i = 1; i < segments; i++) {
+    const t = i / segments;
+    const p = from.clone().lerp(to, t);
+    p.addScaledVector(perp1, (Math.random() - 0.5) * len * 0.12);
+    p.addScaledVector(perp2, (Math.random() - 0.5) * len * 0.12);
+    points.push(p);
+  }
+  points.push(to.clone()); // endpoint stays exact — must still land on the cursor's target
+  const geo = new THREE.BufferGeometry().setFromPoints(points);
+  const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: colorHex, transparent: true }));
+  scene.add(line);
+  fx.push({ obj: line, life: 0.15 });
+  const flash = new THREE.PointLight(colorHex, 1.5, 5);
+  flash.position.copy(to);
+  scene.add(flash);
+  fx.push({ obj: flash, life: 0.12 });
+}
+function spawnChainFx(centerEnemyId, targetIds) {
+  const c = enemies[centerEnemyId];
+  if (!c) return;
+  const from = c.mesh.position.clone().add(new THREE.Vector3(0, 1.2, 0));
+  for (const tid of targetIds) {
+    const t = enemies[tid];
+    if (!t) continue;
+    const to = t.mesh.position.clone().add(new THREE.Vector3(0, 1.2, 0));
+    const geo = new THREE.BufferGeometry().setFromPoints([from, to]);
+    const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xffe14d, transparent: true }));
+    scene.add(line);
+    fx.push({ obj: line, life: 0.4 });
+  }
+  const flash = new THREE.PointLight(0xffe14d, 4, 12);
+  flash.position.copy(from);
+  scene.add(flash);
+  fx.push({ obj: flash, life: 0.3 });
+}
+
+// ============================================================
+// Combat log HUD
+// ============================================================
+const logLines = [];
+function combatLog(msg) {
+  logLines.push(msg);
+  if (logLines.length > 5) logLines.shift();
+  document.getElementById('combatlog').textContent = logLines.join('\n');
+}
+
+// ============================================================
+// Lobby chat — shared by the host's panelLobby and a client's
+// panelWaitingClient (whichever element exists gets the same lines).
+// ============================================================
+const lobbyChatLines = [];
+function escapeHtml(s) { return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function appendChatLine(name, text) {
+  lobbyChatLines.push(`<b>${escapeHtml(name)}:</b> ${escapeHtml(text)}`);
+  if (lobbyChatLines.length > 50) lobbyChatLines.shift();
+  const html = lobbyChatLines.map(l => `<div>${l}</div>`).join('');
+  for (const id of ['lobbyChatLog', 'waitingChatLog']) {
+    const el = document.getElementById(id);
+    if (el) { el.innerHTML = html; el.scrollTop = el.scrollHeight; }
+  }
+}
+function sendLobbyChat(text) {
+  text = (text || '').trim();
+  if (!text) return;
+  if (isHost) {
+    appendChatLine(myName, text);
+    broadcast({ t: 'chat', name: myName, text });
+  } else if (connections[0] && connections[0].open) {
+    connections[0].send(JSON.stringify({ t: 'chat', name: myName, text }));
+  }
+}
+
+// ============================================================
+// Networking (PeerJS). Host = authority (ADR-0001 listen-server spirit).
+// ============================================================
+let peer = null, isHost = false, connections = []; // host: all client conns; client: [hostConn]
+let myPeerId = null;
+const peerMeta = {}; // peerId -> {name}
+const playerData = {}; // host-authoritative: peerId -> {element, hp, respawnTimer, gold, spells, pendingPassive, passives, maxHpBonus, dmgMult, cooldownMult}
+let partyLevel = 1, partyXp = 0, partyMaxHpBonus = 0;
+let currentLevel = 0, levelActive = false, shopPhase = false;
+
+function nameFor(pid) { return pid === myPeerId ? myName : ((peerMeta[pid] || {}).name || '???'); }
+function maxHpFor(pid) { const pd = playerData[pid]; return PLAYER_MAX_HP + partyMaxHpBonus + (pd ? pd.maxHpBonus : 0); }
+
+function randomCode() {
+  const abc = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  let s = '';
+  for (let i = 0; i < 4; i++) s += abc[Math.floor(Math.random() * abc.length)];
+  return s;
+}
+function peerIdFor(code) { return 'covenant-mages-mvp-' + code; }
+
+function broadcast(msg, exceptConn) {
+  const s = JSON.stringify(msg);
+  for (const c of connections) if (c.open && c !== exceptConn) c.send(s);
+}
+
+function startHost() {
+  const code = randomCode();
+  isHost = true;
+  peer = new Peer(peerIdFor(code));
+  peer.on('open', id => {
+    myPeerId = id;
+    document.getElementById('panelMain').style.display = 'none';
+    document.getElementById('panelLobby').style.display = 'block';
+    document.getElementById('roomCode').textContent = code;
+    refreshLobby();
+  });
+  peer.on('connection', conn => {
+    conn.on('open', () => {
+      connections.push(conn);
+      peerMeta[conn.peer] = { name: '???' };
+      // NOT sending levelStart here yet — must wait for their 'join' message
+      // (with element) to arrive first, or they'd enter the game before
+      // playerData/spells exist for them. See onHostData 'join'.
+    });
+    conn.on('data', raw => onHostData(conn, JSON.parse(raw)));
+    conn.on('close', () => {
+      connections = connections.filter(c => c !== conn);
+      if (remotePlayers[conn.peer]) { scene.remove(remotePlayers[conn.peer].mesh); delete remotePlayers[conn.peer]; }
+      combatLog(`${(peerMeta[conn.peer] || {}).name || '???'} отключился`);
+      delete peerMeta[conn.peer];
+      delete playerData[conn.peer];
+      for (const e of enemies) if (e.targetPeerId === conn.peer) { e.aiState = 'patrol'; e.targetPeerId = null; }
+      refreshLobby();
+    });
+  });
+  peer.on('error', e => showMenuError('Ошибка сети: ' + e.type));
+}
+
+function joinGame(code) {
+  isHost = false;
+  peer = new Peer();
+  peer.on('open', () => {
+    const conn = peer.connect(peerIdFor(code.toUpperCase()), { reliable: true });
+    let opened = false;
+    conn.on('open', () => {
+      opened = true;
+      myPeerId = peer.id;
+      connections = [conn];
+      showElementPicker(() => {
+        conn.send(JSON.stringify({ t: 'join', name: myName, element: myElement }));
+        document.getElementById('panelMain').style.display = 'none';
+        document.getElementById('panelWaitingClient').style.display = 'block';
+      });
+    });
+    conn.on('data', raw => onClientData(JSON.parse(raw)));
+    conn.on('close', () => {
+      alert('Хост отключился — сессия завершена.'); // ADR-0001 host-disconnect policy
+      location.reload();
+    });
+    setTimeout(() => { if (!opened) showMenuError('Не удалось подключиться. Проверь код.'); }, 8000);
+  });
+  peer.on('error', e => showMenuError('Ошибка сети: ' + e.type));
+}
+
+function refreshLobby() {
+  const names = [myName + ' (хост)', ...connections.map(c => (peerMeta[c.peer] || {}).name || '...')];
+  const el = document.getElementById('lobbyPlayers');
+  if (el) el.textContent = 'В комнате: ' + names.join(', ');
+  broadcast({ t: 'lobbyRoster', names });
+}
+
+function initPlayerData(pid, element) {
+  playerData[pid] = {
+    element, hp: PLAYER_MAX_HP, respawnTimer: 0, gold: 0,
+    spells: [cloneSpell(SCHOOL_SPELLS[element][0])],
+    pendingPassive: null, passives: [], maxHpBonus: 0, dmgMult: 1, cooldownMult: 1,
+  };
+}
+
+// --- host receives from a client
+function onHostData(conn, msg) {
+  if (msg.t === 'join') {
+    peerMeta[conn.peer].name = msg.name;
+    initPlayerData(conn.peer, msg.element);
+    if (!remotePlayers[conn.peer]) remotePlayers[conn.peer] = makeRemotePlayer(msg.name, msg.element);
+    combatLog(`${msg.name} присоединился (${elementEmoji(msg.element)})`);
+    refreshLobby();
+    // Only now — after playerData exists for them — is it safe to tell a
+    // late joiner the game is already running (see the comment in startHost).
+    if (currentLevel >= 1) conn.send(JSON.stringify({ t: 'levelStart', level: currentLevel }));
+  } else if (msg.t === 'chat') {
+    appendChatLine(peerMeta[conn.peer].name, msg.text);
+    broadcast({ t: 'chat', name: peerMeta[conn.peer].name, text: msg.text }, conn);
+  } else if (msg.t === 'pos') {
+    if (remotePlayers[conn.peer]) remotePlayers[conn.peer].target = { p: msg.p, ry: msg.ry };
+  } else if (msg.t === 'cast') {
+    hostResolveCast(msg, conn.peer);
+    if (msg.from) broadcast({ t: 'fx', kind: 'bolt', from: msg.from, to: msg.to, color: msg.color }, conn);
+  } else if (msg.t === 'fx') {
+    handleFx(msg);              // show on host
+    broadcast(msg, conn);       // relay to other clients
+  } else if (msg.t === 'buySpell') {
+    hostBuySpell(conn.peer);
+  } else if (msg.t === 'levelUpSpell') {
+    hostLevelUpSpell(conn.peer, msg.idx);
+  } else if (msg.t === 'choosePassive') {
+    hostChoosePassive(conn.peer, msg.passiveId);
+  } else if (msg.t === 'readyNext') {
+    if (shopPhase) closeShopAndAdvance();
+  }
+}
+
+// --- client receives from host
+function onClientData(msg) {
+  if (msg.t === 'state') {
+    for (const e of msg.enemies) {
+      const local = enemies[e.id];
+      if (!local) continue;
+      local.hp = e.hp; local.wet = e.wet; local.alive = e.alive; local.maxHp = e.maxHp || local.maxHp;
+      local.mesh.position.set(e.p[0], 0, e.p[2]);
+      if (e.attacking) local.attackAnimT = 0;
+      updateEnemyVisual(local);
+    }
+    partyLevel = msg.party.level; partyXp = msg.party.xp;
+    const mine = msg.players[myPeerId];
+    if (mine) {
+      myHp = mine.hp; myDowned = !!mine.downed; myGold = mine.gold; mySpells = mine.spells;
+      myMaxHp = mine.maxHp; myPendingPassive = mine.pendingPassive;
+      if (activeSlot >= mySpells.length) activeSlot = 0;
+      updateSlotUI();
+    }
+    for (const [pid, pdata] of Object.entries(msg.players)) {
+      if (pid === myPeerId) continue;
+      if (!remotePlayers[pid]) remotePlayers[pid] = makeRemotePlayer(pdata.name, pdata.element);
+      remotePlayers[pid].target = { p: pdata.p, ry: pdata.ry };
+      remotePlayers[pid].downed = !!pdata.downed;
+    }
+    for (const pid of Object.keys(remotePlayers)) {
+      if (!msg.players[pid]) { scene.remove(remotePlayers[pid].mesh); delete remotePlayers[pid]; }
+    }
+  } else if (msg.t === 'fx') {
+    handleFx(msg);
+  } else if (msg.t === 'log') {
+    combatLog(msg.text);
+  } else if (msg.t === 'levelStart') {
+    if (!inGame) {
+      document.getElementById('panelWaitingClient').style.display = 'none';
+      enterGame();
+    }
+    startLevel(msg.level);
+  } else if (msg.t === 'shopOpen') {
+    shopPhase = true;
+    openShopUI();
+  } else if (msg.t === 'shopClose') {
+    shopPhase = false;
+    closeShopUI();
+  } else if (msg.t === 'chat') {
+    appendChatLine(msg.name, msg.text);
+  } else if (msg.t === 'lobbyRoster') {
+    const el = document.getElementById('waitingPlayers');
+    if (el) el.textContent = 'В комнате: ' + msg.names.join(', ');
+  }
+}
+
+function hostLog(text) {
+  combatLog(text);
+  broadcast({ t: 'log', text });
+}
+
+// ============================================================
+// Host-authoritative combat resolution
+// ============================================================
+function hostApplyDamage(e, amount, casterPid) {
+  e.hp = Math.min(e.maxHp, Math.max(0, e.hp - amount)); // hp_clamp
+  if (e.hp <= 0 && e.alive) hostOnEnemyKilled(e, casterPid); // must flip e.alive BEFORE the visual refresh below
+  updateEnemyVisual(e);
+}
+
+function hostOnEnemyKilled(e, casterPid) {
+  e.alive = false;
+  const gold = 5 + Math.floor(Math.random() * 11);
+  if (playerData[casterPid]) playerData[casterPid].gold += gold;
+  hostLog(`☠ Враг уничтожен (${nameFor(casterPid)}) +${gold}💰`);
+  partyXp += XP_PER_KILL;
+  while (partyXp >= xpNeeded(partyLevel)) {
+    partyXp -= xpNeeded(partyLevel);
+    partyLevel++;
+    onPartyLevelUp();
+    hostLog(`✨ Отряд повысил уровень! Уровень ${partyLevel}`);
+  }
+}
+
+function onPartyLevelUp() {
+  partyMaxHpBonus += 20;
+  for (const pid of Object.keys(playerData)) {
+    const pd = playerData[pid];
+    pd.hp = Math.min(maxHpFor(pid), pd.hp + 20);
+    const pool = SCHOOL_SPELLS[pd.element];
+    if (pd.spells.length < pool.length) {
+      const next = cloneSpell(pool[pd.spells.length]);
+      pd.spells.push(next);
+      hostLog(`${nameFor(pid)} открыл новое заклинание: ${next.name}`);
+    }
+  }
+  if (partyLevel % 2 === 1 && partyLevel > 1) {
+    for (const pid of Object.keys(playerData)) {
+      const pd = playerData[pid];
+      const options = shuffle(PASSIVE_POOL.filter(p => !pd.passives.includes(p.id)));
+      if (options.length >= 2) pd.pendingPassive = [options[0].id, options[1].id];
+    }
+  }
+}
+
+function hostResolveCast(msg, casterPid) {
+  const pd = playerData[casterPid];
+  if (!pd) return;
+  const spell = pd.spells[msg.spellIndex];
+  if (!spell) return;
+  if (msg.enemyId === null || msg.enemyId === undefined) return;
+  const e = enemies[msg.enemyId];
+  if (!e || !e.alive) return;
+
+  const levelMult = 1 + 0.12 * (spell.level - 1);
+  let dmg = spell.dmg * levelMult * pd.dmgMult;
+
+  if (spell.school === 'Water') {
+    e.wet = WET_DURATION_S;
+    hostLog(`${nameFor(casterPid)}: 💧 промок`);
+  } else if (spell.school === 'Lightning' && e.wet > 0) {
+    // ⭐ SYNERGY: Chain Shock — synergy_damage_multiplier applied here
+    dmg *= SYNERGY_MULT;
+    e.wet = 0;
+    const chained = [];
+    for (const other of enemies) {
+      if (other !== e && other.alive && other.mesh.position.distanceTo(e.mesh.position) < CHAIN_RADIUS) {
+        hostApplyDamage(other, spell.dmg * levelMult * 1.5, casterPid);
+        chained.push(other.id);
+      }
+    }
+    hostLog(`⚡💥 ${nameFor(casterPid)}: CHAIN SHOCK! x${SYNERGY_MULT} + цепь на ${chained.length}`);
+    broadcast({ t: 'fx', kind: 'chain', center: e.id, targets: chained });
+    spawnChainFx(e.id, chained);
+  }
+  hostApplyDamage(e, dmg, casterPid);
+
+  // Use-based leveling — only counts landed hits (per user request).
+  spell.useHits = (spell.useHits || 0) + 1;
+  const need = 5 * spell.level;
+  if (spell.useHits >= need) {
+    spell.useHits -= need;
+    spell.level++;
+    hostLog(`${nameFor(casterPid)}: ${spell.name} → ур. ${spell.level}`);
+  }
+}
+
+function hostBuySpell(pid) {
+  const pd = playerData[pid];
+  if (!pd) return;
+  const pool = SCHOOL_SPELLS[pd.element];
+  if (pd.spells.length >= pool.length) return;
+  const cost = 100 + 40 * pd.spells.length;
+  if (pd.gold < cost) return;
+  pd.gold -= cost;
+  pd.spells.push(cloneSpell(pool[pd.spells.length]));
+  hostLog(`${nameFor(pid)} купил заклинание в магазине`);
+}
+function hostLevelUpSpell(pid, idx) {
+  const pd = playerData[pid];
+  if (!pd || !pd.spells[idx]) return;
+  const cost = 30 * pd.spells[idx].level;
+  if (pd.gold < cost) return;
+  pd.gold -= cost;
+  pd.spells[idx].level++;
+  hostLog(`${nameFor(pid)} прокачал ${pd.spells[idx].name} у наставника → ур. ${pd.spells[idx].level}`);
+}
+function hostChoosePassive(pid, passiveId) {
+  const pd = playerData[pid];
+  if (!pd || !pd.pendingPassive || !pd.pendingPassive.includes(passiveId)) return;
+  const def = PASSIVE_POOL.find(p => p.id === passiveId);
+  if (!def) return;
+  def.apply(pd);
+  pd.passives.push(passiveId);
+  pd.pendingPassive = null;
+  hostLog(`${nameFor(pid)} выбрал пассивку: ${def.name}`);
+}
+
+function hostDamagePlayer(pid, amount) {
+  const pd = playerData[pid];
+  if (!pd || pd.respawnTimer > 0) return;
+  pd.hp = Math.max(0, pd.hp - amount);
+  if (pd.hp <= 0) {
+    pd.respawnTimer = PLAYER_RESPAWN_S;
+    hostLog(`${nameFor(pid)} повержен!`);
+  }
+}
+
+function getPlayerPositions() {
+  const list = [{ pid: myPeerId, pos: playerPos, downed: playerData[myPeerId] && playerData[myPeerId].respawnTimer > 0 }];
+  for (const c of connections) {
+    const rp = remotePlayers[c.peer];
+    const pd = playerData[c.peer];
+    if (rp && pd) list.push({ pid: c.peer, pos: new THREE.Vector3(rp.target.p[0], 0, rp.target.p[2]), downed: pd.respawnTimer > 0 });
+  }
+  return list;
+}
+
+// ============================================================
+// Level / shop flow
+// ============================================================
+function startLevel(level) {
+  shopPhase = false;
+  closeShopUI();
+  currentLevel = level;
+  levelActive = true;
+  buildLevelEnemies(level);
+  respawnLocalPlayer();
+}
+function startShopPhase() {
+  shopPhase = true;
+  broadcast({ t: 'shopOpen' });
+  openShopUI();
+}
+function closeShopAndAdvance() {
+  broadcast({ t: 'shopClose' });
+  const next = currentLevel + 1;
+  broadcast({ t: 'levelStart', level: next });
+  startLevel(next);
+}
+
+// ============================================================
+// Host: enemy wander/aggro AI + wet decay + player respawn + state broadcast
+// ============================================================
+let stateAccum = 0;
+function hostSimulate(dt) {
+  for (const pid of Object.keys(playerData)) {
+    const pd = playerData[pid];
+    if (pd.respawnTimer > 0) {
+      pd.respawnTimer -= dt;
+      if (pd.respawnTimer <= 0) { pd.respawnTimer = 0; pd.hp = maxHpFor(pid); hostLog(`${nameFor(pid)} возродился`); }
+    }
+  }
+
+  if (levelActive) {
+    const players = getPlayerPositions();
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      if (e.wet > 0) { e.wet -= dt; if (e.wet <= 0) { e.wet = 0; updateEnemyVisual(e); } }
+      if (e.attackCooldown > 0) e.attackCooldown -= dt;
+
+      if (e.aiState === 'patrol') {
+        const target = players.find(p => !p.downed && e.mesh.position.distanceTo(p.pos) < AGGRO_RADIUS);
+        if (target) { e.aiState = 'chase'; e.targetPeerId = target.pid; }
+      }
+
+      if (e.aiState === 'chase') {
+        const target = players.find(p => p.pid === e.targetPeerId);
+        if (!target || target.downed || target.pos.distanceTo(e.home) > PATROL_LEASH_RADIUS) {
+          e.aiState = 'patrol';
+          e.targetPeerId = null;
+          e.wanderTarget.copy(e.home); // head home, then resume normal wander
+        } else {
+          const toTarget = target.pos.clone().sub(e.mesh.position).setY(0);
+          const dist = toTarget.length();
+          if (dist > STOP_RANGE) {
+            toTarget.normalize();
+            e.mesh.position.addScaledVector(toTarget, ENEMY_CHASE_SPEED * dt);
+          }
+          if (dist <= ATTACK_RANGE && e.attackCooldown <= 0) {
+            e.attackCooldown = MELEE_COOLDOWN;
+            e.justAttacked = true;
+            e.attackAnimT = 0; // host's own immediate visual; clients get it via 'attacking' flag
+            hostDamagePlayer(target.pid, MELEE_DAMAGE);
+          }
+        }
+      }
+
+      if (e.aiState === 'patrol') {
+        if (e.mesh.position.distanceTo(e.wanderTarget) < 0.3) {
+          e.wanderTarget.set(e.home.x + (Math.random() - 0.5) * 6, 0, e.home.z + (Math.random() - 0.5) * 6);
+        }
+        const dir = e.wanderTarget.clone().sub(e.mesh.position).setY(0).normalize();
+        e.mesh.position.addScaledVector(dir, ENEMY_WANDER_SPEED * dt);
+      }
+
+      clampEnemyToArena(e); // keep enemies inside the walls and off the pillars — chase/wander above has no collision of its own
+    }
+
+    if (enemies.length > 0 && enemies.every(e => !e.alive)) {
+      levelActive = false;
+      startShopPhase();
+    }
+  }
+
+  stateAccum += dt;
+  if (stateAccum > 1 / 12) {
+    stateAccum = 0;
+    const outPlayers = {};
+    const buildEntry = (pid, name, p, ry) => {
+      const pd = playerData[pid] || {};
+      return { name, element: pd.element, p, ry, hp: pd.hp, maxHp: maxHpFor(pid), downed: (pd.respawnTimer || 0) > 0,
+        gold: pd.gold, spells: pd.spells, pendingPassive: pd.pendingPassive };
+    };
+    outPlayers[myPeerId] = buildEntry(myPeerId, myName, [playerPos.x, playerPos.y, playerPos.z], yaw);
+    for (const c of connections) {
+      const meta = peerMeta[c.peer];
+      const rp = remotePlayers[c.peer];
+      if (meta && rp) outPlayers[c.peer] = buildEntry(c.peer, meta.name, rp.target.p, rp.target.ry);
+    }
+    broadcast({
+      t: 'state',
+      party: { level: partyLevel, xp: partyXp },
+      players: outPlayers,
+      enemies: enemies.map(e => {
+        const out = { id: e.id, hp: e.hp, maxHp: e.maxHp, wet: e.wet, alive: e.alive, p: [e.mesh.position.x, 0, e.mesh.position.z], attacking: e.justAttacked };
+        e.justAttacked = false;
+        return out;
+      }),
+    });
+  }
+}
+
+// Client: send own position at ~15Hz
+let posAccum = 0;
+function clientNetUpdate(dt) {
+  posAccum += dt;
+  if (posAccum > 1 / 15 && connections[0] && connections[0].open) {
+    posAccum = 0;
+    connections[0].send(JSON.stringify({ t: 'pos', p: [playerPos.x, playerPos.y, playerPos.z], ry: yaw }));
+  }
+}
+
+// ============================================================
+// Input (mirrors input-system.md verbs: Move/Look/CastSpell/ScrollSpell)
+// ============================================================
+let inGame = false;
+addEventListener('keydown', e => {
+  const tag = document.activeElement && document.activeElement.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return; // typing in chat/name/code fields — not a game key
+  keys[e.code] = true;
+  if (e.code === 'KeyL') { lightsDebugFull = !lightsDebugFull; applyLightingMode(); }
+  if (!inGame) return;
+  if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
+  if (e.code === 'Space') tryCast();
+  if (e.code === 'KeyQ') switchSlot(activeSlot + mySpells.length - 1); // backward cycle
+  if (e.code === 'Digit1') switchSlot(0);
+  if (e.code === 'Digit2') switchSlot(1);
+  if (e.code === 'Digit3') switchSlot(2);
+});
+addEventListener('keyup', e => keys[e.code] = false);
+addEventListener('wheel', e => { if (inGame) switchSlot(activeSlot + (e.deltaY > 0 ? 1 : mySpells.length - 1)); });
+function switchSlot(next) {
+  if (mySpells.length === 0) return;
+  activeSlot = ((next % mySpells.length) + mySpells.length) % mySpells.length;
+  updateSlotUI();
+}
+function updateSlotUI() {
+  for (let i = 0; i < 3; i++) {
+    const el = document.getElementById('slot' + i);
+    if (i < mySpells.length) {
+      el.style.display = 'flex';
+      el.textContent = elementEmoji(mySpells[i].school);
+      el.title = `${mySpells[i].name} ур.${mySpells[i].level}`;
+      el.classList.toggle('active', i === activeSlot);
+    } else {
+      el.style.display = 'none';
+    }
+  }
+  if (mySpells[activeSlot]) {
+    orbMat.color.setHex(mySpells[activeSlot].color);
+    orbLight.color.setHex(mySpells[activeSlot].color);
+  }
+}
+
+// Free-look works with OR without pointer lock (touchpad fallback — lock can
+// be unavailable/awkward there; movementX/Y is still reported without it).
+document.addEventListener('mousemove', e => {
+  if (!inGame) return;
+  yaw -= e.movementX * sensitivity;
+  pitch -= e.movementY * sensitivity;
+  pitch = Math.max(-PITCH_CLAMP, Math.min(PITCH_CLAMP, pitch)); // pitch_accumulation clamp
+});
+document.addEventListener('mousedown', e => {
+  if (!inGame || e.target !== renderer.domElement) return; // ignore clicks on shop/UI overlays
+  if (document.pointerLockElement !== renderer.domElement) { renderer.domElement.requestPointerLock(); return; }
+  if (e.button === 0) tryCast();
+});
+
+const raycaster = new THREE.Raycaster();
+const projectiles = []; // {mesh, dir, speed, color, isLocal, life, spellIndex}
+function spawnProjectile(fromArr, dirArr, color, speed, isLocal, spellIndex) {
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 8), new THREE.MeshBasicMaterial({ color }));
+  mesh.position.fromArray(fromArr);
+  const glow = new THREE.PointLight(color, 1.2, 4);
+  mesh.add(glow);
+  scene.add(mesh);
+  projectiles.push({ mesh, dir: new THREE.Vector3().fromArray(dirArr), speed, isLocal, life: 3, spellIndex });
+}
+function resolveHit(spellIndex, enemyId) {
+  const castMsg = { t: 'cast', spellIndex, enemyId, from: null, to: null };
+  if (isHost) hostResolveCast(castMsg, myPeerId);
+  else if (connections[0] && connections[0].open) connections[0].send(JSON.stringify(castMsg));
+}
+function updateProjectiles(dt) {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i];
+    p.mesh.position.addScaledVector(p.dir, p.speed * dt);
+    p.life -= dt;
+    let dead = p.life <= 0 ||
+      Math.abs(p.mesh.position.x) > ARENA_HALF + 1 || Math.abs(p.mesh.position.z) > ARENA_HALF + 1;
+    if (p.isLocal && !dead) {
+      for (const e of enemies) {
+        if (!e.alive) continue;
+        const center = e.mesh.position.clone().add(new THREE.Vector3(0, 1.1, 0));
+        if (p.mesh.position.distanceTo(center) < 0.8) {
+          resolveHit(p.spellIndex, e.id);
+          dead = true;
+          break;
+        }
+      }
+    }
+    if (dead) { scene.remove(p.mesh); projectiles.splice(i, 1); }
+  }
+}
+function handleFx(msg) {
+  if (msg.kind === 'tracer') spawnTracer(msg.from, msg.to, msg.color);
+  else if (msg.kind === 'bolt') spawnLightningBolt(msg.from, msg.to, msg.color);
+  else if (msg.kind === 'chain') spawnChainFx(msg.center, msg.targets);
+  else if (msg.kind === 'proj') spawnProjectile(msg.from, msg.dir, msg.color, msg.speed, false, -1);
+}
+function tryCast() {
+  if (myDowned || mySpells.length === 0) return;
+  if (cooldowns[activeSlot] > 0) return;
+  const spell = mySpells[activeSlot];
+  cooldowns[activeSlot] = spell.cooldown; // cooldownMult from passives is applied client-side for feel only
+  fovKickT = 0; // fov_kick_response trigger (re-trigger resets, no stacking)
+  castRecoilT = 0;
+
+  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+  const handWorld = camera.localToWorld(new THREE.Vector3(0.32, -0.25, -0.6));
+
+  if (spell.speed > 0) {
+    // Fire/Water: flying projectile — shooter owns hit detection on impact
+    const dir = raycaster.ray.direction.clone().normalize();
+    spawnProjectile(handWorld.toArray(), dir.toArray(), spell.color, spell.speed, true, activeSlot);
+    const fxMsg = { t: 'fx', kind: 'proj', from: handWorld.toArray(), dir: dir.toArray(), color: spell.color, speed: spell.speed };
+    if (isHost) broadcast(fxMsg);
+    else if (connections[0] && connections[0].open) connections[0].send(JSON.stringify(fxMsg));
+    return;
+  }
+
+  // Lightning: instant hitscan
+  const targets = enemies.filter(e => e.alive).flatMap(e => e.parts);
+  const hits = raycaster.intersectObjects(targets, false);
+  let to, enemyId = null;
+  if (hits.length > 0) {
+    to = hits[0].point;
+    enemyId = hits[0].object.userData.enemyId;
+  } else {
+    to = camera.position.clone().addScaledVector(raycaster.ray.direction, 40);
+  }
+  spawnLightningBolt(handWorld.toArray(), to.toArray(), spell.color);
+
+  const castMsg = { t: 'cast', spellIndex: activeSlot, enemyId, from: handWorld.toArray(), to: to.toArray(), color: spell.color };
+  if (isHost) {
+    hostResolveCast(castMsg, myPeerId);
+    broadcast({ t: 'fx', kind: 'bolt', from: castMsg.from, to: castMsg.to, color: spell.color });
+  } else if (connections[0] && connections[0].open) {
+    connections[0].send(JSON.stringify(castMsg));
+  }
+}
+
+// ============================================================
+// Main loop
+// ============================================================
+const clock = new THREE.Clock();
+function fovKickOffset(t) { // two-phase linear envelope from camera-system.md
+  if (t < KICK_ATTACK) return KICK_PEAK * (t / KICK_ATTACK);
+  if (t < KICK_ATTACK + KICK_DECAY) return KICK_PEAK * (1 - (t - KICK_ATTACK) / KICK_DECAY);
+  return 0;
+}
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  if (inGame) {
+    if (isHost) {
+      const pd = playerData[myPeerId];
+      if (pd) { myHp = pd.hp; myMaxHp = maxHpFor(myPeerId); myDowned = pd.respawnTimer > 0; myGold = pd.gold; mySpells = pd.spells; myPendingPassive = pd.pendingPassive; }
+    }
+    if (activeSlot >= mySpells.length) activeSlot = 0;
+    updateSlotUI();
+
+    if (myDowned && !wasDowned) {
+      document.getElementById('downedOverlay').style.display = 'flex';
+    } else if (!myDowned && wasDowned) {
+      document.getElementById('downedOverlay').style.display = 'none';
+      respawnLocalPlayer();
+    }
+    wasDowned = myDowned;
+    document.getElementById('hpBarFill').style.width = Math.max(0, (myHp / myMaxHp) * 100) + '%';
+    document.getElementById('goldLabel').textContent = '💰 ' + myGold;
+    document.getElementById('xpBarFill').style.width = Math.min(100, (partyXp / xpNeeded(partyLevel)) * 100) + '%';
+    document.getElementById('hpLabelText').textContent = `HP · Ур.${partyLevel}`;
+    if (myDowned) {
+      const remain = isHost ? Math.max(0, Math.ceil((playerData[myPeerId] || {}).respawnTimer || 0)) : '…';
+      document.getElementById('respawnT').textContent = remain;
+    }
+    if (shopPhase) renderShopUI();
+
+    // Movement relative to yaw (locked while downed)
+    const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+    const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
+    const move = new THREE.Vector3();
+    if (!myDowned) {
+      if (keys['KeyW']) move.add(fwd);
+      if (keys['KeyS']) move.sub(fwd);
+      if (keys['KeyD']) move.add(right);
+      if (keys['KeyA']) move.sub(right);
+    }
+    const isMoving = move.lengthSq() > 0;
+    if (isMoving) playerPos.addScaledVector(move.normalize(), MOVE_SPEED * dt);
+    playerPos.x = Math.max(-ARENA_HALF, Math.min(ARENA_HALF, playerPos.x));
+    playerPos.z = Math.max(-ARENA_HALF, Math.min(ARENA_HALF, playerPos.z));
+
+    // Arrow-key look (touchpad fallback) — scales with the same shared `sensitivity`
+    const keyLookSpeed = LOOK_KEY_SPEED * (sensitivity / BASE_SENSITIVITY);
+    if (keys['ArrowLeft'])  yaw += keyLookSpeed * dt;
+    if (keys['ArrowRight']) yaw -= keyLookSpeed * dt;
+    if (keys['ArrowUp'])    pitch += keyLookSpeed * dt;
+    if (keys['ArrowDown'])  pitch -= keyLookSpeed * dt;
+    pitch = Math.max(-PITCH_CLAMP, Math.min(PITCH_CLAMP, pitch));
+
+    // First-person arm animation: walk bob + cast recoil on the right arm
+    if (isMoving) walkBobT += dt * 9;
+    const bobY = isMoving ? Math.sin(walkBobT) * 0.02 : 0;
+    castRecoilT += dt;
+    let recoilZ = 0;
+    if (castRecoilT < 0.08) recoilZ = 0.18 * (castRecoilT / 0.08);
+    else if (castRecoilT < 0.3) recoilZ = 0.18 * (1 - (castRecoilT - 0.08) / 0.22);
+    fpArmL.position.y = FP_ARM_BASE_Y + bobY;
+    fpArmR.position.y = FP_ARM_BASE_Y - bobY;
+    fpArmR.position.z = FP_ARM_BASE_Z + recoilZ;
+
+    camera.position.set(playerPos.x, EYE_HEIGHT, playerPos.z);
+    camera.rotation.set(0, 0, 0);
+    camera.rotateY(yaw);
+    camera.rotateX(pitch);
+
+    fovKickT += dt;
+    camera.fov = BASE_FOV + fovKickOffset(fovKickT);
+    camera.updateProjectionMatrix();
+
+    for (let i = 0; i < 3; i++) if (cooldowns[i] > 0) cooldowns[i] -= dt;
+
+    if (isHost) hostSimulate(dt); else clientNetUpdate(dt);
+    updateProjectiles(dt);
+
+    // Enemy animation: attack lunge takes priority over walk cycle
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      if (e.attackAnimT < ATTACK_ANIM_DURATION) {
+        e.attackAnimT += dt;
+        const t = Math.min(e.attackAnimT / ATTACK_ANIM_DURATION, 1);
+        const swing = Math.sin(t * Math.PI) * 1.3;
+        e.limbs.armR.rotation.x = -swing;
+        e.limbs.armL.rotation.x = swing * 0.3;
+        e.limbs.legL.rotation.x = e.limbs.legR.rotation.x = 0;
+      } else {
+        const speed = e.mesh.position.distanceTo(e.lastPos) / Math.max(dt, 0.001);
+        if (speed > 0.1) {
+          e.walkPhase += dt * 6;
+          const s = Math.sin(e.walkPhase) * 0.5;
+          e.limbs.legL.rotation.x = s;  e.limbs.legR.rotation.x = -s;
+          e.limbs.armL.rotation.x = -s * 0.7; e.limbs.armR.rotation.x = s * 0.7;
+        } else {
+          e.limbs.legL.rotation.x = e.limbs.legR.rotation.x = 0;
+          e.limbs.armL.rotation.x = e.limbs.armR.rotation.x = 0;
+        }
+      }
+      e.lastPos.copy(e.mesh.position);
+    }
+
+    // Remote player interpolation
+    for (const rp of Object.values(remotePlayers)) {
+      const t = rp.target;
+      rp.mesh.position.lerp(new THREE.Vector3(t.p[0], 0, t.p[2]), Math.min(1, dt * 12));
+      rp.mesh.rotation.y = t.ry;
+      rp.mesh.scale.y = rp.downed ? 0.3 : 1; // crude "downed" pose
+    }
+
+    const conn = isHost ? `хост · игроков: ${1 + connections.length}` : 'клиент';
+    const spellLabel = mySpells[activeSlot] ? `${elementEmoji(mySpells[activeSlot].school)} ${mySpells[activeSlot].name} ур.${mySpells[activeSlot].level}` : '—';
+    document.getElementById('status').textContent =
+      `${myName} · ${conn}\n${spellLabel}` +
+      (cooldowns[activeSlot] > 0 ? ' (кд...)' : ' — готово') +
+      `\n💡 Вода → Молния = CHAIN SHOCK x${SYNERGY_MULT}\nУровень подземелья: ${currentLevel}`;
+  }
+
+  updateTorches(clock.elapsedTime);
+  updatePentagram(clock.elapsedTime);
+
+  // FX decay
+  for (let i = fx.length - 1; i >= 0; i--) {
+    fx[i].life -= dt;
+    if (fx[i].obj.material) fx[i].obj.material.opacity = Math.max(0, fx[i].life * 4);
+    if (fx[i].obj.intensity !== undefined) fx[i].obj.intensity = Math.max(0, fx[i].life * 12);
+    if (fx[i].life <= 0) { scene.remove(fx[i].obj); fx.splice(i, 1); }
+  }
+
+  renderer.render(scene, camera);
+}
+animate();
+
+// ============================================================
+// Shop / Mentor UI
+// ============================================================
+function requestBuySpell() {
+  if (isHost) hostBuySpell(myPeerId);
+  else if (connections[0]) connections[0].send(JSON.stringify({ t: 'buySpell' }));
+}
+function requestLevelUpSpell(idx) {
+  if (isHost) hostLevelUpSpell(myPeerId, idx);
+  else if (connections[0]) connections[0].send(JSON.stringify({ t: 'levelUpSpell', idx }));
+}
+function requestChoosePassive(id) {
+  if (isHost) hostChoosePassive(myPeerId, id);
+  else if (connections[0]) connections[0].send(JSON.stringify({ t: 'choosePassive', passiveId: id }));
+}
+function requestReadyNext() {
+  if (isHost) closeShopAndAdvance();
+  else if (connections[0]) connections[0].send(JSON.stringify({ t: 'readyNext' }));
+}
+function openShopUI() {
+  document.getElementById('shopPanel').style.display = 'flex';
+  shopStructureSig = null; // force a structure rebuild on open
+  renderShopUI();
+}
+function closeShopUI() { document.getElementById('shopPanel').style.display = 'none'; }
+
+// Rebuilding the DOM every frame (60/sec) meant a real human click could land
+// between mousedown and click on a button that had already been torn down
+// and replaced — the click event then fires on nothing. Fix: only rebuild
+// the button elements when the shop's *structure* actually changes (spell
+// count, pending passive); every other frame just updates existing nodes'
+// text/disabled state in place, so the elements a user is clicking on stay
+// the same DOM nodes across frames.
+let shopStructureSig = null;
+function renderShopUI() {
+  const sig = mySpells.length + ':' + (myPendingPassive ? myPendingPassive.join(',') : '') + ':' + (myElement ? SCHOOL_SPELLS[myElement].length : 0);
+  if (sig !== shopStructureSig) {
+    shopStructureSig = sig;
+    buildShopStructure();
+  }
+  updateShopValues();
+}
+function buildShopStructure() {
+  const passiveWrap = document.getElementById('shopPassiveChoice');
+  const passiveButtons = document.getElementById('shopPassiveButtons');
+  passiveButtons.innerHTML = '';
+  if (myPendingPassive) {
+    passiveWrap.style.display = 'block';
+    for (const id of myPendingPassive) {
+      const def = PASSIVE_POOL.find(p => p.id === id);
+      const btn = document.createElement('button');
+      btn.textContent = `${def.name} — ${def.desc}`;
+      btn.onclick = () => requestChoosePassive(id);
+      passiveButtons.appendChild(btn);
+    }
+  } else {
+    passiveWrap.style.display = 'none';
+  }
+
+  const buySection = document.getElementById('shopBuySection');
+  buySection.innerHTML = '';
+  const pool = myElement ? SCHOOL_SPELLS[myElement] : [];
+  if (mySpells.length < pool.length) {
+    const row = document.createElement('div');
+    row.className = 'shopRow';
+    const label = document.createElement('span');
+    label.id = 'buyLabel';
+    row.appendChild(label);
+    const btn = document.createElement('button');
+    btn.id = 'buyBtn';
+    btn.textContent = 'Купить';
+    btn.onclick = requestBuySpell;
+    row.appendChild(btn);
+    buySection.appendChild(row);
+  } else {
+    buySection.textContent = 'Все заклинания твоей школы уже открыты.';
+  }
+
+  const mentorSection = document.getElementById('shopMentorSection');
+  mentorSection.innerHTML = '';
+  mySpells.forEach((s, idx) => {
+    const row = document.createElement('div');
+    row.className = 'shopRow';
+    const label = document.createElement('span');
+    label.id = 'mentorLabel' + idx;
+    row.appendChild(label);
+    const btn = document.createElement('button');
+    btn.id = 'mentorBtn' + idx;
+    btn.textContent = 'Прокачать';
+    btn.onclick = () => requestLevelUpSpell(idx);
+    row.appendChild(btn);
+    mentorSection.appendChild(row);
+  });
+}
+function updateShopValues() {
+  document.getElementById('shopLevelInfo').textContent = `Уровень подземелья ${currentLevel} пройден · Отряд: ур.${partyLevel}`;
+  document.getElementById('shopGold').textContent = `Твоё золото: 💰 ${myGold}`;
+
+  const pool = myElement ? SCHOOL_SPELLS[myElement] : [];
+  if (mySpells.length < pool.length) {
+    const next = pool[mySpells.length];
+    const cost = 100 + 40 * mySpells.length;
+    const label = document.getElementById('buyLabel');
+    const btn = document.getElementById('buyBtn');
+    if (label) label.textContent = `${elementEmoji(next.school)} ${next.name} (стоимость ${cost}💰)`;
+    if (btn) btn.disabled = myGold < cost;
+  }
+
+  mySpells.forEach((s, idx) => {
+    const cost = 30 * s.level;
+    const label = document.getElementById('mentorLabel' + idx);
+    const btn = document.getElementById('mentorBtn' + idx);
+    if (label) label.textContent = `${elementEmoji(s.school)} ${s.name} ур.${s.level} (${cost}💰)`;
+    if (btn) btn.disabled = myGold < cost;
+  });
+}
+
+// ============================================================
+// Menu / lobby / element picker wiring
+// ============================================================
+function showMenuError(text) { document.getElementById('menuErr').textContent = text; }
+function readName() {
+  const v = document.getElementById('nameInput').value.trim();
+  myName = v || ('Маг' + Math.floor(Math.random() * 99));
+}
+function showElementPicker(onChosen) {
+  document.getElementById('elementPanel').style.display = 'flex';
+  document.querySelectorAll('#elementPanel .elBtn').forEach(btn => {
+    btn.onclick = () => {
+      myElement = btn.dataset.el;
+      document.getElementById('elementPanel').style.display = 'none';
+      onChosen();
+    };
+  });
+}
+function enterGame() {
+  document.getElementById('menu').style.display = 'none';
+  document.getElementById('hud').style.display = 'block';
+  inGame = true;
+  applyLightingMode();
+  switchSlot(0);
+  combatLog('Кликни по экрану, чтобы захватить мышь');
+}
+document.getElementById('btnHost').onclick = () => { readName(); startHost(); };
+document.getElementById('btnShowJoin').onclick = () => { document.getElementById('joinRow').style.display = 'block'; };
+document.getElementById('btnJoin').onclick = () => {
+  readName();
+  const code = document.getElementById('codeInput').value.trim();
+  if (code.length !== 4) { showMenuError('Код — 4 символа'); return; }
+  showMenuError('');
+  joinGame(code);
+};
+document.getElementById('btnStart').onclick = () => {
+  if (!myElement) return;
+  initPlayerData(myPeerId, myElement);
+  broadcast({ t: 'levelStart', level: 1 }); // wake up anyone already waiting in the lobby
+  startLevel(1);
+  enterGame();
+};
+document.getElementById('btnShopContinue').onclick = requestReadyNext;
+// Host picks their element right in the lobby panel (before "Начать" unlocks).
+document.getElementById('btnHost').addEventListener('click', () => {
+  setTimeout(() => {
+    showElementPicker(() => {
+      document.getElementById('btnStart').disabled = false;
+      document.getElementById('btnStart').textContent = `Начать (${elementEmoji(myElement)})`;
+    });
+  }, 50);
+});
+function wireChatBox(inputId, buttonId) {
+  const send = () => {
+    const el = document.getElementById(inputId);
+    sendLobbyChat(el.value);
+    el.value = '';
+  };
+  document.getElementById(buttonId).onclick = send;
+  document.getElementById(inputId).addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+}
+wireChatBox('lobbyChatInput', 'lobbyChatSend');
+wireChatBox('waitingChatInput', 'waitingChatSend');
+</script>
+</body>
+</html>

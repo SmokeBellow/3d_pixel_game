@@ -199,6 +199,136 @@ either archived or replaced before design work continues:
 - **Not yet run**: `/design-review design/gdd/health-damage-system.md` —
   must run in a fresh session.
 
+## PIVOT: Documentation → Implementation (2026-08-26)
+
+- User explicitly paused the full `/map-systems` GDD-first pipeline (27 of 30
+  MVP systems still undesigned) to start building a playable MVP directly.
+- **Chosen approach**: build on top of the already-validated
+  `prototypes/co-op-spellcasting-concept/` code, evolving it toward the real
+  MVP in the live Unity project (`Assets/Scripts/`). GDDs/ADRs/quick-designs
+  are now written **reactively** — only when an actual architectural decision
+  needs one — not proactively ahead of code.
+- **First implementation slice (this session)**: production code for the two
+  systems that already have approved GDDs, in `Assets/Scripts/Core/`:
+  - `Input/PlayerInputRouter.cs` — implements `input-system.md`'s Gameplay/UI
+    action maps in code (no `.inputactions` asset — built via
+    `InputActionMap` API directly to avoid hand-authoring risky JSON).
+  - `Camera/PlayerCameraController.cs` — implements `camera-system.md`
+    (body=yaw/camera=pitch split, pitch clamp ±89°, yaw wrap, FOV kick
+    envelope, spectator instant-snap hook). No hard Cinemachine dependency in
+    code — shake is wired via a `CinemachineImpulseListener` component added
+    in the Inspector, not referenced in this script.
+  - `Combat/HealthDamage.cs` — implements `health-damage-system.md`
+    (server-authoritative `NetworkVariable<float> currentHP` /
+    `NetworkVariable<bool> IsDead` mirroring ADR-0001's exact pattern,
+    `ApplyDamage`/`ApplyHeal`/`Revive`, `synergy_damage_multiplier` +
+    `hp_clamp` formulas, `OnDeath` event). Requires Netcode for GameObjects
+    package (not yet installed in this project).
+- **Packages the user still needs to install** via Package Manager (Unity
+  Registry) before these compile cleanly:
+  1. Netcode for GameObjects (`com.unity.netcode.gameobjects`)
+  2. Cinemachine (`com.unity.cinemachine`, 3.x) — only needed for the shake
+     Impulse Source/Listener components, not referenced directly in code yet
+- **Not yet built**: Spell Casting, Elemental Status, Elemental Synergy,
+  Target Feedback, Networking Foundation wiring (NetworkManager setup, actual
+  multiplayer test) — these don't have GDDs yet; next slice should tackle
+  Networking Foundation (bottleneck-first order) enough to get a
+  NetworkManager + host/client test working, since HealthDamage.cs already
+  assumes NGO is present.
+- **None of this session's new scripts are committed yet** — awaiting user
+  test/compile pass in Unity before committing, per the established
+  Engine-path multi-turn loop (write → user runs → reports errors → iterate).
+
+## IN PROGRESS: MVP network test scene — mouse-look and cast not working
+
+- **Status**: Scene built via `Tools/Covenant of Mages/Build MVP Network Test
+  Scene`, NetworkManager configured, `Assets/Prefabs/Player.prefab` created
+  and manually assigned to NetworkManager's **Default Player Prefab** field
+  (note: the field is labeled "Default Player Prefab" in this Netcode
+  version, not "Player Prefab" as I initially told the user — corrected
+  in-session). Current scene added to Build Settings (required by Netcode's
+  Scene Management when prompted on first Play).
+- **Reported bugs (2026-08-30, end of session)**:
+  1. Mouse does not rotate the camera.
+  2. Left-click does nothing (test-cast raycast never seems to fire/hit).
+- **Fix already applied this session**: `PlayerBootstrap.cs` was missing
+  cursor lock entirely — `input-system.md`'s Edge Cases explicitly require
+  `CursorLockMode.Locked` + hidden cursor for the whole Gameplay state, and
+  I never implemented it in the first pass. Added `Cursor.lockState =
+  CursorLockMode.Locked; Cursor.visible = false;` in `OnNetworkSpawn` (owner
+  only), with the reverse in `OnNetworkDespawn`. **This has NOT been tested
+  yet** — session ended before the user could re-test in Play mode.
+- **Ruled out**: `ProjectSettings/ProjectSettings.asset` confirms
+  `activeInputHandler: 2` (Both old + new Input System enabled) — this is
+  NOT the cause.
+- **Not yet checked (diagnose first, before writing more code)** — ask the
+  user these in order next session:
+  1. Did cursor-lock fix change anything? (test this first — most likely
+     single root cause for bug #1, and would explain #2 too if the Game
+     View never had reliable focus/input to begin with)
+  2. After pressing Play, was **"Start Host"** actually clicked (NetworkManager's
+     default runtime debug UI, bottom-left of Game view)? If not clicked, no
+     player object ever spawns and nothing will respond — this alone would
+     explain both bugs.
+  3. Does a `Player(Clone)` object appear in the Hierarchy after Start Host?
+     If yes, check its `NetworkObject` component — is `IsOwner` effectively
+     true for the host's own instance? (Select it in Play mode, or add a
+     temporary debug log in `PlayerBootstrap.OnNetworkSpawn`.)
+  4. Is the `PlayerCamera` child active and is it the one rendering (check
+     Game view — do you see through the capsule's eyes, or still the Scene
+     view / no camera at all)?
+  5. Any red errors in Console at the moment of clicking Start Host or at
+     the moment of the failed click/mouse-move?
+  6. Did the user click once inside the Game View window before trying to
+     mouse-look? (Editor Game View sometimes needs a focus-click first,
+     independent of cursor lock.)
+- **Files involved**: `Assets/Scripts/Core/Player/PlayerBootstrap.cs` (fixed
+  this session, untested), `Assets/Scripts/Core/Input/PlayerInputRouter.cs`,
+  `Assets/Scripts/Core/Camera/PlayerCameraController.cs`,
+  `Assets/Scripts/Editor/MvpNetworkTestSceneSetup.cs`,
+  `Assets/Prefabs/Player.prefab`.
+- **Earlier fix this session**: `PlayerInputRouter.cs` had 3× compile errors
+  (CS1739 — `AddAction`'s parameter is named `expectedControlLayout`, not
+  `expectedControlType`, in the installed Input System version). Fixed, and
+  the project compiled clean after that (confirmed by user, exited Safe Mode
+  automatically).
+- **Packages installed this session** (confirmed working): Netcode for
+  GameObjects, Cinemachine.
+- **Nothing from this MVP-implementation slice is committed to git yet** —
+  still mid-debug. Do not commit until mouse-look + test-cast are confirmed
+  working end-to-end.
+
+## IN PROGRESS: Web MVP prototype (browser, friends can join)
+
+- **User pivot (2026-08-30)**: instead of continuing the Unity network-test
+  debugging, build a playable MVP prototype that opens in the browser and
+  lets friends join over the internet.
+- **Built**: `prototypes/web-mvp-concept/prototype.html` — single-file HTML,
+  Three.js (r149, CDN) + PeerJS (1.5.2, CDN, WebRTC P2P). Host creates a
+  4-letter room code; friends open the same file and enter the code. No
+  server. Host-authoritative combat (ADR-0001 listen-server in spirit; host
+  disconnect ends session, same policy).
+- **Gameplay in it**: FPS view (pitch clamp ±89°, eye 1.65m, FOV kick — all
+  from camera-system.md), WASD + pointer lock, 3 spell slots
+  (LMB cast, wheel/Q/1-2-3 switch — input-system.md verbs), 6 wandering
+  enemy dummies with HP bars and respawn, hp_clamp from
+  health-damage-system.md, and the ⭐ synergy: Water applies Wet (6s),
+  Lightning on Wet = 3x damage + chain (1.5x) to enemies within 6m, with
+  chain-lightning FX and combat log.
+- **Smoke-tested in the browser pane**: menu renders, no console errors,
+  host flow reaches the game scene, PeerJS cloud registration works (peer id
+  `covenant-mages-mvp-XXXX` confirmed assigned → signaling reachable).
+  Could NOT test an actual 2-client join from the sandboxed pane — needs two
+  real browser windows.
+- **Next**: user opens prototype.html in two browser windows (or with a
+  friend) to verify join-by-code + synergy over the network. This doubles as
+  the long-outstanding real 2-player synergy test from
+  co-op-spellcasting-concept/REPORT.md. Record findings in
+  `prototypes/web-mvp-concept/README.md` Findings section.
+- **Unity MVP debugging paused** (mouse-look/LMB bugs — see the section
+  below; cursor-lock fix applied but still untested in Unity).
+- Not committed yet.
+
 ## Current Stage
 
 - `production/stage.txt` = `Concept`
