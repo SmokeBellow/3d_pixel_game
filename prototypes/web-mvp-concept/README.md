@@ -42,10 +42,13 @@ server, no installation. This is the fastest path to the still-outstanding
    boss with a large HP pool that alternates a point-blank slam AoE and a
    telegraphed charge dash. Clearing level 3 loops back to level 1.
 10. Each school's tier-2 ("advanced") spell has a real mechanical hook, not
-    just bigger numbers: Fire's Огненный шар splashes nearby enemies, Water's
-    Волна soaks a whole group instead of one target, Lightning's Цепная
-    молния auto-chains at reduced damage even without a Water setup. Tier-2
-    spells also render visibly bigger (thicker bolt / larger projectile).
+    just bigger numbers: Fire's Огненный шар explodes on impact (visible
+    fireball + light flash) and damages everything near the blast, Water's
+    Волна is an instant nova centered on the caster — no aiming, it damages
+    and soaks every enemy around you in every direction — and Lightning's
+    Цепная молния auto-chains at reduced damage even without a Water setup.
+    Tier-2 spells also render visibly bigger (thicker bolt / larger
+    projectile).
 
 Networking: PeerJS (WebRTC data channels), P2P, host-authoritative — mirrors
 ADR-0001's listen-server topology in spirit. Host disconnect ends the session
@@ -181,4 +184,13 @@ Real multi-client test pending.
   5-15, and the cost (20) sits below the guaranteed floor (5 kills × 5g
   min = 25) — random rewards, but the spell is affordable even on the
   unluckiest possible level-1 clear.
+- Волна's redesign (single-target-with-radius → self-centered nova) needed
+  its own network message type (`castNova`) and host resolver
+  (`hostResolveNova`) separate from the normal `cast`/`hostResolveCast`
+  path, since every other spell requires hitting (or aiming near) a specific
+  enemy — Волна is the first spell with no target at all, keyed off the
+  caster's own authoritative position instead. The generic FX decay loop
+  gained an optional `growFrom`/`growTo` scale animation (used by both the
+  explosion sphere and the nova ring) rather than adding a second effects
+  system just for expanding shapes.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)
