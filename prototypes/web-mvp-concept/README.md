@@ -22,7 +22,7 @@ server, no installation. This is the fastest path to the still-outstanding
 5. Controls: WASD move, mouse look (click to lock; also works unlocked for
    touchpads, plus arrow keys), LMB or Space cast, wheel/Q/1-2-3 switch spell
    slot, **E to interact with a shop stand**, **L toggles full brightness /
-   no fog** (debug cheat).
+   no fog**, **K instantly kills every enemy on the map** (debug cheats).
 6. The combo: a Water player soaks an enemy, a Lightning player hits it —
    3x damage + zigzag chain to nearby enemies (Lightning renders as a jagged
    bolt now, not a straight line, but still lands exactly on the cursor).

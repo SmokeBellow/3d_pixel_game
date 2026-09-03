@@ -110,7 +110,7 @@
   <div id="labelContinue" class="worldLabel"></div>
   <div id="interactPrompt"></div>
   <div id="status"></div>
-  <div id="cheatHint">L — вкл/выкл затемнение (дебаг)</div>
+  <div id="cheatHint">L — вкл/выкл затемнение · K — убить всех врагов (дебаг)</div>
   <div id="combatlog"></div>
   <div id="hpWrap">
     <div id="hpLabel"><span id="hpLabelText">HP</span><span id="goldLabel">💰 0</span></div>
@@ -1128,6 +1128,8 @@ function onHostData(conn, msg) {
     hostChoosePassive(conn.peer, msg.passiveId);
   } else if (msg.t === 'readyNext') {
     if (shopPhase) closeShopAndAdvance();
+  } else if (msg.t === 'cheatKillAll') {
+    hostKillAllEnemies(conn.peer);
   }
 }
 
@@ -1197,6 +1199,21 @@ function hostApplyDamage(e, amount, casterPid) {
   e.hp = Math.min(e.maxHp, Math.max(0, e.hp - amount)); // hp_clamp
   if (e.hp <= 0 && e.alive) hostOnEnemyKilled(e, casterPid); // must flip e.alive BEFORE the visual refresh below
   updateEnemyVisual(e);
+}
+
+// Debug cheat (K) — kills every enemy currently on the map. Routes through
+// the normal hostApplyDamage/hostOnEnemyKilled path so gold/XP/level-up and
+// the level-clear → shop transition all fire exactly as on a real kill.
+function hostKillAllEnemies(casterPid) {
+  if (!levelActive) return;
+  const alive = enemies.filter(e => e.alive);
+  if (alive.length === 0) return;
+  for (const e of alive) hostApplyDamage(e, e.maxHp, casterPid);
+  hostLog(`💀 Дебаг: уничтожено врагов — ${alive.length}`);
+}
+function cheatKillAllEnemies() {
+  if (isHost) hostKillAllEnemies(myPeerId);
+  else if (connections[0] && connections[0].open) connections[0].send(JSON.stringify({ t: 'cheatKillAll' }));
 }
 
 function hostOnEnemyKilled(e, casterPid) {
@@ -1556,6 +1573,7 @@ addEventListener('keydown', e => {
   if (e.code === 'Space') tryCast();
   if (e.code === 'KeyQ') switchSlot(activeSlot + mySpells.length - 1); // backward cycle
   if (e.code === 'KeyE') tryInteract(); // physical shop stands in the hub room
+  if (e.code === 'KeyK') cheatKillAllEnemies(); // debug cheat
   if (e.code === 'Digit1') switchSlot(0);
   if (e.code === 'Digit2') switchSlot(1);
   if (e.code === 'Digit3') switchSlot(2);
@@ -1960,6 +1978,8 @@ window.__debug = {
   THREE, scene, hostSimulate, tryCast, makeRemotePlayer, enterGame,
   startHost, initPlayerData, startLevel, triggerRemoteCast,
   startShopPhase, closeShopAndAdvance, respawnLocalPlayer, tryInteract,
+  hostApplyDamage, get partyXp() { return partyXp; },
+  hostKillAllEnemies, cheatKillAllEnemies,
   get ZONE_PILLARS() { return ZONE_PILLARS; },
   get playerData() { return playerData; },
   get myGold() { return myGold; },
