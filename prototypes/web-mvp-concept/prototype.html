@@ -603,6 +603,11 @@ function makeRemotePlayerModel(color) {
   };
   actions.cast.setLoop(THREE.LoopOnce);
   actions.cast.clampWhenFinished = true;
+  // The Mixamo clip is a native ~2.3s gesture, but spell cooldowns are
+  // 0.5-1.0s — left at native speed the gesture visibly lags behind how
+  // fast the player is actually casting. Speeding it up keeps the visual
+  // roughly synced with the game's actual casting pace.
+  actions.cast.timeScale = 2.5;
   actions.idle.play();
   return { object: clone, mixer, actions, current: 'idle' };
 }
@@ -628,26 +633,28 @@ function makeRemotePlayer(name, element) {
   label.position.y = 2.6;
   group.add(label);
   scene.add(group);
+  // Returning to the correct locomotion state (idle vs walk) after a cast is
+  // handled per-frame in the main loop (it needs to check "are they moving
+  // *right now*", not "were they moving when the cast started") — see the
+  // "Remote player interpolation" block in animate().
   const rp = { mesh: group, target: { p: [0, 0, 0], ry: 0 }, downed: false,
            mixer: model.mixer, actions: model.actions, current: model.current, lastPos: new THREE.Vector3() };
-  if (rp.mixer) {
-    rp.mixer.addEventListener('finished', e => {
-      if (e.action === rp.actions.cast && rp.current === 'cast') {
-        rp.actions.idle.reset().play();
-        rp.actions.cast.crossFadeTo(rp.actions.idle, 0.15, false);
-        rp.current = 'idle';
-      }
-    });
-  }
   return rp;
 }
 function triggerRemoteCast(pid) {
   const rp = remotePlayers[pid];
   if (!rp || !rp.actions) return;
-  rp.actions.cast.reset();
-  rp.actions[rp.current].crossFadeTo(rp.actions.cast, 0.05, false);
-  rp.actions.cast.play();
-  rp.current = 'cast';
+  if (rp.current === 'cast') {
+    // Re-triggered before the previous cast finished (cooldowns are shorter
+    // than the clip) — restart cleanly instead of crossfading an action
+    // into itself, which visibly glitches.
+    rp.actions.cast.stop().reset().play();
+  } else {
+    rp.actions.cast.reset();
+    rp.actions[rp.current].crossFadeTo(rp.actions.cast, 0.05, false);
+    rp.actions.cast.play();
+    rp.current = 'cast';
+  }
 }
 
 // ============================================================
@@ -682,10 +689,14 @@ function spawnLightningBolt(fromArr, toArr, colorHex) {
     points.push(p);
   }
   points.push(to.clone()); // endpoint stays exact — must still land on the cursor's target
-  const geo = new THREE.BufferGeometry().setFromPoints(points);
-  const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: colorHex, transparent: true }));
-  scene.add(line);
-  fx.push({ obj: line, life: 0.15 });
+  // A plain THREE.Line ignores `linewidth` on almost every platform (a
+  // long-standing WebGL/ANGLE limitation) — a real visible-thickness bolt
+  // needs actual 3D geometry, so build a thin tube along the same zigzag path.
+  const curve = new THREE.CatmullRomCurve3(points);
+  const tubeGeo = new THREE.TubeGeometry(curve, 20, 0.07, 5, false);
+  const boltMesh = new THREE.Mesh(tubeGeo, new THREE.MeshBasicMaterial({ color: colorHex, transparent: true }));
+  scene.add(boltMesh);
+  fx.push({ obj: boltMesh, life: 0.15 });
   const flash = new THREE.PointLight(colorHex, 1.5, 5);
   flash.position.copy(to);
   scene.add(flash);
@@ -1470,9 +1481,18 @@ function animate() {
         const speed = rp.mesh.position.distanceTo(rp.lastPos) / Math.max(dt, 0.001);
         rp.lastPos.copy(rp.mesh.position);
         const wantState = speed > 0.3 ? 'walk' : 'idle';
-        if (wantState !== rp.current && rp.current !== 'cast') {
+        const castClipDone = rp.current === 'cast' &&
+          rp.actions.cast.time >= rp.actions.cast.getClip().duration - 0.05;
+        if (castClipDone) {
+          // Resume whatever the player is *actually* doing right now (idle
+          // or walk) — not a hardcoded idle — so casting mid-stride doesn't
+          // cause a visible stutter back to standing still first.
           rp.actions[wantState].reset().play();
-          rp.actions[rp.current === 'cast' ? 'idle' : rp.current].crossFadeTo(rp.actions[wantState], 0.2, false);
+          rp.actions.cast.crossFadeTo(rp.actions[wantState], 0.15, false);
+          rp.current = wantState;
+        } else if (wantState !== rp.current && rp.current !== 'cast') {
+          rp.actions[wantState].reset().play();
+          rp.actions[rp.current].crossFadeTo(rp.actions[wantState], 0.2, false);
           rp.current = wantState;
         }
         rp.mixer.update(dt);
