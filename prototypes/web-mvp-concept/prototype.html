@@ -136,10 +136,23 @@
   <div id="downedOverlay">Вы повержены… возрождение через <span id="respawnT">4</span>с</div>
 </div>
 
-<script src="https://unpkg.com/three@0.149.0/build/three.min.js"></script>
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-<script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.149.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.149.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
 'use strict';
+// r0.149 dropped the classic examples/js/* UMD builds — only ES modules
+// (examples/jsm/*) exist now, hence the importmap + type="module" above.
+// Everything below still reads as plain `THREE.Foo` thanks to this import.
+import * as THREE from 'three';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { clone as skeletonClone } from 'three/addons/utils/SkeletonUtils.js';
 // ============================================================
 // Tuning (sourced from GDDs where they exist)
 // ============================================================
@@ -534,7 +547,7 @@ function updateEnemyVisual(e) {
 // ============================================================
 // Remote players
 // ============================================================
-const remotePlayers = {}; // peerId -> {mesh, target:{p,ry}, downed}
+const remotePlayers = {}; // peerId -> {mesh, target:{p,ry}, downed, mixer, actions, lastPos}
 function makeNameSprite(text, colorHex) {
   const cnv = document.createElement('canvas');
   cnv.width = 256; cnv.height = 64;
@@ -547,20 +560,89 @@ function makeNameSprite(text, colorHex) {
   sprite.scale.set(2.5, 0.6, 1);
   return sprite;
 }
-function makeRemotePlayer(name, element) {
+
+// Mixamo "Ganfaul" rig — idle.fbx carries the actual mesh+skeleton; walk.fbx
+// and cast.fbx are downloaded "With Skin" too (self-contained) but we only
+// need their AnimationClip since all three share the exact same skeleton —
+// no retargeting math needed, just play each clip on the idle mesh's rig.
+const MODEL_BASE = 'models/mage/';
+let mageTemplate = null; // { root, idleClip, walkClip, castClip } once all three load
+(function loadMageAssets() {
+  const loader = new FBXLoader();
+  loader.load(MODEL_BASE + 'idle.fbx', idleObj => {
+    const idleClip = idleObj.animations[0];
+    loader.load(MODEL_BASE + 'walk.fbx', walkObj => {
+      const walkClip = walkObj.animations[0];
+      loader.load(MODEL_BASE + 'cast.fbx', castObj => {
+        const castClip = castObj.animations[0];
+        idleObj.scale.setScalar(0.01); // Mixamo exports in cm
+        mageTemplate = { root: idleObj, idleClip, walkClip, castClip };
+      }, undefined, err => console.error('Failed to load cast.fbx', err));
+    }, undefined, err => console.error('Failed to load walk.fbx', err));
+  }, undefined, err => console.error('Failed to load idle.fbx', err));
+})();
+
+function makeRemotePlayerModel(color) {
+  const clone = skeletonClone(mageTemplate.root);
+  clone.traverse(o => {
+    if (o.isMesh) {
+      o.material = o.material.clone(); // never share materials across instances
+      o.material.color.set(color);
+    }
+  });
+  const mixer = new THREE.AnimationMixer(clone);
+  const actions = {
+    idle: mixer.clipAction(mageTemplate.idleClip),
+    walk: mixer.clipAction(mageTemplate.walkClip),
+    cast: mixer.clipAction(mageTemplate.castClip),
+  };
+  actions.cast.setLoop(THREE.LoopOnce);
+  actions.cast.clampWhenFinished = true;
+  actions.idle.play();
+  return { object: clone, mixer, actions, current: 'idle' };
+}
+// Cheap primitive placeholder — used only if a player joins before the ~22MB
+// model finishes loading (rare, but the game must not block on it).
+function makePlaceholderModel(color) {
   const group = new THREE.Group();
-  const color = ELEMENT_COLOR[element] || 0xaaaaaa;
   const body = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 1.6, 8), new THREE.MeshLambertMaterial({ color }));
   body.position.y = 0.9;
   group.add(body);
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 8), new THREE.MeshLambertMaterial({ color }));
   head.position.y = 1.9;
   group.add(head);
+  return { object: group, mixer: null, actions: null, current: null };
+}
+
+function makeRemotePlayer(name, element) {
+  const group = new THREE.Group();
+  const color = ELEMENT_COLOR[element] || 0xaaaaaa;
+  const model = mageTemplate ? makeRemotePlayerModel(color) : makePlaceholderModel(color);
+  group.add(model.object);
   const label = makeNameSprite(name, color);
   label.position.y = 2.6;
   group.add(label);
   scene.add(group);
-  return { mesh: group, target: { p: [0, 0, 0], ry: 0 }, downed: false };
+  const rp = { mesh: group, target: { p: [0, 0, 0], ry: 0 }, downed: false,
+           mixer: model.mixer, actions: model.actions, current: model.current, lastPos: new THREE.Vector3() };
+  if (rp.mixer) {
+    rp.mixer.addEventListener('finished', e => {
+      if (e.action === rp.actions.cast && rp.current === 'cast') {
+        rp.actions.idle.reset().play();
+        rp.actions.cast.crossFadeTo(rp.actions.idle, 0.15, false);
+        rp.current = 'idle';
+      }
+    });
+  }
+  return rp;
+}
+function triggerRemoteCast(pid) {
+  const rp = remotePlayers[pid];
+  if (!rp || !rp.actions) return;
+  rp.actions.cast.reset();
+  rp.actions[rp.current].crossFadeTo(rp.actions.cast, 0.05, false);
+  rp.actions.cast.play();
+  rp.current = 'cast';
 }
 
 // ============================================================
@@ -777,7 +859,8 @@ function onHostData(conn, msg) {
     if (remotePlayers[conn.peer]) remotePlayers[conn.peer].target = { p: msg.p, ry: msg.ry };
   } else if (msg.t === 'cast') {
     hostResolveCast(msg, conn.peer);
-    if (msg.from) broadcast({ t: 'fx', kind: 'bolt', from: msg.from, to: msg.to, color: msg.color }, conn);
+    if (msg.from) broadcast({ t: 'fx', kind: 'bolt', from: msg.from, to: msg.to, color: msg.color, pid: conn.peer }, conn);
+    triggerRemoteCast(conn.peer); // host also sees the caster's animation locally
   } else if (msg.t === 'fx') {
     handleFx(msg);              // show on host
     broadcast(msg, conn);       // relay to other clients
@@ -1208,6 +1291,7 @@ function handleFx(msg) {
   else if (msg.kind === 'bolt') spawnLightningBolt(msg.from, msg.to, msg.color);
   else if (msg.kind === 'chain') spawnChainFx(msg.center, msg.targets);
   else if (msg.kind === 'proj') spawnProjectile(msg.from, msg.dir, msg.color, msg.speed, false, -1);
+  if (msg.pid && msg.pid !== myPeerId) triggerRemoteCast(msg.pid);
 }
 function tryCast() {
   if (myDowned || mySpells.length === 0) return;
@@ -1224,7 +1308,7 @@ function tryCast() {
     // Fire/Water: flying projectile — shooter owns hit detection on impact
     const dir = raycaster.ray.direction.clone().normalize();
     spawnProjectile(handWorld.toArray(), dir.toArray(), spell.color, spell.speed, true, activeSlot);
-    const fxMsg = { t: 'fx', kind: 'proj', from: handWorld.toArray(), dir: dir.toArray(), color: spell.color, speed: spell.speed };
+    const fxMsg = { t: 'fx', kind: 'proj', from: handWorld.toArray(), dir: dir.toArray(), color: spell.color, speed: spell.speed, pid: myPeerId };
     if (isHost) broadcast(fxMsg);
     else if (connections[0] && connections[0].open) connections[0].send(JSON.stringify(fxMsg));
     return;
@@ -1245,7 +1329,7 @@ function tryCast() {
   const castMsg = { t: 'cast', spellIndex: activeSlot, enemyId, from: handWorld.toArray(), to: to.toArray(), color: spell.color };
   if (isHost) {
     hostResolveCast(castMsg, myPeerId);
-    broadcast({ t: 'fx', kind: 'bolt', from: castMsg.from, to: castMsg.to, color: spell.color });
+    broadcast({ t: 'fx', kind: 'bolt', from: castMsg.from, to: castMsg.to, color: spell.color, pid: myPeerId });
   } else if (connections[0] && connections[0].open) {
     connections[0].send(JSON.stringify(castMsg));
   }
@@ -1362,12 +1446,24 @@ function animate() {
       e.lastPos.copy(e.mesh.position);
     }
 
-    // Remote player interpolation
+    // Remote player interpolation + locomotion animation crossfade
     for (const rp of Object.values(remotePlayers)) {
       const t = rp.target;
       rp.mesh.position.lerp(new THREE.Vector3(t.p[0], 0, t.p[2]), Math.min(1, dt * 12));
       rp.mesh.rotation.y = t.ry;
       rp.mesh.scale.y = rp.downed ? 0.3 : 1; // crude "downed" pose
+
+      if (rp.mixer) {
+        const speed = rp.mesh.position.distanceTo(rp.lastPos) / Math.max(dt, 0.001);
+        rp.lastPos.copy(rp.mesh.position);
+        const wantState = speed > 0.3 ? 'walk' : 'idle';
+        if (wantState !== rp.current && rp.current !== 'cast') {
+          rp.actions[wantState].reset().play();
+          rp.actions[rp.current === 'cast' ? 'idle' : rp.current].crossFadeTo(rp.actions[wantState], 0.2, false);
+          rp.current = wantState;
+        }
+        rp.mixer.update(dt);
+      }
     }
 
     const conn = isHost ? `хост · игроков: ${1 + connections.length}` : 'клиент';
