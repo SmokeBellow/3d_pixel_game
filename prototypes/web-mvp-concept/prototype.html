@@ -24,10 +24,9 @@
   #downedOverlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(80,0,0,0.35); color: #ffdede; font-size: 28px; font-weight: bold; text-shadow: 0 2px 6px #000; }
   #vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(circle at center, rgba(0,0,0,0) 30%, rgba(0,0,0,0.85) 100%); }
   #cheatHint { position: absolute; top: 12px; right: 12px; font-size: 11px; opacity: .5; text-shadow: 0 1px 2px #000; }
-  #menu, #elementPanel, #shopPanel { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  #menu, #elementPanel { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
   #menu { background: radial-gradient(circle at center, #1a1530, #0a0a0f); }
-  #elementPanel, #shopPanel { display: none; background: rgba(5,5,15,0.7); z-index: 5; }
-  #shopPanel { background: rgba(5,5,15,0.35); } /* lighter than #elementPanel — the hub room behind it should read as a real, different place */
+  #elementPanel { display: none; background: rgba(5,5,15,0.7); z-index: 5; }
   .panel { background: rgba(20,18,35,0.97); border: 1px solid #444; border-radius: 12px; padding: 32px 40px; color: #eee; text-align: center; min-width: 340px; max-width: 460px; }
   .panel h1 { margin: 0 0 4px; font-size: 26px; color: #c9b8ff; }
   .panel h2 { margin: 0 0 24px; font-size: 13px; font-weight: normal; color: #888; }
@@ -39,10 +38,11 @@
   .panel .hint { font-size: 12px; color: #999; margin-top: 16px; line-height: 1.5; }
   .panel .err { color: #ff7a7a; font-size: 13px; min-height: 18px; }
   .elBtn { font-size: 22px !important; }
-  .shopSection { text-align: left; background: rgba(0,0,0,0.25); border-radius: 8px; padding: 10px 14px; margin: 10px 0; font-size: 14px; }
-  .shopSection h3 { margin: 0 0 8px; font-size: 14px; color: #c9b8ff; }
-  .shopRow { display: flex; justify-content: space-between; align-items: center; margin: 6px 0; gap: 8px; }
-  .shopRow button { width: auto; margin: 0; padding: 6px 10px; font-size: 13px; }
+  /* World-anchored shop: price tags float over their physical stand in the
+     hub room (projected from 3D each frame) instead of a modal dialog. */
+  .worldLabel { position: fixed; transform: translate(-50%, -100%); background: rgba(10,10,20,0.8); border: 1px solid #554; border-radius: 6px; padding: 4px 10px; font-size: 13px; color: #ffd76a; white-space: nowrap; pointer-events: none; display: none; }
+  #interactPrompt { position: fixed; left: 50%; bottom: 150px; transform: translateX(-50%); background: rgba(10,10,20,0.9); border: 1px solid #776; border-radius: 8px; padding: 10px 18px; font-size: 15px; color: #eee; display: none; text-align: center; }
+  #interactPrompt b { color: #ffd76a; }
   .chatLog { height: 110px; overflow-y: auto; background: rgba(0,0,0,0.3); border-radius: 6px; padding: 6px 8px; font-size: 12px; text-align: left; color: #ccc; margin-top: 8px; }
   .chatLog div { margin: 2px 0; word-wrap: break-word; }
   .chatRow { display: flex; gap: 6px; margin-top: 6px; }
@@ -98,29 +98,17 @@
     <button class="elBtn" data-el="Lightning">⚡ Молния</button>
   </div>
 </div>
-<div id="shopPanel">
-  <div class="panel">
-    <h1>Между уровнями</h1>
-    <div id="shopLevelInfo" style="color:#aaa"></div>
-    <div id="shopGold" style="margin:8px 0; color:#ffd76a; font-weight:bold"></div>
-    <div id="shopPassiveChoice" class="shopSection" style="display:none">
-      <h3>Наставник предлагает выбрать пассивное умение</h3>
-      <div id="shopPassiveButtons"></div>
-    </div>
-    <div class="shopSection">
-      <h3>Магазин — новое заклинание</h3>
-      <div id="shopBuySection"></div>
-    </div>
-    <div class="shopSection">
-      <h3>Наставник — прокачать имеющееся</h3>
-      <div id="shopMentorSection"></div>
-    </div>
-    <button id="btnShopContinue">Продолжить →</button>
-  </div>
-</div>
 <div id="hud" style="display:none">
   <div id="vignette"></div>
   <div id="crosshair">+</div>
+  <!-- Shop is physical, not a modal: floating price tags over each stand in
+       the hub room, plus a bottom prompt for whatever's in interact range. -->
+  <div id="labelBuy" class="worldLabel"></div>
+  <div id="labelMentor" class="worldLabel"></div>
+  <div id="labelPassiveA" class="worldLabel"></div>
+  <div id="labelPassiveB" class="worldLabel"></div>
+  <div id="labelContinue" class="worldLabel"></div>
+  <div id="interactPrompt"></div>
   <div id="status"></div>
   <div id="cheatHint">L — вкл/выкл затемнение (дебаг)</div>
   <div id="combatlog"></div>
@@ -446,6 +434,148 @@ buildArena('hub', ZONES.hub.cx, ZONES.hub.cz, ZONES.hub.half, [], 0x2a1a12);
   const hubGlow = new THREE.PointLight(0xffaa55, 1.1, ZONES.hub.half * 2.5, 1.5);
   hubGlow.position.set(ZONES.hub.cx, 3.5, ZONES.hub.cz);
   scene.add(hubGlow);
+}
+
+// ============================================================
+// Physical shop stands — per user request, buying/leveling spells is a
+// world interaction (walk up, press E), not a modal dialog. Positions are
+// relative to the hub's center; each stand is a pedestal + glowing orb, and
+// its price tag is an HTML label projected from its 3D position every frame.
+// ============================================================
+const INTERACT_RANGE = 2.3;
+function makeShopStand(x, z, colorHex) {
+  const group = new THREE.Group();
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.6, 0.9, 8), pillarMat);
+  base.position.y = 0.45;
+  group.add(base);
+  const orbMat = new THREE.MeshStandardMaterial({ color: colorHex, emissive: colorHex, emissiveIntensity: 0.7 });
+  const orb = new THREE.Mesh(new THREE.IcosahedronGeometry(0.28, 0), orbMat);
+  orb.position.y = 1.15;
+  group.add(orb);
+  const light = new THREE.PointLight(colorHex, 0.9, 4.5);
+  light.position.y = 1.15;
+  group.add(light);
+  group.position.set(x, 0, z);
+  scene.add(group);
+  return { group, orb, x, z, labelY: 1.85 };
+}
+function makeContinuePortal(x, z) {
+  const group = new THREE.Group();
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(1.1, 0.12, 8, 24), new THREE.MeshBasicMaterial({ color: 0x66ffcc }));
+  ring.position.y = 1.3;
+  group.add(ring);
+  const light = new THREE.PointLight(0x66ffcc, 1.3, 6);
+  light.position.y = 1.3;
+  group.add(light);
+  group.position.set(x, 0, z);
+  scene.add(group);
+  return { group, ring, x, z, labelY: 2.5 };
+}
+const shopBuyStand = makeShopStand(ZONES.hub.cx - 3, ZONES.hub.cz - 3, 0xffaa33);
+const shopMentorStand = makeShopStand(ZONES.hub.cx + 3, ZONES.hub.cz - 3, 0x66aaff);
+const shopPassiveStandA = makeShopStand(ZONES.hub.cx - 3, ZONES.hub.cz + 2, 0xcc88ff);
+const shopPassiveStandB = makeShopStand(ZONES.hub.cx + 3, ZONES.hub.cz + 2, 0xcc88ff);
+const shopContinuePortal = makeContinuePortal(ZONES.hub.cx, ZONES.hub.cz + 7);
+
+function distXZ(pos, stand) { return Math.hypot(pos.x - stand.x, pos.z - stand.z); }
+function positionLabel(el, stand) {
+  const v = new THREE.Vector3(stand.x, stand.labelY, stand.z).project(camera);
+  if (v.z > 1) return false; // behind the camera
+  el.style.left = ((v.x * 0.5 + 0.5) * window.innerWidth) + 'px';
+  el.style.top = ((-v.y * 0.5 + 0.5) * window.innerHeight) + 'px';
+  return true;
+}
+let activeStandAction = null; // set by updateShopStands(), consumed by tryInteract()
+function updateShopStands() {
+  const labelBuy = document.getElementById('labelBuy');
+  const labelMentor = document.getElementById('labelMentor');
+  const labelPassiveA = document.getElementById('labelPassiveA');
+  const labelPassiveB = document.getElementById('labelPassiveB');
+  const labelContinue = document.getElementById('labelContinue');
+  if (!shopPhase) {
+    labelBuy.style.display = labelMentor.style.display = labelPassiveA.style.display = labelPassiveB.style.display = labelContinue.style.display = 'none';
+    activeStandAction = null;
+    return;
+  }
+
+  // Interact eligibility is purely distance-based — whether the label
+  // happens to be on-screen (positionLabel's frustum check) only controls
+  // the floating price tag's visibility, not whether E works.
+  let nearest = null, nearestDist = INTERACT_RANGE;
+  function consider(action, dist) { if (dist < nearestDist) { nearestDist = dist; nearest = action; } }
+
+  // Buy stand — next spell in your own school
+  const pool = myElement ? SCHOOL_SPELLS[myElement] : [];
+  const canBuy = mySpells.length < pool.length;
+  if (positionLabel(labelBuy, shopBuyStand)) {
+    labelBuy.style.display = 'block';
+    if (canBuy) {
+      const next = pool[mySpells.length];
+      const cost = 100 + 40 * mySpells.length;
+      labelBuy.textContent = `${elementEmoji(next.school)} ${next.name} — ${cost}💰`;
+    } else {
+      labelBuy.textContent = 'Все заклинания школы открыты';
+    }
+  } else labelBuy.style.display = 'none';
+  if (canBuy) consider({ kind: 'buy' }, distXZ(playerPos, shopBuyStand));
+
+  // Mentor stand — levels up whichever spell is in your active hotbar slot
+  const activeSpell = mySpells[activeSlot];
+  if (activeSpell && positionLabel(labelMentor, shopMentorStand)) {
+    labelMentor.style.display = 'block';
+    const cost = 30 * activeSpell.level;
+    labelMentor.textContent = `${elementEmoji(activeSpell.school)} ${activeSpell.name} ур.${activeSpell.level}→${activeSpell.level + 1} — ${cost}💰`;
+  } else labelMentor.style.display = 'none';
+  if (activeSpell) consider({ kind: 'mentor', idx: activeSlot }, distXZ(playerPos, shopMentorStand));
+
+  // Passive stands — only appear when a passive choice is pending (odd party levels)
+  if (myPendingPassive) {
+    const defA = PASSIVE_POOL.find(p => p.id === myPendingPassive[0]);
+    const defB = PASSIVE_POOL.find(p => p.id === myPendingPassive[1]);
+    if (defA && positionLabel(labelPassiveA, shopPassiveStandA)) {
+      labelPassiveA.style.display = 'block';
+      labelPassiveA.textContent = `${defA.name} — ${defA.desc}`;
+    } else labelPassiveA.style.display = 'none';
+    if (defA) consider({ kind: 'passive', id: defA.id }, distXZ(playerPos, shopPassiveStandA));
+    if (defB && positionLabel(labelPassiveB, shopPassiveStandB)) {
+      labelPassiveB.style.display = 'block';
+      labelPassiveB.textContent = `${defB.name} — ${defB.desc}`;
+    } else labelPassiveB.style.display = 'none';
+    if (defB) consider({ kind: 'passive', id: defB.id }, distXZ(playerPos, shopPassiveStandB));
+  } else {
+    labelPassiveA.style.display = 'none';
+    labelPassiveB.style.display = 'none';
+  }
+  shopPassiveStandA.group.visible = !!myPendingPassive;
+  shopPassiveStandB.group.visible = !!myPendingPassive;
+
+  // Continue portal — always available, walk through/up to it and press E
+  if (positionLabel(labelContinue, shopContinuePortal)) {
+    labelContinue.style.display = 'block';
+    labelContinue.textContent = 'Пройти дальше';
+  } else labelContinue.style.display = 'none';
+  consider({ kind: 'continue' }, distXZ(playerPos, shopContinuePortal));
+
+  activeStandAction = nearest;
+  const prompt = document.getElementById('interactPrompt');
+  if (nearest) {
+    const verb = nearest.kind === 'buy' ? 'Купить'
+      : nearest.kind === 'mentor' ? 'Прокачать'
+      : nearest.kind === 'passive' ? 'Выбрать'
+      : 'Пройти дальше';
+    prompt.innerHTML = `<b>[E]</b> ${verb}`;
+    prompt.style.display = 'block';
+  } else {
+    prompt.style.display = 'none';
+  }
+}
+function tryInteract() {
+  if (!shopPhase || !activeStandAction) return;
+  const a = activeStandAction;
+  if (a.kind === 'buy') requestBuySpell();
+  else if (a.kind === 'mentor') requestLevelUpSpell(a.idx);
+  else if (a.kind === 'passive') requestChoosePassive(a.id);
+  else if (a.kind === 'continue') requestReadyNext();
 }
 
 // ============================================================
@@ -1425,6 +1555,7 @@ addEventListener('keydown', e => {
   if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
   if (e.code === 'Space') tryCast();
   if (e.code === 'KeyQ') switchSlot(activeSlot + mySpells.length - 1); // backward cycle
+  if (e.code === 'KeyE') tryInteract(); // physical shop stands in the hub room
   if (e.code === 'Digit1') switchSlot(0);
   if (e.code === 'Digit2') switchSlot(1);
   if (e.code === 'Digit3') switchSlot(2);
@@ -1600,7 +1731,7 @@ function animate() {
       const remain = isHost ? Math.max(0, Math.ceil((playerData[myPeerId] || {}).respawnTimer || 0)) : '…';
       document.getElementById('respawnT').textContent = remain;
     }
-    if (shopPhase) renderShopUI();
+    updateShopStands();
 
     // Movement relative to yaw (locked while downed)
     const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
@@ -1735,107 +1866,17 @@ function requestReadyNext() {
   else if (connections[0]) connections[0].send(JSON.stringify({ t: 'readyNext' }));
 }
 function openShopUI() {
-  document.getElementById('shopPanel').style.display = 'flex';
-  shopStructureSig = null; // force a structure rebuild on open
-  renderShopUI();
-  // Pointer lock hides the real OS cursor and pins it at the screen center —
-  // clicks on shop buttons landed nowhere until the user pressed Esc to
-  // release the lock themselves. Release it ourselves so the shop is usable
-  // immediately; tryCast's mousedown handler already re-requests the lock
-  // the next time the player clicks in the 3D view.
-  if (document.pointerLockElement) document.exitPointerLock();
+  // Shop is physical now (stands in the hub room) — nothing to show/hide
+  // here beyond the stands themselves, which updateShopStands() drives every
+  // frame based on shopPhase. Pointer lock stays engaged; browsing the hub
+  // and pressing E to interact is regular gameplay, not a UI takeover.
 }
-function closeShopUI() { document.getElementById('shopPanel').style.display = 'none'; }
-
-// Rebuilding the DOM every frame (60/sec) meant a real human click could land
-// between mousedown and click on a button that had already been torn down
-// and replaced — the click event then fires on nothing. Fix: only rebuild
-// the button elements when the shop's *structure* actually changes (spell
-// count, pending passive); every other frame just updates existing nodes'
-// text/disabled state in place, so the elements a user is clicking on stay
-// the same DOM nodes across frames.
-let shopStructureSig = null;
-function renderShopUI() {
-  const sig = mySpells.length + ':' + (myPendingPassive ? myPendingPassive.join(',') : '') + ':' + (myElement ? SCHOOL_SPELLS[myElement].length : 0);
-  if (sig !== shopStructureSig) {
-    shopStructureSig = sig;
-    buildShopStructure();
+function closeShopUI() {
+  for (const id of ['labelBuy', 'labelMentor', 'labelPassiveA', 'labelPassiveB', 'labelContinue']) {
+    document.getElementById(id).style.display = 'none';
   }
-  updateShopValues();
-}
-function buildShopStructure() {
-  const passiveWrap = document.getElementById('shopPassiveChoice');
-  const passiveButtons = document.getElementById('shopPassiveButtons');
-  passiveButtons.innerHTML = '';
-  if (myPendingPassive) {
-    passiveWrap.style.display = 'block';
-    for (const id of myPendingPassive) {
-      const def = PASSIVE_POOL.find(p => p.id === id);
-      const btn = document.createElement('button');
-      btn.textContent = `${def.name} — ${def.desc}`;
-      btn.onclick = () => requestChoosePassive(id);
-      passiveButtons.appendChild(btn);
-    }
-  } else {
-    passiveWrap.style.display = 'none';
-  }
-
-  const buySection = document.getElementById('shopBuySection');
-  buySection.innerHTML = '';
-  const pool = myElement ? SCHOOL_SPELLS[myElement] : [];
-  if (mySpells.length < pool.length) {
-    const row = document.createElement('div');
-    row.className = 'shopRow';
-    const label = document.createElement('span');
-    label.id = 'buyLabel';
-    row.appendChild(label);
-    const btn = document.createElement('button');
-    btn.id = 'buyBtn';
-    btn.textContent = 'Купить';
-    btn.onclick = requestBuySpell;
-    row.appendChild(btn);
-    buySection.appendChild(row);
-  } else {
-    buySection.textContent = 'Все заклинания твоей школы уже открыты.';
-  }
-
-  const mentorSection = document.getElementById('shopMentorSection');
-  mentorSection.innerHTML = '';
-  mySpells.forEach((s, idx) => {
-    const row = document.createElement('div');
-    row.className = 'shopRow';
-    const label = document.createElement('span');
-    label.id = 'mentorLabel' + idx;
-    row.appendChild(label);
-    const btn = document.createElement('button');
-    btn.id = 'mentorBtn' + idx;
-    btn.textContent = 'Прокачать';
-    btn.onclick = () => requestLevelUpSpell(idx);
-    row.appendChild(btn);
-    mentorSection.appendChild(row);
-  });
-}
-function updateShopValues() {
-  document.getElementById('shopLevelInfo').textContent = `Уровень подземелья ${currentLevel} пройден · Отряд: ур.${partyLevel}`;
-  document.getElementById('shopGold').textContent = `Твоё золото: 💰 ${myGold}`;
-
-  const pool = myElement ? SCHOOL_SPELLS[myElement] : [];
-  if (mySpells.length < pool.length) {
-    const next = pool[mySpells.length];
-    const cost = 100 + 40 * mySpells.length;
-    const label = document.getElementById('buyLabel');
-    const btn = document.getElementById('buyBtn');
-    if (label) label.textContent = `${elementEmoji(next.school)} ${next.name} (стоимость ${cost}💰)`;
-    if (btn) btn.disabled = myGold < cost;
-  }
-
-  mySpells.forEach((s, idx) => {
-    const cost = 30 * s.level;
-    const label = document.getElementById('mentorLabel' + idx);
-    const btn = document.getElementById('mentorBtn' + idx);
-    if (label) label.textContent = `${elementEmoji(s.school)} ${s.name} ур.${s.level} (${cost}💰)`;
-    if (btn) btn.disabled = myGold < cost;
-  });
+  document.getElementById('interactPrompt').style.display = 'none';
+  activeStandAction = null;
 }
 
 // ============================================================
@@ -1880,7 +1921,6 @@ document.getElementById('btnStart').onclick = () => {
   startLevel(1);
   enterGame();
 };
-document.getElementById('btnShopContinue').onclick = requestReadyNext;
 // Host picks their element right in the lobby panel (before "Начать" unlocks).
 document.getElementById('btnHost').addEventListener('click', () => {
   setTimeout(() => {
@@ -1919,8 +1959,12 @@ window.__debug = {
   get inGame() { return inGame; },
   THREE, scene, hostSimulate, tryCast, makeRemotePlayer, enterGame,
   startHost, initPlayerData, startLevel, triggerRemoteCast,
-  startShopPhase, closeShopAndAdvance, respawnLocalPlayer,
+  startShopPhase, closeShopAndAdvance, respawnLocalPlayer, tryInteract,
   get ZONE_PILLARS() { return ZONE_PILLARS; },
+  get playerData() { return playerData; },
+  get myGold() { return myGold; },
+  get mySpells() { return mySpells; },
+  get activeStandAction() { return activeStandAction; },
 };
 </script>
 </body>

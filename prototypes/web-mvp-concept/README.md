@@ -21,15 +21,18 @@ server, no installation. This is the fastest path to the still-outstanding
    clicks Начать** — nobody enters the arena early.
 5. Controls: WASD move, mouse look (click to lock; also works unlocked for
    touchpads, plus arrow keys), LMB or Space cast, wheel/Q/1-2-3 switch spell
-   slot, **L toggles full brightness / no fog** (debug cheat).
+   slot, **E to interact with a shop stand**, **L toggles full brightness /
+   no fog** (debug cheat).
 6. The combo: a Water player soaks an enemy, a Lightning player hits it —
    3x damage + zigzag chain to nearby enemies (Lightning renders as a jagged
    bolt now, not a straight line, but still lands exactly on the cursor).
 7. Clear all enemies in a level → the whole party is teleported into a
-   dedicated **hub/progression room** (its own space, not just a UI overlay
-   over the dungeon) for the shop/mentor screen (buy your school's next spell
-   early for gold, or pay to level up a known spell) → Продолжить → next
-   level.
+   dedicated **hub/progression room** (its own space, not a UI overlay over
+   the dungeon). The shop is **physical, not a modal**: walk up to a glowing
+   stand, its price tag floats over it, press **E** to interact — a stand for
+   buying your school's next spell, one for leveling up whichever spell is in
+   your active hotbar slot, two for a passive choice (only appear on levels
+   where one is pending), and a glowing portal to continue to the next level.
 8. Everyone spawns/respawns at their current zone's pentagram — enemies
    physically cannot enter its ward radius.
 9. **Three dungeon levels, then the run loops**: level 1 is the original
@@ -71,9 +74,11 @@ Real multi-client test pending.
   guarantees enough XP for the next party level; leveling raises everyone's
   max HP and auto-unlocks each player's next school spell; every other level
   (3, 5, 7…) offers a passive-skill choice (mentor)
-- **Shop/mentor between levels**: buy your next spell early for gold, or pay
-  to level up a spell you already have; continuing spawns the next level with
-  more enemies (scaled HP) and respawns everyone at a spawn point
+- **Physical shop/mentor in the hub room**: no modal dialog — glowing stands
+  with floating price tags you interact with via E (buy your next spell,
+  level up your active spell, pick a passive when one's pending, or step to
+  the portal to continue); continuing spawns the next level with more
+  enemies (scaled HP) and respawns everyone at that level's spawn point
 - **Sessions**: a level ends when all its enemies are dead; no more
   auto-respawning enemies mid-level
 - Humanoid enemies with walk + attack-lunge animation; AI: patrol (wander
@@ -142,4 +147,14 @@ Real multi-client test pending.
   more constant memory for meshes that are usually off-screen. Enemy/player
   bounds-clamping and pillar collision became zone-parameterized instead of
   using one hardcoded global arena.
+- The shop started as a modal dialog, but pointer lock (needed for FPS mouse
+  look) hides the real OS cursor and pins it at screen center — clicks on
+  modal buttons landed nowhere until the player pressed Esc to release the
+  lock themselves. First fix was releasing the lock on shop open, but the
+  user asked for a better redesign: **the shop is now physical, not a
+  modal** — glowing stands with floating price tags in the hub room,
+  interacted with via E based on proximity alone (not whether the tag
+  happens to be on-screen, which only gates the tag's own visibility). This
+  sidesteps the pointer-lock/click problem entirely since there's no DOM
+  button to click during gameplay, and reads as more diegetic.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)
