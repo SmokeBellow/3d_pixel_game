@@ -1669,6 +1669,23 @@ function wireChatBox(inputId, buttonId) {
 }
 wireChatBox('lobbyChatInput', 'lobbyChatSend');
 wireChatBox('waitingChatInput', 'waitingChatSend');
+
+// Module scripts don't leak to `window` like classic scripts did — this
+// read-only debug hook exists purely so the browser console (or automated
+// QA) can inspect live state. Harmless for players; not used by the game.
+window.__debug = {
+  get mageTemplate() { return mageTemplate; },
+  get enemies() { return enemies; },
+  get playerPos() { return playerPos; },
+  get remotePlayers() { return remotePlayers; },
+  get myPeerId() { return myPeerId; },
+  get isHost() { return isHost; },
+  get currentLevel() { return currentLevel; },
+  get partyLevel() { return partyLevel; },
+  get inGame() { return inGame; },
+  THREE, scene, hostSimulate, tryCast, makeRemotePlayer, enterGame,
+  startHost, initPlayerData, startLevel, triggerRemoteCast,
+};
 </script>
 </body>
 </html>
