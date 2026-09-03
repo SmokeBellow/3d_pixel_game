@@ -25,11 +25,24 @@ server, no installation. This is the fastest path to the still-outstanding
 6. The combo: a Water player soaks an enemy, a Lightning player hits it —
    3x damage + zigzag chain to nearby enemies (Lightning renders as a jagged
    bolt now, not a straight line, but still lands exactly on the cursor).
-7. Clear all enemies in a level → shop/mentor screen (buy your school's next
-   spell early for gold, or pay to level up a known spell) → Продолжить →
-   next level, more/tougher enemies.
-8. Everyone spawns/respawns at the one pentagram on the floor — enemies
+7. Clear all enemies in a level → the whole party is teleported into a
+   dedicated **hub/progression room** (its own space, not just a UI overlay
+   over the dungeon) for the shop/mentor screen (buy your school's next spell
+   early for gold, or pay to level up a known spell) → Продолжить → next
+   level.
+8. Everyone spawns/respawns at their current zone's pentagram — enemies
    physically cannot enter its ward radius.
+9. **Three dungeon levels, then the run loops**: level 1 is the original
+   arena; level 2 is a bigger arena with more/tankier enemies and a denser
+   pillar field (a maze-lite, since enemy AI has no corridor pathing — pillars
+   give the "navigate around obstacles" feel safely); level 3 is a single
+   boss with a large HP pool that alternates a point-blank slam AoE and a
+   telegraphed charge dash. Clearing level 3 loops back to level 1.
+10. Each school's tier-2 ("advanced") spell has a real mechanical hook, not
+    just bigger numbers: Fire's Огненный шар splashes nearby enemies, Water's
+    Волна soaks a whole group instead of one target, Lightning's Цепная
+    молния auto-chains at reduced damage even without a Water setup. Tier-2
+    spells also render visibly bigger (thicker bolt / larger projectile).
 
 Networking: PeerJS (WebRTC data channels), P2P, host-authoritative — mirrors
 ADR-0001's listen-server topology in spirit. Host disconnect ends the session
@@ -37,11 +50,14 @@ ADR-0001's listen-server topology in spirit. Host disconnect ends the session
 
 ## Status
 
-In progress (2026-08-30). Solo smoke-tested end to end via scripted console
+In progress (2026-09-03). Solo smoke-tested end to end via scripted console
 runs: element pick, combat, gold/XP gain, guaranteed level-2-up after
-clearing level 1, shop purchases (buy spell + mentor level-up), and the
-level-2 transition (more enemies, healed/raised max HP, fresh spawn) all
-confirmed working with zero console errors. Real multi-client test pending.
+clearing level 1, shop purchases (buy spell + mentor level-up), the
+level-2 transition, and — newly — hub-room teleport, the level 2 (bigger
+arena/tougher enemies) and level 3 (boss, 900 HP, slam + charge attacks
+both firing correctly over 10 simulated seconds) zones, and looping from
+level 3 back to level 1. All confirmed working with zero console errors.
+Real multi-client test pending.
 
 ## Features
 
@@ -79,6 +95,15 @@ confirmed working with zero console errors. Real multi-client test pending.
 - **Lobby with chat**: joining players see a waiting room (with player list
   + chat, shared with the host's lobby chat) until the host starts; late
   joiners after the game has started also get chat/lobby state correctly
+- **Player visuals**: Mixamo "Ganfaul M Aure" model (idle/walk/cast animations,
+  cast synced to actual cast pace) tinted per element for third-person/remote
+  players; first-person view kept the original placeholder box/sphere arms
+  (a real FPS viewmodel was tried and reverted — see Findings)
+- **Multi-zone world**: level 1/2/3 and the hub room are separate, far-apart
+  spaces built by one shared `buildArena()` helper and coexisting statically
+  in the same Three.js scene; moving between them is a teleport of `playerPos`
+  to the target zone's spawn point (see Findings for why zones, not a single
+  arena, before diving into the code)
 
 ## Findings
 
@@ -102,4 +127,19 @@ confirmed working with zero console errors. Real multi-client test pending.
      steering never had any collision awareness. Added `clampEnemyToArena`:
      clamps to the arena bounds and pushes enemies out of each pillar's
      clearance radius every simulation tick.
+- Mixamo has no dedicated "mage" character or FPS-arm rig category — picked
+  a generic fantasy model (Ganfaul) and re-tinted it per element instead.
+  Tried parenting the same full-body model to the camera as a first-person
+  viewmodel; reverted because its shoulder pauldrons dominate the frame at
+  FPS-camera distance during the cast gesture. A dedicated Sketchfab FPS-arms
+  asset or a vertex-filtered arm-only mesh would be needed to revisit this.
+- GitHub Pages' CDN edge cache is inconsistent across edge nodes — `curl`
+  confirming a new deploy is live doesn't mean every visitor's edge has it
+  yet. Standard workaround: `?v=N` cache-busting on the page URL after a push.
+- Multi-zone world: kept every zone (3 dungeon levels + hub) coexisting
+  statically in one scene rather than swapping scene contents per level —
+  simpler to reason about (no teardown/rebuild bugs) at the cost of a bit
+  more constant memory for meshes that are usually off-screen. Enemy/player
+  bounds-clamping and pillar collision became zone-parameterized instead of
+  using one hardcoded global arena.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)
