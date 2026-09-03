@@ -663,11 +663,18 @@ let myHandGlow = null;
 function ensureMyViewmodel() {
   if (myViewmodel || !mageTemplate || !myElement) return;
   myViewmodel = makeRemotePlayerModel(ELEMENT_COLOR[myElement] || 0xffffff);
-  // Camera sits at EYE_HEIGHT above the ground (see the main loop) — placing
-  // the model at local -EYE_HEIGHT puts its feet back at world ground level
-  // and its own head roughly at the camera, exactly like a real body would
-  // be if the camera were mounted at its eyes.
-  myViewmodel.object.position.set(0, -EYE_HEIGHT, 0);
+  // Tuned empirically (this rig's own local bounding box, measured with the
+  // camera at identity rotation, put the head ~2.1 units above the root and
+  // the whole body only ~0.5 units deep front-to-back): Y puts the face
+  // right at the camera so the head itself is invisible (correct — you don't
+  // see your own head), Z nudges the root slightly *behind* the camera for
+  // the same reason. Known limitation: Ganfaul's ornate shoulder pauldrons
+  // are close enough to camera that they can dominate the frame during the
+  // full-body cast gesture rather than reading as a clean isolated hand/arm
+  // — this asset wasn't modeled as a dedicated FPS viewmodel. Still a real
+  // improvement over the old static placeholder (idle/walk are invisible as
+  // they should be, and cast now visibly moves), but not a AAA-clean result.
+  myViewmodel.object.position.set(0, -1.85, 0.2);
   camera.add(myViewmodel.object);
   let handBone = null;
   myViewmodel.object.traverse(o => { if (o.isBone && /RightHand$/i.test(o.name)) handBone = o; });
