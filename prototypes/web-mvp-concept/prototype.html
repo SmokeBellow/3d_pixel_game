@@ -584,6 +584,11 @@ let mageTemplate = null; // { root, idleClip, walkClip, castClip } once all thre
 
 function makeRemotePlayerModel(color) {
   const clone = skeletonClone(mageTemplate.root);
+  // Measured geometrically: at rotation.y=0 this Mixamo rig's cast animation
+  // reaches toward world +Z, but this game's forward convention (see the
+  // player movement code) is -Z at yaw 0. Without this correction every
+  // remote player visually faces/casts backward relative to their real aim.
+  clone.rotation.y = Math.PI;
   clone.traverse(o => {
     if (o.isMesh) {
       o.material = o.material.clone(); // never share materials across instances
@@ -1236,10 +1241,15 @@ function updateSlotUI() {
   }
 }
 
-// Free-look works with OR without pointer lock (touchpad fallback — lock can
-// be unavailable/awkward there; movementX/Y is still reported without it).
+// Mouse look ONLY applies while the pointer is actually locked — otherwise
+// the OS cursor stays visible and moves freely, which is exactly what was
+// reported as a bug (cursor visible, pins at the browser window edge,
+// "sensitivity" feels capped once it hits the edge). Pointer Lock hides the
+// system cursor entirely and reports unlimited relative deltas, so this is
+// strictly better for mouse users. Touchpad users without reliable pointer
+// lock support fall back to the Arrow-key look handled in the main loop.
 document.addEventListener('mousemove', e => {
-  if (!inGame) return;
+  if (!inGame || document.pointerLockElement !== renderer.domElement) return;
   yaw -= e.movementX * sensitivity;
   pitch -= e.movementY * sensitivity;
   pitch = Math.max(-PITCH_CLAMP, Math.min(PITCH_CLAMP, pitch)); // pitch_accumulation clamp
@@ -1248,6 +1258,9 @@ document.addEventListener('mousedown', e => {
   if (!inGame || e.target !== renderer.domElement) return; // ignore clicks on shop/UI overlays
   if (document.pointerLockElement !== renderer.domElement) { renderer.domElement.requestPointerLock(); return; }
   if (e.button === 0) tryCast();
+});
+document.addEventListener('pointerlockerror', () => {
+  combatLog('⚠ Не удалось захватить мышь — используй стрелки для взгляда');
 });
 
 const raycaster = new THREE.Raycaster();
