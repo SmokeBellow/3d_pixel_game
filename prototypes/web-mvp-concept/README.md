@@ -67,18 +67,22 @@ Real multi-client test pending.
 - FPS view (camera-system.md formulas), pointer-lock + touchpad/arrow-key
   look fallback, shared `sensitivity` value for mouse + keyboard look
 - **One element per player, chosen at lobby** — each school has a 2-spell
-  unlock ladder (basic → advanced). Fire/Water = flying projectiles,
-  Lightning = hitscan; Water→Lightning = Chain Shock synergy (x3 dmg + chain)
+  unlock ladder (basic → advanced), each with its own icon (✨💥 Fire,
+  💧🌊 Water, ⚡🌩️ Lightning). Fire/Water = flying projectiles, Lightning =
+  hitscan; Water→Lightning = Chain Shock synergy (x3 dmg + chain)
 - **Spell leveling by use**: only landed hits count; damage scales +12%/level
 - **Gold** (random per kill) and **shared party XP/level** — clearing a level
   guarantees enough XP for the next party level; leveling raises everyone's
-  max HP and auto-unlocks each player's next school spell; every other level
-  (3, 5, 7…) offers a passive-skill choice (mentor)
+  max HP; every other level (3, 5, 7…) offers a passive-skill choice (mentor).
+  The tier-2 spell is **not** auto-granted — it must be bought at the shop
+  stand, same as leveling up an existing spell
 - **Physical shop/mentor in the hub room**: no modal dialog — glowing stands
   with floating price tags you interact with via E (buy your next spell,
   level up your active spell, pick a passive when one's pending, or step to
   the portal to continue); continuing spawns the next level with more
-  enemies (scaled HP) and respawns everyone at that level's spawn point
+  enemies (scaled HP) and respawns everyone at that level's spawn point.
+  Trying to buy/level up without enough gold flashes the price tag and a
+  bottom-screen prompt red instead of silently failing
 - **Sessions**: a level ends when all its enemies are dead; no more
   auto-respawning enemies mid-level
 - Humanoid enemies with walk + attack-lunge animation; AI: patrol (wander

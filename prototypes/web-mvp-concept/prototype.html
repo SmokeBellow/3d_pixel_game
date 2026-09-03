@@ -40,9 +40,11 @@
   .elBtn { font-size: 22px !important; }
   /* World-anchored shop: price tags float over their physical stand in the
      hub room (projected from 3D each frame) instead of a modal dialog. */
-  .worldLabel { position: fixed; transform: translate(-50%, -100%); background: rgba(10,10,20,0.8); border: 1px solid #554; border-radius: 6px; padding: 4px 10px; font-size: 13px; color: #ffd76a; white-space: nowrap; pointer-events: none; display: none; }
+  .worldLabel { position: fixed; transform: translate(-50%, -100%); background: rgba(10,10,20,0.8); border: 1px solid #554; border-radius: 6px; padding: 4px 10px; font-size: 13px; color: #ffd76a; white-space: nowrap; pointer-events: none; display: none; transition: background .1s, border-color .1s, color .1s; }
   #interactPrompt { position: fixed; left: 50%; bottom: 150px; transform: translateX(-50%); background: rgba(10,10,20,0.9); border: 1px solid #776; border-radius: 8px; padding: 10px 18px; font-size: 15px; color: #eee; display: none; text-align: center; }
   #interactPrompt b { color: #ffd76a; }
+  @keyframes shakeError { 0%, 100% { margin-left: 0; } 20% { margin-left: -6px; } 40% { margin-left: 6px; } 60% { margin-left: -4px; } 80% { margin-left: 4px; } }
+  .worldLabel.error, #interactPrompt.error { background: rgba(110,15,15,0.92) !important; border-color: #ff5555 !important; color: #ffb3b3 !important; animation: shakeError 0.4s; }
   .chatLog { height: 110px; overflow-y: auto; background: rgba(0,0,0,0.3); border-radius: 6px; padding: 6px 8px; font-size: 12px; text-align: left; color: #ccc; margin-top: 8px; }
   .chatLog div { margin: 2px 0; word-wrap: break-word; }
   .chatRow { display: flex; gap: 6px; margin-top: 6px; }
@@ -205,12 +207,12 @@ function xpNeeded(level) { return level * 100; }
 //   Water:     wetRadius — soaks a group, not just one enemy (easier synergy setups)
 //   Lightning: autoChainRadius/autoChainDmgMult — chains on its own, no Water needed
 const SCHOOL_SPELLS = {
-  Fire:      [ { name: 'Искра',          school: 'Fire',      dmg: 15, cooldown: 0.6, speed: 16, color: 0xff6622, tier: 1 },
-               { name: 'Огненный шар',   school: 'Fire',      dmg: 22, cooldown: 1.0, speed: 12, color: 0xff3300, tier: 2, splashRadius: 3.2, splashDmgMult: 0.55 } ],
-  Water:     [ { name: 'Плеск',          school: 'Water',     dmg: 5,  cooldown: 0.5, speed: 12, color: 0x3388ee, tier: 1 },
-               { name: 'Волна',          school: 'Water',     dmg: 8,  cooldown: 0.9, speed: 9,  color: 0x2266cc, tier: 2, wetRadius: 3.6 } ],
-  Lightning: [ { name: 'Разряд',         school: 'Lightning', dmg: 12, cooldown: 0.8, speed: 0,  color: 0xffe14d, tier: 1 },
-               { name: 'Цепная молния',  school: 'Lightning', dmg: 14, cooldown: 1.1, speed: 0,  color: 0xffdd00, tier: 2, autoChainRadius: 5, autoChainDmgMult: 0.6 } ],
+  Fire:      [ { name: 'Искра',          icon: '✨', school: 'Fire',      dmg: 15, cooldown: 0.6, speed: 16, color: 0xff6622, tier: 1 },
+               { name: 'Огненный шар',   icon: '💥', school: 'Fire',      dmg: 22, cooldown: 1.0, speed: 12, color: 0xff3300, tier: 2, splashRadius: 3.2, splashDmgMult: 0.55 } ],
+  Water:     [ { name: 'Плеск',          icon: '💧', school: 'Water',     dmg: 5,  cooldown: 0.5, speed: 12, color: 0x3388ee, tier: 1 },
+               { name: 'Волна',          icon: '🌊', school: 'Water',     dmg: 8,  cooldown: 0.9, speed: 9,  color: 0x2266cc, tier: 2, wetRadius: 3.6 } ],
+  Lightning: [ { name: 'Разряд',         icon: '⚡', school: 'Lightning', dmg: 12, cooldown: 0.8, speed: 0,  color: 0xffe14d, tier: 1 },
+               { name: 'Цепная молния',  icon: '🌩️', school: 'Lightning', dmg: 14, cooldown: 1.1, speed: 0,  color: 0xffdd00, tier: 2, autoChainRadius: 5, autoChainDmgMult: 0.6 } ],
 };
 const PASSIVE_POOL = [
   { id: 'vitality',  name: 'Живучесть',       desc: '+20 макс. HP',        apply: p => { p.maxHpBonus += 20; } },
@@ -512,7 +514,7 @@ function updateShopStands() {
     if (canBuy) {
       const next = pool[mySpells.length];
       const cost = 100 + 40 * mySpells.length;
-      labelBuy.textContent = `${elementEmoji(next.school)} ${next.name} — ${cost}💰`;
+      labelBuy.textContent = `${next.icon} ${next.name} — ${cost}💰`;
     } else {
       labelBuy.textContent = 'Все заклинания школы открыты';
     }
@@ -524,7 +526,7 @@ function updateShopStands() {
   if (activeSpell && positionLabel(labelMentor, shopMentorStand)) {
     labelMentor.style.display = 'block';
     const cost = 30 * activeSpell.level;
-    labelMentor.textContent = `${elementEmoji(activeSpell.school)} ${activeSpell.name} ур.${activeSpell.level}→${activeSpell.level + 1} — ${cost}💰`;
+    labelMentor.textContent = `${activeSpell.icon} ${activeSpell.name} ур.${activeSpell.level}→${activeSpell.level + 1} — ${cost}💰`;
   } else labelMentor.style.display = 'none';
   if (activeSpell) consider({ kind: 'mentor', idx: activeSlot }, distXZ(playerPos, shopMentorStand));
 
@@ -558,23 +560,51 @@ function updateShopStands() {
 
   activeStandAction = nearest;
   const prompt = document.getElementById('interactPrompt');
-  if (nearest) {
-    const verb = nearest.kind === 'buy' ? 'Купить'
-      : nearest.kind === 'mentor' ? 'Прокачать'
-      : nearest.kind === 'passive' ? 'Выбрать'
-      : 'Пройти дальше';
-    prompt.innerHTML = `<b>[E]</b> ${verb}`;
+  if (performance.now() < fundsErrorUntil) {
+    // Overrides the normal prompt for a moment — see tryInteract()'s
+    // insufficient-funds check. Re-set every frame here so it survives
+    // updateShopStands() otherwise stomping the textContent 60x/sec.
+    prompt.textContent = '❌ Недостаточно золота!';
+    prompt.classList.add('error');
     prompt.style.display = 'block';
   } else {
-    prompt.style.display = 'none';
+    prompt.classList.remove('error');
+    if (nearest) {
+      const verb = nearest.kind === 'buy' ? 'Купить'
+        : nearest.kind === 'mentor' ? 'Прокачать'
+        : nearest.kind === 'passive' ? 'Выбрать'
+        : 'Пройти дальше';
+      prompt.innerHTML = `<b>[E]</b> ${verb}`;
+      prompt.style.display = 'block';
+    } else {
+      prompt.style.display = 'none';
+    }
+  }
+}
+let fundsErrorUntil = 0;
+function flashInsufficientFunds(labelEl) {
+  fundsErrorUntil = performance.now() + 600;
+  if (labelEl) {
+    labelEl.classList.remove('error'); // restart the shake animation if it's already mid-flash
+    void labelEl.offsetWidth; // force reflow so re-adding the class replays the CSS animation
+    labelEl.classList.add('error');
+    setTimeout(() => labelEl.classList.remove('error'), 450);
   }
 }
 function tryInteract() {
   if (!shopPhase || !activeStandAction) return;
   const a = activeStandAction;
-  if (a.kind === 'buy') requestBuySpell();
-  else if (a.kind === 'mentor') requestLevelUpSpell(a.idx);
-  else if (a.kind === 'passive') requestChoosePassive(a.id);
+  if (a.kind === 'buy') {
+    const pool = myElement ? SCHOOL_SPELLS[myElement] : [];
+    const cost = 100 + 40 * mySpells.length;
+    if (mySpells.length < pool.length && myGold < cost) { flashInsufficientFunds(document.getElementById('labelBuy')); return; }
+    requestBuySpell();
+  } else if (a.kind === 'mentor') {
+    const s = mySpells[a.idx];
+    const cost = s ? 30 * s.level : Infinity;
+    if (myGold < cost) { flashInsufficientFunds(document.getElementById('labelMentor')); return; }
+    requestLevelUpSpell(a.idx);
+  } else if (a.kind === 'passive') requestChoosePassive(a.id);
   else if (a.kind === 'continue') requestReadyNext();
 }
 
@@ -1231,16 +1261,12 @@ function hostOnEnemyKilled(e, casterPid) {
 }
 
 function onPartyLevelUp() {
+  // Tier-2 spells are no longer auto-granted on level-up — the buy stand in
+  // the hub is now the only way to get them, per user request.
   partyMaxHpBonus += 20;
   for (const pid of Object.keys(playerData)) {
     const pd = playerData[pid];
     pd.hp = Math.min(maxHpFor(pid), pd.hp + 20);
-    const pool = SCHOOL_SPELLS[pd.element];
-    if (pd.spells.length < pool.length) {
-      const next = cloneSpell(pool[pd.spells.length]);
-      pd.spells.push(next);
-      hostLog(`${nameFor(pid)} открыл новое заклинание: ${next.name}`);
-    }
   }
   if (partyLevel % 2 === 1 && partyLevel > 1) {
     for (const pid of Object.keys(playerData)) {
@@ -1590,7 +1616,7 @@ function updateSlotUI() {
     const el = document.getElementById('slot' + i);
     if (i < mySpells.length) {
       el.style.display = 'flex';
-      el.textContent = elementEmoji(mySpells[i].school);
+      el.textContent = mySpells[i].icon;
       el.title = `${mySpells[i].name} ур.${mySpells[i].level}`;
       el.classList.toggle('active', i === activeSlot);
     } else {
@@ -1842,7 +1868,7 @@ function animate() {
     }
 
     const conn = isHost ? `хост · игроков: ${1 + connections.length}` : 'клиент';
-    const spellLabel = mySpells[activeSlot] ? `${elementEmoji(mySpells[activeSlot].school)} ${mySpells[activeSlot].name} ур.${mySpells[activeSlot].level}` : '—';
+    const spellLabel = mySpells[activeSlot] ? `${mySpells[activeSlot].icon} ${mySpells[activeSlot].name} ур.${mySpells[activeSlot].level}` : '—';
     document.getElementById('status').textContent =
       `${myName} · ${conn}\n${spellLabel}` +
       (cooldowns[activeSlot] > 0 ? ' (кд...)' : ' — готово') +
