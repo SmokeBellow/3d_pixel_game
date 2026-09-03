@@ -71,14 +71,14 @@ Real multi-client test pending.
   💧🌊 Water, ⚡🌩️ Lightning). Fire/Water = flying projectiles, Lightning =
   hitscan; Water→Lightning = Chain Shock synergy (x3 dmg + chain)
 - **Spell leveling by use**: only landed hits count; damage scales +12%/level
-- **Gold** (flat 10 per kill — deterministic, not random, so clearing a
-  level always yields the same total) and **shared party XP/level** —
-  clearing a level guarantees enough XP for the next party level; leveling
-  raises everyone's max HP; every other level (3, 5, 7…) offers a
-  passive-skill choice (mentor). The tier-2 spell is **not** auto-granted —
-  it must be bought at the shop stand for a flat **50💰**, exactly what a
-  solo player earns clearing level 1 (5 enemies × 10g), same as leveling up an
-  existing spell
+- **Gold** (random 5-15 per kill) and **shared party XP/level** — clearing
+  a level guarantees enough XP for the next party level; leveling raises
+  everyone's max HP; every other level (3, 5, 7…) offers a passive-skill
+  choice (mentor). The tier-2 spell is **not** auto-granted — it must be
+  bought at the shop stand for a flat **20💰**, kept comfortably below the
+  worst-case gold a solo player can earn clearing level 1 (5 enemies × the
+  5g minimum roll = 25), so even a bad gold roll can afford it, same as
+  leveling up an existing spell
 - **Physical shop/mentor in the hub room**: no modal dialog — glowing stands
   with floating price tags you interact with via E (buy your next spell,
   level up your active spell, pick a passive when one's pending, or step to
@@ -174,11 +174,11 @@ Real multi-client test pending.
   prompt name the exact spell/action ("Купить 💥 Огненный шар — 50💰") instead
   of a generic verb, so it's unambiguous which stand you're about to use
   without needing to look up at the floating tag.
-- **"Got 43 gold from level 1, not enough for the 50g spell"** — the random
-  5-15 gold-per-kill roll (avg 10 × 5 kills = 50 on average) could land
-  below the spell's cost on a bad roll. Since the cost is explicitly pegged
-  to "what you earn clearing level 1," an average wasn't good enough — made
-  the per-kill gold a flat 10 instead of random, so level 1 always yields
-  exactly 50 for a solo player and the spell is always affordable right
-  after it.
+- **"Got 43 gold from level 1, not enough for the 50g spell"** — first fix
+  made gold-per-kill a flat 10 so the total was always exactly 50, but the
+  user then asked to keep the randomness for flavor and instead just cap
+  the cost below the worst case. Landed on: gold-per-kill stays random
+  5-15, and the cost (20) sits below the guaranteed floor (5 kills × 5g
+  min = 25) — random rewards, but the spell is affordable even on the
+  unluckiest possible level-1 clear.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)

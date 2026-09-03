@@ -196,16 +196,12 @@ function zoneOf(id) { return ZONES[id]; }
 const ZONE_PILLARS = {}; // filled by buildArena() per zone — absolute world [x,z] pairs
 const ELEMENT_COLOR = { Fire: 0xff5533, Water: 0x2288ee, Lightning: 0xffdd33 };
 const XP_PER_KILL = 20;
-// Flat (not random) so clearing level 1 always yields exactly the same total —
-// needed to guarantee SPELL2_COST below is always affordable, not just on average.
-const GOLD_PER_KILL = 10;
-// Tier-2 spell cost — pegged to the gold a solo player earns clearing level 1
-// (5 enemies × 10g/kill = 50), per user request: the second spell should be
-// affordable right after your first level, not a long grind. This only holds
-// exactly for a solo player — in a party the kills (and their gold) split
-// across players, same as always.
+const GOLD_PER_KILL_MIN = 5, GOLD_PER_KILL_MAX = 15; // hostOnEnemyKilled rolls in this range
 const LEVEL1_ENEMY_COUNT = 5; // must match computeSpawnsForLevel(1)'s count
-const SPELL2_COST = LEVEL1_ENEMY_COUNT * GOLD_PER_KILL;
+// Tier-2 spell cost — kept comfortably below the worst-case total a solo
+// player can earn clearing level 1 (5 enemies × the 5g minimum roll = 25),
+// so even the unluckiest gold rolls afford it right after level 1.
+const SPELL2_COST = LEVEL1_ENEMY_COUNT * GOLD_PER_KILL_MIN - 5;
 function xpNeeded(level) { return level * 100; }
 
 // One element per player (fixed at lobby) — each school's own small unlock
@@ -1262,7 +1258,7 @@ function cheatKillAllEnemies() {
 
 function hostOnEnemyKilled(e, casterPid) {
   e.alive = false;
-  const gold = GOLD_PER_KILL;
+  const gold = GOLD_PER_KILL_MIN + Math.floor(Math.random() * (GOLD_PER_KILL_MAX - GOLD_PER_KILL_MIN + 1));
   if (playerData[casterPid]) playerData[casterPid].gold += gold;
   hostLog(`☠ Враг уничтожен (${nameFor(casterPid)}) +${gold}💰`);
   partyXp += XP_PER_KILL;
