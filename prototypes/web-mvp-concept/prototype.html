@@ -223,32 +223,9 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
-// First-person arms — parented to the camera so they follow the view
+// First-person viewmodel is built later (needs mageTemplate/makeRemotePlayerModel,
+// defined further down) — see "First-person viewmodel" section.
 scene.add(camera);
-const armMat = new THREE.MeshLambertMaterial({ color: 0x2a2347 });
-const handMat = new THREE.MeshLambertMaterial({ color: 0xc9a07a });
-function makeFpArm(side) {
-  const arm = new THREE.Group();
-  const forearm = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.42), armMat);
-  forearm.rotation.x = -0.25;
-  arm.add(forearm);
-  const hand = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 8), handMat);
-  hand.position.set(0, 0.05, -0.24);
-  arm.add(hand);
-  arm.position.set(side * 0.32, -0.32, -0.55);
-  camera.add(arm);
-  return arm;
-}
-const fpArmL = makeFpArm(-1);
-const fpArmR = makeFpArm(1);
-const orbMat = new THREE.MeshBasicMaterial({ color: 0xff6622 });
-const fpOrb = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), orbMat);
-fpOrb.position.set(0, 0.1, -0.3);
-fpArmR.add(fpOrb);
-const orbLight = new THREE.PointLight(0xff6622, 0.6, 2);
-fpOrb.add(orbLight);
-const FP_ARM_BASE_Y = -0.32, FP_ARM_BASE_Z = -0.55;
-let castRecoilT = Infinity, walkBobT = 0;
 
 // Ambient is deliberately dim — visibility comes from torches + the player's
 // own glow, not flat scene-wide lighting (needed for the vignette to read).
@@ -641,19 +618,62 @@ function makeRemotePlayer(name, element) {
            mixer: model.mixer, actions: model.actions, current: model.current, lastPos: new THREE.Vector3() };
   return rp;
 }
-function triggerRemoteCast(pid) {
-  const rp = remotePlayers[pid];
-  if (!rp || !rp.actions) return;
-  if (rp.current === 'cast') {
+// Shared by remote players AND the local first-person viewmodel below —
+// both are just {mixer, actions, current} driven the same way.
+function triggerCast(entity) {
+  if (!entity || !entity.actions) return;
+  if (entity.current === 'cast') {
     // Re-triggered before the previous cast finished (cooldowns are shorter
     // than the clip) — restart cleanly instead of crossfading an action
     // into itself, which visibly glitches.
-    rp.actions.cast.stop().reset().play();
+    entity.actions.cast.stop().reset().play();
   } else {
-    rp.actions.cast.reset();
-    rp.actions[rp.current].crossFadeTo(rp.actions.cast, 0.05, false);
-    rp.actions.cast.play();
-    rp.current = 'cast';
+    entity.actions.cast.reset();
+    entity.actions[entity.current].crossFadeTo(entity.actions.cast, 0.05, false);
+    entity.actions.cast.play();
+    entity.current = 'cast';
+  }
+}
+function triggerRemoteCast(pid) { triggerCast(remotePlayers[pid]); }
+
+function advanceCharacterAnimation(entity, wantState, dt) {
+  if (!entity.mixer) return;
+  const castDone = entity.current === 'cast' &&
+    entity.actions.cast.time >= entity.actions.cast.getClip().duration - 0.05;
+  if (castDone) {
+    // Resume whatever they're *actually* doing right now, not a hardcoded idle.
+    entity.actions[wantState].reset().play();
+    entity.actions.cast.crossFadeTo(entity.actions[wantState], 0.15, false);
+    entity.current = wantState;
+  } else if (wantState !== entity.current && entity.current !== 'cast') {
+    entity.actions[wantState].reset().play();
+    entity.actions[entity.current].crossFadeTo(entity.actions[wantState], 0.2, false);
+    entity.current = wantState;
+  }
+  entity.mixer.update(dt);
+}
+
+// ============================================================
+// First-person viewmodel — the SAME Ganfaul model/rig/animations as the
+// third-person view, just parented to the camera instead of a world-space
+// body, so idle/walk/cast are visible up close instead of placeholder arms.
+// ============================================================
+let myViewmodel = null;
+let myHandGlow = null;
+function ensureMyViewmodel() {
+  if (myViewmodel || !mageTemplate || !myElement) return;
+  myViewmodel = makeRemotePlayerModel(ELEMENT_COLOR[myElement] || 0xffffff);
+  // Camera sits at EYE_HEIGHT above the ground (see the main loop) — placing
+  // the model at local -EYE_HEIGHT puts its feet back at world ground level
+  // and its own head roughly at the camera, exactly like a real body would
+  // be if the camera were mounted at its eyes.
+  myViewmodel.object.position.set(0, -EYE_HEIGHT, 0);
+  camera.add(myViewmodel.object);
+  let handBone = null;
+  myViewmodel.object.traverse(o => { if (o.isBone && /RightHand$/i.test(o.name)) handBone = o; });
+  if (handBone) {
+    myHandGlow = new THREE.PointLight(0xff6622, 0.6, 2);
+    handBone.add(myHandGlow);
   }
 }
 
@@ -1246,9 +1266,8 @@ function updateSlotUI() {
       el.style.display = 'none';
     }
   }
-  if (mySpells[activeSlot]) {
-    orbMat.color.setHex(mySpells[activeSlot].color);
-    orbLight.color.setHex(mySpells[activeSlot].color);
+  if (mySpells[activeSlot] && myHandGlow) {
+    myHandGlow.color.setHex(mySpells[activeSlot].color);
   }
 }
 
@@ -1323,7 +1342,7 @@ function tryCast() {
   const spell = mySpells[activeSlot];
   cooldowns[activeSlot] = spell.cooldown; // cooldownMult from passives is applied client-side for feel only
   fovKickT = 0; // fov_kick_response trigger (re-trigger resets, no stacking)
-  castRecoilT = 0;
+  triggerCast(myViewmodel);
 
   raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
   const handWorld = camera.localToWorld(new THREE.Vector3(0.32, -0.25, -0.6));
@@ -1420,16 +1439,10 @@ function animate() {
     if (keys['ArrowDown'])  pitch -= keyLookSpeed * dt;
     pitch = Math.max(-PITCH_CLAMP, Math.min(PITCH_CLAMP, pitch));
 
-    // First-person arm animation: walk bob + cast recoil on the right arm
-    if (isMoving) walkBobT += dt * 9;
-    const bobY = isMoving ? Math.sin(walkBobT) * 0.02 : 0;
-    castRecoilT += dt;
-    let recoilZ = 0;
-    if (castRecoilT < 0.08) recoilZ = 0.18 * (castRecoilT / 0.08);
-    else if (castRecoilT < 0.3) recoilZ = 0.18 * (1 - (castRecoilT - 0.08) / 0.22);
-    fpArmL.position.y = FP_ARM_BASE_Y + bobY;
-    fpArmR.position.y = FP_ARM_BASE_Y - bobY;
-    fpArmR.position.z = FP_ARM_BASE_Z + recoilZ;
+    // First-person viewmodel: same idle/walk/cast animation logic as
+    // remote players, just driven by local movement instead of network state.
+    ensureMyViewmodel();
+    if (myViewmodel) advanceCharacterAnimation(myViewmodel, isMoving ? 'walk' : 'idle', dt);
 
     camera.position.set(playerPos.x, EYE_HEIGHT, playerPos.z);
     camera.rotation.set(0, 0, 0);
@@ -1480,22 +1493,7 @@ function animate() {
       if (rp.mixer) {
         const speed = rp.mesh.position.distanceTo(rp.lastPos) / Math.max(dt, 0.001);
         rp.lastPos.copy(rp.mesh.position);
-        const wantState = speed > 0.3 ? 'walk' : 'idle';
-        const castClipDone = rp.current === 'cast' &&
-          rp.actions.cast.time >= rp.actions.cast.getClip().duration - 0.05;
-        if (castClipDone) {
-          // Resume whatever the player is *actually* doing right now (idle
-          // or walk) — not a hardcoded idle — so casting mid-stride doesn't
-          // cause a visible stutter back to standing still first.
-          rp.actions[wantState].reset().play();
-          rp.actions.cast.crossFadeTo(rp.actions[wantState], 0.15, false);
-          rp.current = wantState;
-        } else if (wantState !== rp.current && rp.current !== 'cast') {
-          rp.actions[wantState].reset().play();
-          rp.actions[rp.current].crossFadeTo(rp.actions[wantState], 0.2, false);
-          rp.current = wantState;
-        }
-        rp.mixer.update(dt);
+        advanceCharacterAnimation(rp, speed > 0.3 ? 'walk' : 'idle', dt);
       }
     }
 
