@@ -223,9 +223,37 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
-// First-person viewmodel is built later (needs mageTemplate/makeRemotePlayerModel,
-// defined further down) — see "First-person viewmodel" section.
+// First-person arms — parented to the camera so they follow the view.
+// (Tried swapping these for the real Ganfaul model as a viewmodel — reverted:
+// its ornate shoulder pauldrons sit too close to camera and dominate the
+// frame during the cast gesture instead of reading as a clean arm/hand.
+// Revisit with a dedicated FPS-arms asset or a vertex-filtered arm-only mesh
+// if this matters later.)
 scene.add(camera);
+const armMat = new THREE.MeshLambertMaterial({ color: 0x2a2347 });
+const handMat = new THREE.MeshLambertMaterial({ color: 0xc9a07a });
+function makeFpArm(side) {
+  const arm = new THREE.Group();
+  const forearm = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.42), armMat);
+  forearm.rotation.x = -0.25;
+  arm.add(forearm);
+  const hand = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 8), handMat);
+  hand.position.set(0, 0.05, -0.24);
+  arm.add(hand);
+  arm.position.set(side * 0.32, -0.32, -0.55);
+  camera.add(arm);
+  return arm;
+}
+const fpArmL = makeFpArm(-1);
+const fpArmR = makeFpArm(1);
+const orbMat = new THREE.MeshBasicMaterial({ color: 0xff6622 });
+const fpOrb = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), orbMat);
+fpOrb.position.set(0, 0.1, -0.3);
+fpArmR.add(fpOrb);
+const orbLight = new THREE.PointLight(0xff6622, 0.6, 2);
+fpOrb.add(orbLight);
+const FP_ARM_BASE_Y = -0.32, FP_ARM_BASE_Z = -0.55;
+let castRecoilT = Infinity, walkBobT = 0;
 
 // Ambient is deliberately dim — visibility comes from torches + the player's
 // own glow, not flat scene-wide lighting (needed for the vignette to read).
@@ -651,37 +679,6 @@ function advanceCharacterAnimation(entity, wantState, dt) {
     entity.current = wantState;
   }
   entity.mixer.update(dt);
-}
-
-// ============================================================
-// First-person viewmodel — the SAME Ganfaul model/rig/animations as the
-// third-person view, just parented to the camera instead of a world-space
-// body, so idle/walk/cast are visible up close instead of placeholder arms.
-// ============================================================
-let myViewmodel = null;
-let myHandGlow = null;
-function ensureMyViewmodel() {
-  if (myViewmodel || !mageTemplate || !myElement) return;
-  myViewmodel = makeRemotePlayerModel(ELEMENT_COLOR[myElement] || 0xffffff);
-  // Tuned empirically (this rig's own local bounding box, measured with the
-  // camera at identity rotation, put the head ~2.1 units above the root and
-  // the whole body only ~0.5 units deep front-to-back): Y puts the face
-  // right at the camera so the head itself is invisible (correct — you don't
-  // see your own head), Z nudges the root slightly *behind* the camera for
-  // the same reason. Known limitation: Ganfaul's ornate shoulder pauldrons
-  // are close enough to camera that they can dominate the frame during the
-  // full-body cast gesture rather than reading as a clean isolated hand/arm
-  // — this asset wasn't modeled as a dedicated FPS viewmodel. Still a real
-  // improvement over the old static placeholder (idle/walk are invisible as
-  // they should be, and cast now visibly moves), but not a AAA-clean result.
-  myViewmodel.object.position.set(0, -1.85, 0.2);
-  camera.add(myViewmodel.object);
-  let handBone = null;
-  myViewmodel.object.traverse(o => { if (o.isBone && /RightHand$/i.test(o.name)) handBone = o; });
-  if (handBone) {
-    myHandGlow = new THREE.PointLight(0xff6622, 0.6, 2);
-    handBone.add(myHandGlow);
-  }
 }
 
 // ============================================================
@@ -1273,8 +1270,9 @@ function updateSlotUI() {
       el.style.display = 'none';
     }
   }
-  if (mySpells[activeSlot] && myHandGlow) {
-    myHandGlow.color.setHex(mySpells[activeSlot].color);
+  if (mySpells[activeSlot]) {
+    orbMat.color.setHex(mySpells[activeSlot].color);
+    orbLight.color.setHex(mySpells[activeSlot].color);
   }
 }
 
@@ -1349,7 +1347,7 @@ function tryCast() {
   const spell = mySpells[activeSlot];
   cooldowns[activeSlot] = spell.cooldown; // cooldownMult from passives is applied client-side for feel only
   fovKickT = 0; // fov_kick_response trigger (re-trigger resets, no stacking)
-  triggerCast(myViewmodel);
+  castRecoilT = 0;
 
   raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
   const handWorld = camera.localToWorld(new THREE.Vector3(0.32, -0.25, -0.6));
@@ -1446,10 +1444,16 @@ function animate() {
     if (keys['ArrowDown'])  pitch -= keyLookSpeed * dt;
     pitch = Math.max(-PITCH_CLAMP, Math.min(PITCH_CLAMP, pitch));
 
-    // First-person viewmodel: same idle/walk/cast animation logic as
-    // remote players, just driven by local movement instead of network state.
-    ensureMyViewmodel();
-    if (myViewmodel) advanceCharacterAnimation(myViewmodel, isMoving ? 'walk' : 'idle', dt);
+    // First-person arm animation: walk bob + cast recoil on the right arm
+    if (isMoving) walkBobT += dt * 9;
+    const bobY = isMoving ? Math.sin(walkBobT) * 0.02 : 0;
+    castRecoilT += dt;
+    let recoilZ = 0;
+    if (castRecoilT < 0.08) recoilZ = 0.18 * (castRecoilT / 0.08);
+    else if (castRecoilT < 0.3) recoilZ = 0.18 * (1 - (castRecoilT - 0.08) / 0.22);
+    fpArmL.position.y = FP_ARM_BASE_Y + bobY;
+    fpArmR.position.y = FP_ARM_BASE_Y - bobY;
+    fpArmR.position.z = FP_ARM_BASE_Z + recoilZ;
 
     camera.position.set(playerPos.x, EYE_HEIGHT, playerPos.z);
     camera.rotation.set(0, 0, 0);
