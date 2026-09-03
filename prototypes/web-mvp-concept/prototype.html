@@ -27,6 +27,7 @@
   #menu, #elementPanel, #shopPanel { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
   #menu { background: radial-gradient(circle at center, #1a1530, #0a0a0f); }
   #elementPanel, #shopPanel { display: none; background: rgba(5,5,15,0.7); z-index: 5; }
+  #shopPanel { background: rgba(5,5,15,0.35); } /* lighter than #elementPanel — the hub room behind it should read as a real, different place */
   .panel { background: rgba(20,18,35,0.97); border: 1px solid #444; border-radius: 12px; padding: 32px 40px; color: #eee; text-align: center; min-width: 340px; max-width: 460px; }
   .panel h1 { margin: 0 0 4px; font-size: 26px; color: #c9b8ff; }
   .panel h2 { margin: 0 0 24px; font-size: 13px; font-weight: normal; color: #888; }
@@ -438,6 +439,14 @@ buildArena(3, ZONES[3].cx, ZONES[3].cz, ZONES[3].half, [[-10, -10], [10, -10], [
 // it reads as a different place, not just another dungeon floor. No enemies
 // ever spawn here (see buildLevelEnemies) so no maze/pillars are needed.
 buildArena('hub', ZONES.hub.cx, ZONES.hub.cz, ZONES.hub.half, [], 0x2a1a12);
+// Extra warm ambient glow so the hub reads as a clearly different, calmer
+// place than the dungeon's cold purple pentagram light — not just a reused
+// arena with a different mortar color.
+{
+  const hubGlow = new THREE.PointLight(0xffaa55, 1.1, ZONES.hub.half * 2.5, 1.5);
+  hubGlow.position.set(ZONES.hub.cx, 3.5, ZONES.hub.cz);
+  scene.add(hubGlow);
+}
 
 // ============================================================
 // Spawn/respawn pentagrams — one per zone, canvas-drawn glyph decal on the
@@ -1244,6 +1253,7 @@ function startShopPhase() {
   currentZone = 'hub'; // teleport the whole party into the dedicated progression room
   respawnLocalPlayer();
   if (currentLevel === MAX_LEVEL) hostLog('🏆 Босс повержен! Отряд возвращается в комнату прокачки.');
+  else hostLog('✨ Уровень зачищен! Отряд телепортирован в комнату прокачки.');
   broadcast({ t: 'shopOpen', zone: 'hub' });
   openShopUI();
 }
@@ -1728,6 +1738,12 @@ function openShopUI() {
   document.getElementById('shopPanel').style.display = 'flex';
   shopStructureSig = null; // force a structure rebuild on open
   renderShopUI();
+  // Pointer lock hides the real OS cursor and pins it at the screen center —
+  // clicks on shop buttons landed nowhere until the user pressed Esc to
+  // release the lock themselves. Release it ourselves so the shop is usable
+  // immediately; tryCast's mousedown handler already re-requests the lock
+  // the next time the player clicks in the 3D view.
+  if (document.pointerLockElement) document.exitPointerLock();
 }
 function closeShopUI() { document.getElementById('shopPanel').style.display = 'none'; }
 
