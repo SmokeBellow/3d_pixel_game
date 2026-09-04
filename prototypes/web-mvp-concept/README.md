@@ -36,10 +36,11 @@ server, no installation. This is the fastest path to the still-outstanding
 8. Everyone spawns/respawns at their current zone's pentagram — enemies
    physically cannot enter its ward radius.
 9. **Three dungeon levels, then the run loops**: level 1 is the original
-   arena; level 2 is a bigger arena with more/tankier enemies and a denser
-   pillar field (a maze-lite, since enemy AI has no corridor pathing — pillars
-   give the "navigate around obstacles" feel safely); level 3 is a single
-   boss with a large HP pool that alternates a point-blank slam AoE and a
+   arena; level 2 is a real corridor maze (9×9 grid, recursive-backtracker
+   generated — corridors, forks, dead ends, walls you actually collide
+   with) with more/tankier enemies that path through the corridors via BFS
+   to chase you instead of walking into a wall; level 3 is a single boss
+   with a large HP pool that alternates a point-blank slam AoE and a
    telegraphed charge dash. Clearing level 3 loops back to level 1.
 10. Each school's tier-2 ("advanced") spell has a real mechanical hook, not
     just bigger numbers: Fire's Огненный шар explodes on impact (visible
@@ -268,4 +269,22 @@ Real multi-client test pending.
   Fixed with a one-time "placed" flag: the very first position update for a
   remote player snaps the mesh directly to that position; only subsequent
   updates lerp (for smooth movement once they're actually walking around).
+- **Level 2 became a real maze** (recursive-backtracker over a 9×9 grid,
+  6-unit cells — matches the zone's own clamp bound almost exactly so
+  there's no open ring around the outside to just walk past the maze).
+  This needed three things the old pillar-field didn't: (1) real box
+  collision, shared by both the player and enemies, since walls actually
+  block movement now (pillars only ever push enemies out via a circle
+  check — players walked through them freely); (2) a small BFS pathfinder
+  for chasing enemies (the grid is tiny — 81 cells — so recomputing the
+  path every simulation tick per chasing enemy is cheap and avoids
+  stale-path bugs), since straight-line "walk at the player" steering
+  would just walk into a wall and get stuck; (3) maze-aware
+  spawn-point/wander-target selection (random open cells instead of an
+  arbitrary point or a ring formula, both of which could land inside a
+  wall). Verified in-session: a BFS path between opposite corners of the
+  maze is 57 cells long (proof the maze isn't trivially open), the maze is
+  fully connected, and a chasing enemy placed 2 cells away behind a wall
+  correctly detoured through the corridors and reached the player within
+  60 simulated seconds rather than getting stuck.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)

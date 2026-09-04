@@ -404,6 +404,139 @@ function buildArena(zoneId, cx, cz, half, relPillars, mortarHex) {
   for (const [x, z] of [[0, -w2 + 0.6], [0, w2 - 0.6], [-w2 + 0.6, 0], [w2 - 0.6, 0]]) makeTorch(cx + x, 2.4, cz + z, zoneId);
   ZONE_PILLARS[zoneId] = absPillars;
 }
+// ============================================================
+// Level 2 maze — a real recursive-backtracker corridor maze (corridors,
+// forks, dead ends) instead of a room with scattered pillars, per user
+// request. Needs its own box collision (reused for both player and
+// enemies) and a small BFS pathfinder so chasing enemies actually navigate
+// the corridors instead of walking straight into a wall and getting stuck.
+// ============================================================
+const ZONE_MAZE = {}; // zoneId -> { cells, cols, rows, cellSize, originX, originZ, walls: [{minX,maxX,minZ,maxZ}] }
+function generateMazeGrid(cols, rows) {
+  const cells = [];
+  for (let r = 0; r < rows; r++) {
+    const row = [];
+    for (let c = 0; c < cols; c++) row.push({ N: true, S: true, E: true, W: true, visited: false });
+    cells.push(row);
+  }
+  const DIRS = [['N', 0, -1, 'S'], ['S', 0, 1, 'N'], ['E', 1, 0, 'W'], ['W', -1, 0, 'E']];
+  const stack = [[0, 0]];
+  cells[0][0].visited = true;
+  while (stack.length) {
+    const [r, c] = stack[stack.length - 1];
+    const options = [];
+    for (const [dir, dc, dr, opp] of DIRS) {
+      const nr = r + dr, nc = c + dc;
+      if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && !cells[nr][nc].visited) options.push([dir, nr, nc, opp]);
+    }
+    if (options.length === 0) { stack.pop(); continue; }
+    const [dir, nr, nc, opp] = options[Math.floor(Math.random() * options.length)];
+    cells[r][c][dir] = false;
+    cells[nr][nc][opp] = false;
+    cells[nr][nc].visited = true;
+    stack.push([nr, nc]);
+  }
+  return cells;
+}
+function buildMaze(zoneId, cx, cz, cols, rows, cellSize, wallThickness, wallHeight) {
+  const cells = generateMazeGrid(cols, rows);
+  const originX = cx - (cols * cellSize) / 2, originZ = cz - (rows * cellSize) / 2;
+  const walls = [];
+  const mat = stoneMaterial(0x3a3542, 0x18161e, 2, 2);
+  function addWall(x, z, w, d) {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, wallHeight, d), mat);
+    mesh.position.set(x, wallHeight / 2, z);
+    scene.add(mesh);
+    walls.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2 });
+  }
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const cell = cells[r][c];
+      const x0 = originX + c * cellSize, z0 = originZ + r * cellSize;
+      const xc = x0 + cellSize / 2, zc = z0 + cellSize / 2;
+      // Only ever emit a wall from the side that "owns" it (N/W), except at
+      // the far edges (last row/col), so shared walls between two open
+      // cells aren't drawn twice.
+      if (cell.N) addWall(xc, z0, cellSize + wallThickness, wallThickness);
+      if (cell.W) addWall(x0, zc, wallThickness, cellSize + wallThickness);
+      if (r === rows - 1 && cell.S) addWall(xc, z0 + cellSize, cellSize + wallThickness, wallThickness);
+      if (c === cols - 1 && cell.E) addWall(x0 + cellSize, zc, wallThickness, cellSize + wallThickness);
+    }
+  }
+  // Sparse torches on a handful of walls for atmosphere — kept few and
+  // zone-tagged so setZoneLightsVisible() still culls them when you're
+  // elsewhere (see the light-churn/zone-culling perf fix).
+  for (let i = 0; i < Math.min(10, walls.length); i++) {
+    const w = walls[Math.floor(Math.random() * walls.length)];
+    makeTorch((w.minX + w.maxX) / 2, wallHeight + 0.5, (w.minZ + w.maxZ) / 2, zoneId);
+  }
+  ZONE_MAZE[zoneId] = { cells, cols, rows, cellSize, originX, originZ, walls };
+}
+function mazeCellAt(m, x, z) {
+  const c = Math.floor((x - m.originX) / m.cellSize);
+  const r = Math.floor((z - m.originZ) / m.cellSize);
+  if (r < 0 || r >= m.rows || c < 0 || c >= m.cols) return null;
+  return [r, c];
+}
+function mazeCellCenter(m, r, c) {
+  return [m.originX + (c + 0.5) * m.cellSize, m.originZ + (r + 0.5) * m.cellSize];
+}
+function mazeOpenNeighbors(m, r, c) {
+  const cell = m.cells[r][c];
+  const out = [];
+  if (!cell.N && r > 0) out.push([r - 1, c]);
+  if (!cell.S && r < m.rows - 1) out.push([r + 1, c]);
+  if (!cell.E && c < m.cols - 1) out.push([r, c + 1]);
+  if (!cell.W && c > 0) out.push([r, c - 1]);
+  return out;
+}
+// Small BFS — the grid is tiny (dozens of cells), so recomputing per chasing
+// enemy every simulation tick is cheap and avoids stale-path bugs.
+function mazeBFSPath(m, start, goal) {
+  if (!start || !goal) return null;
+  const key = (r, c) => r * m.cols + c;
+  if (key(start[0], start[1]) === key(goal[0], goal[1])) return [start];
+  const visited = new Set([key(start[0], start[1])]);
+  const prev = new Map();
+  const queue = [start];
+  for (let qi = 0; qi < queue.length; qi++) {
+    const [r, c] = queue[qi];
+    if (r === goal[0] && c === goal[1]) break;
+    for (const [nr, nc] of mazeOpenNeighbors(m, r, c)) {
+      const k = key(nr, nc);
+      if (!visited.has(k)) { visited.add(k); prev.set(k, [r, c]); queue.push([nr, nc]); }
+    }
+  }
+  const gk = key(goal[0], goal[1]);
+  if (!visited.has(gk)) return null; // shouldn't happen — the maze is always fully connected
+  const path = [goal];
+  let curKey = gk;
+  const startKey = key(start[0], start[1]);
+  while (curKey !== startKey) {
+    const p = prev.get(curKey);
+    if (!p) break;
+    path.push(p);
+    curKey = key(p[0], p[1]);
+  }
+  path.reverse();
+  return path;
+}
+function resolveCircleWallCollision(pos, radius, walls) {
+  for (const box of walls) {
+    const closestX = Math.max(box.minX, Math.min(pos.x, box.maxX));
+    const closestZ = Math.max(box.minZ, Math.min(pos.z, box.maxZ));
+    const dx = pos.x - closestX, dz = pos.z - closestZ;
+    const distSq = dx * dx + dz * dz;
+    if (distSq < radius * radius && distSq > 1e-9) {
+      const dist = Math.sqrt(distSq);
+      const push = radius - dist;
+      pos.x += (dx / dist) * push;
+      pos.z += (dz / dist) * push;
+    }
+  }
+}
+const PLAYER_RADIUS = 0.35;
+const ENEMY_RADIUS = 0.4;
 const PILLAR_CLEARANCE = 1.3; // pillar radius (~1) + a bit of enemy body radius
 const SPAWN_SAFE_RADIUS = 6;  // enemies can't enter the pentagram's ward — scaled up alongside the bigger pentagram
 // Enemy chase/wander above is pure steering with no obstacle awareness —
@@ -423,6 +556,8 @@ function clampEnemyToArena(e, zoneId) {
       e.mesh.position.z += (dz / dist) * push;
     }
   }
+  const maze = ZONE_MAZE[zoneId];
+  if (maze) resolveCircleWallCollision(e.mesh.position, ENEMY_RADIUS, maze.walls);
   const sdx = e.mesh.position.x - z.spawn[0], sdz = e.mesh.position.z - z.spawn[1];
   const sDistSq = sdx * sdx + sdz * sdz;
   if (sDistSq < SPAWN_SAFE_RADIUS * SPAWN_SAFE_RADIUS) {
@@ -435,16 +570,13 @@ function clampEnemyToArena(e, zoneId) {
 
 // Level 1 — unchanged layout from the original single-arena prototype.
 buildArena(1, ZONES[1].cx, ZONES[1].cz, ZONES[1].half, [[-8, -8], [8, -8], [-8, 8], [8, 8]]);
-// Level 2 — bigger footprint + a denser pillar field standing in for a simple
-// maze (enemies/players both path around pillars via the existing push-out
-// collision, so a literal corridor maze isn't needed to get the "navigate
-// around obstacles" feel without risking AI softlocks on interior walls).
-buildArena(2, ZONES[2].cx, ZONES[2].cz, ZONES[2].half, [
-  [-16, -16], [16, -16], [-16, 16], [16, 16],
-  [-8, -20], [8, -20], [-8, 20], [8, 20],
-  [-20, -8], [20, -8], [-20, 8], [20, 8],
-  [0, -10], [0, 10], [-12, 0], [12, 0],
-]);
+// Level 2 — a real corridor maze (recursive-backtracker: corridors, forks,
+// dead ends), per user request, instead of a room with scattered pillars.
+// 9x9 grid at 6 units/cell = 27 half-width, matching clampEnemyToArena's
+// own bound (half-1 = 27) almost exactly so there's no open ring around the
+// outside of the maze to just walk around it.
+buildArena(2, ZONES[2].cx, ZONES[2].cz, ZONES[2].half, []);
+buildMaze(2, ZONES[2].cx, ZONES[2].cz, 9, 9, 6, 0.6, 4);
 // Level 3 — open boss arena, just corner pillars so the boss has room to charge.
 buildArena(3, ZONES[3].cx, ZONES[3].cz, ZONES[3].half, [[-10, -10], [10, -10], [-10, 10], [10, 10]]);
 // Hub — the progression room between sessions. Distinct warm mortar tone so
@@ -793,17 +925,31 @@ function makeEnemy(id, x, z, maxHp, isBoss) {
            chargeState: null };
 }
 // Each level's enemy layout is zone-specific: level 1 keeps the original
-// ring formation; level 2 spreads more/stronger enemies across the bigger
-// maze-pillar arena; level 3 is a single boss standing at the arena center.
+// ring formation; level 2 scatters enemies across random open maze cells
+// (a ring formula would land them inside walls); level 3 is a single boss
+// standing at the arena center.
 function computeSpawnsForLevel(level) {
   const z = ZONES[level];
   if (level === 3) return [[z.cx, z.cz]]; // boss spawns dead center
-  const count = level === 2 ? Math.min(9 + Math.floor(Math.random() * 3), 14) : Math.min(4 + level, 12);
+  if (level === 2 && ZONE_MAZE[2]) {
+    const maze = ZONE_MAZE[2];
+    const count = Math.min(9 + Math.floor(Math.random() * 3), 14);
+    const cellList = [];
+    for (let r = 0; r < maze.rows; r++) for (let c = 0; c < maze.cols; c++) cellList.push([r, c]);
+    const spawns = [];
+    for (const [r, c] of shuffle(cellList)) {
+      if (spawns.length >= count) break;
+      const [x, zc] = mazeCellCenter(maze, r, c);
+      if (Math.hypot(x - z.spawn[0], zc - z.spawn[1]) > SPAWN_SAFE_RADIUS + 3) spawns.push([x, zc]);
+    }
+    return spawns;
+  }
+  const count = Math.min(4 + level, 12);
   const ringMax = z.half - 3;
   const spawns = [];
   for (let i = 0; i < count; i++) {
     const angle = (i / count) * Math.PI * 2;
-    const radius = Math.min(ringMax, 9 + (i % 3) * 2.2 + (level === 2 ? 6 : 0));
+    const radius = Math.min(ringMax, 9 + (i % 3) * 2.2);
     spawns.push([z.cx + Math.cos(angle) * radius, z.cz + Math.sin(angle) * radius * 0.9 - 3]);
   }
   return spawns;
@@ -1736,6 +1882,8 @@ function hostSimulate(dt) {
         if (target) { e.aiState = 'chase'; e.targetPeerId = target.pid; }
       }
 
+      const maze = ZONE_MAZE[currentLevel];
+
       if (e.aiState === 'chase') {
         const target = players.find(p => p.pid === e.targetPeerId);
         if (!target || target.downed || target.pos.distanceTo(e.home) > PATROL_LEASH_RADIUS) {
@@ -1743,13 +1891,30 @@ function hostSimulate(dt) {
           e.targetPeerId = null;
           e.wanderTarget.copy(e.home); // head home, then resume normal wander
         } else {
-          const toTarget = target.pos.clone().sub(e.mesh.position).setY(0);
-          const dist = toTarget.length();
-          if (dist > STOP_RANGE) {
-            toTarget.normalize();
-            e.mesh.position.addScaledVector(toTarget, ENEMY_CHASE_SPEED * dt);
+          // In a maze, walk the shortest corridor path to the player instead
+          // of a straight line that just walks into a wall — recomputed via
+          // BFS every tick (the grid is tiny, this is cheap).
+          let moveDir;
+          if (maze) {
+            const eCell = mazeCellAt(maze, e.mesh.position.x, e.mesh.position.z);
+            const tCell = mazeCellAt(maze, target.pos.x, target.pos.z);
+            const path = mazeBFSPath(maze, eCell, tCell);
+            if (path && path.length > 1) {
+              const [wr, wc] = path[1];
+              const [wx, wz] = mazeCellCenter(maze, wr, wc);
+              moveDir = new THREE.Vector3(wx - e.mesh.position.x, 0, wz - e.mesh.position.z);
+            } else {
+              moveDir = target.pos.clone().sub(e.mesh.position).setY(0);
+            }
+          } else {
+            moveDir = target.pos.clone().sub(e.mesh.position).setY(0);
           }
-          if (dist <= ATTACK_RANGE && e.attackCooldown <= 0) {
+          const trueDist = target.pos.distanceTo(e.mesh.position); // STOP/ATTACK decisions use real distance to the player, not the waypoint
+          if (trueDist > STOP_RANGE && moveDir.lengthSq() > 0.0025) {
+            moveDir.normalize();
+            e.mesh.position.addScaledVector(moveDir, ENEMY_CHASE_SPEED * dt);
+          }
+          if (trueDist <= ATTACK_RANGE && e.attackCooldown <= 0) {
             e.attackCooldown = MELEE_COOLDOWN;
             e.justAttacked = true;
             e.attackAnimT = 0; // host's own immediate visual; clients get it via 'attacking' flag
@@ -1760,10 +1925,27 @@ function hostSimulate(dt) {
 
       if (e.aiState === 'patrol') {
         if (e.mesh.position.distanceTo(e.wanderTarget) < 0.3) {
-          e.wanderTarget.set(e.home.x + (Math.random() - 0.5) * 6, 0, e.home.z + (Math.random() - 0.5) * 6);
+          if (maze) {
+            // Pick a random reachable neighboring cell instead of an
+            // arbitrary point that might be on the other side of a wall.
+            const cell = mazeCellAt(maze, e.mesh.position.x, e.mesh.position.z);
+            const neighbors = cell ? mazeOpenNeighbors(maze, cell[0], cell[1]) : [];
+            if (neighbors.length > 0) {
+              const [nr, nc] = neighbors[Math.floor(Math.random() * neighbors.length)];
+              const [nx, nz] = mazeCellCenter(maze, nr, nc);
+              e.wanderTarget.set(nx, 0, nz);
+            } else {
+              e.wanderTarget.copy(e.home);
+            }
+          } else {
+            e.wanderTarget.set(e.home.x + (Math.random() - 0.5) * 6, 0, e.home.z + (Math.random() - 0.5) * 6);
+          }
         }
-        const dir = e.wanderTarget.clone().sub(e.mesh.position).setY(0).normalize();
-        e.mesh.position.addScaledVector(dir, ENEMY_WANDER_SPEED * dt);
+        const dir = e.wanderTarget.clone().sub(e.mesh.position).setY(0);
+        if (dir.lengthSq() > 0.0025) {
+          dir.normalize();
+          e.mesh.position.addScaledVector(dir, ENEMY_WANDER_SPEED * dt);
+        }
       }
 
       clampEnemyToArena(e, currentLevel); // keep enemies inside the walls and off the pillars — chase/wander above has no collision of its own
@@ -2038,6 +2220,8 @@ function animate() {
       const z = ZONES[currentZone];
       playerPos.x = Math.max(z.cx - z.half, Math.min(z.cx + z.half, playerPos.x));
       playerPos.z = Math.max(z.cz - z.half, Math.min(z.cz + z.half, playerPos.z));
+      const maze = ZONE_MAZE[currentZone];
+      if (maze) resolveCircleWallCollision(playerPos, PLAYER_RADIUS, maze.walls);
     }
 
     // Arrow-key look (touchpad fallback) — scales with the same shared `sensitivity`
@@ -2270,6 +2454,7 @@ window.__debug = {
   hostResolveNova, hostResolveCast, get activeSlot() { return activeSlot; }, get cooldowns() { return cooldowns; },
   getPlayerPositions, get fx() { return fx; },
   get zoneLights() { return zoneLights; }, setZoneLightsVisible, get flashLightPool() { return flashLightPool; },
+  get ZONE_MAZE() { return ZONE_MAZE; }, mazeCellAt, mazeBFSPath, mazeCellCenter,
   get ZONE_PILLARS() { return ZONE_PILLARS; },
   get playerData() { return playerData; },
   get myGold() { return myGold; },
