@@ -19,10 +19,14 @@ server, no installation. This is the fastest path to the still-outstanding
    You only see your own school's spells; combos require teammates on other
    elements. **Joining friends wait in a lobby (with chat) until the host
    clicks Начать** — nobody enters the arena early.
-5. Controls: WASD move, mouse look (click to lock; also works unlocked for
-   touchpads, plus arrow keys), LMB or Space cast, wheel/Q/1-2-3 switch spell
-   slot, **E to interact with a shop stand**, **L toggles full brightness /
-   no fog**, **K instantly kills every enemy on the map** (debug cheats).
+5. **Third-person camera, orbiting behind your own character's head** (not
+   FPS — see Findings for why). Controls: WASD move, mouse look (click to
+   lock; also works unlocked for touchpads, plus arrow keys), LMB or Space
+   cast, wheel/Q/1-2-3 switch spell slot, **E to interact with a shop
+   stand**, **L toggles full brightness / no fog**, **K instantly kills
+   every enemy on the map** (debug cheats). You can't cast again (any spell
+   slot) until your cast animation finishes, even if the spell's own
+   cooldown is shorter.
 6. The combo: a Water player soaks an enemy, a Lightning player hits it —
    3x damage + zigzag chain to nearby enemies (Lightning renders as a jagged
    bolt now, not a straight line, but still lands exactly on the cursor).
@@ -123,13 +127,14 @@ Real multi-client test pending.
   + chat, shared with the host's lobby chat) until the host starts; late
   joiners after the game has started also get chat/lobby state correctly
 - **Player visuals**: Mixamo "Brady" model (idle/run/cast animations) tinted
-  per element for third-person/remote players; first-person view kept the
-  original placeholder box/sphere arms (a real FPS viewmodel was tried and
-  reverted — see Findings). Movement animation is a Running clip, not
+  per element, rendered for every player including yourself — see the
+  third-person camera above (two FPS-viewmodel attempts were tried and
+  reverted first — see Findings). Movement animation is a Running clip, not
   Walking — a deliberate swap. The cast gesture starts playing immediately
   on cast, but the actual shot (projectile/hitscan/nova) is deliberately
   delayed ~1.2s to fire exactly when the animation's arm reaches full
-  extension, not before
+  extension, not before. No spell (any slot) can be cast again until the
+  cast animation finishes, even if that spell's own cooldown is shorter
 - **Multi-zone world**: level 1/2/3 and the hub room are separate, far-apart
   spaces built by one shared `buildArena()` helper and coexisting statically
   in the same Three.js scene; moving between them is a teleport of `playerPos`
@@ -334,4 +339,27 @@ Real multi-client test pending.
   since the player can scroll to a different spell during the delay
   window. Verified in-session: both the projectile and lightning hitscan
   now land ~1.2s after `tryCast()` is called, matching the intended delay.
+- **Two FPS-viewmodel attempts, both reverted, then switched to third-person
+  instead.** Attempt 1 (Ganfaul): its shoulder pauldrons dominated the frame
+  at FPS-camera distance during the cast gesture. Attempt 2 (Brady, after
+  fixing the head-clipping issue by pushing the model back from the camera):
+  a *different* failure — the cast animation's extended arm reaches out
+  along roughly the same axis the camera looks down, so from directly
+  behind/inside that axis it foreshortens into a near-invisible point rather
+  than reading as a visible arm shape. Two different models, two different
+  specific symptoms, same root cause both times: a full-body third-person
+  asset simply glued to the camera doesn't work as a viewmodel without a
+  dedicated FPS rig or per-frame IK. Rather than sink more time chasing a
+  third camera-offset combination, switched the whole game to a
+  **third-person camera orbiting behind the player's own head** instead —
+  the player's body renders exactly like a remote player's (same
+  `makeRemotePlayerModel`, positioned at `playerPos` and yaw-rotated), and
+  the camera sits `THIRD_PERSON_DISTANCE` behind a head-height pivot, pulled
+  in by a raycast (`resolveThirdPersonCameraDistance`) when a wall or pillar
+  would otherwise be between the camera and the pivot. This sidesteps both
+  prior failure modes entirely (there's no camera-relative offset to tune —
+  the animation just plays on a normally-proportioned body seen from a
+  normal viewing angle) and was verified working — including the cast
+  animation itself, which is now genuinely visible — in the same
+  console-driven pass that confirmed camera pull-in near a wall.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)
