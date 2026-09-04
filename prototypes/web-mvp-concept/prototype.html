@@ -1000,6 +1000,68 @@ function spawnChainFx(centerEnemyId, targetIds) {
   fx.push({ obj: flash, life: 0.3 });
 }
 
+// ============================================================
+// Particle bursts — Kenney's CC0 Particle Pack (textures/particles/, see
+// LICENSE.txt there) gives every spell's impact real flying debris instead
+// of a single solid-color mesh. CPU-updated (position array rewritten per
+// frame) rather than a GPU shader — plenty fast at this particle count and
+// much simpler to read/tweak for a prototype.
+// ============================================================
+const particleTexLoader = new THREE.TextureLoader();
+const PARTICLE_TEX = {
+  flame: particleTexLoader.load('textures/particles/flame_05.png'),
+  glow: particleTexLoader.load('textures/particles/light_01.png'),
+  ring: particleTexLoader.load('textures/particles/circle_05.png'),
+};
+const particleBursts = []; // {points, velocities, life, maxLife, gravity}
+function spawnParticleBurst(pos, opts) {
+  const { count = 20, texture = PARTICLE_TEX.glow, color = 0xffffff, speed = 3,
+          upBias = 0.4, size = 0.35, life = 0.5, gravity = 0 } = opts;
+  const positions = new Float32Array(count * 3);
+  const velocities = [];
+  for (let i = 0; i < count; i++) {
+    positions[i * 3] = pos.x; positions[i * 3 + 1] = pos.y; positions[i * 3 + 2] = pos.z;
+    const dir = new THREE.Vector3((Math.random() - 0.5), (Math.random() - 0.5) + upBias, (Math.random() - 0.5)).normalize();
+    velocities.push(dir.multiplyScalar(speed * (0.4 + Math.random() * 0.6)));
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const mat = new THREE.PointsMaterial({
+    map: texture, color, size, transparent: true, opacity: 1,
+    depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true,
+  });
+  const points = new THREE.Points(geo, mat);
+  scene.add(points);
+  particleBursts.push({ points, velocities, life, maxLife: life, gravity });
+}
+function updateParticleBursts(dt) {
+  for (let i = particleBursts.length - 1; i >= 0; i--) {
+    const b = particleBursts[i];
+    b.life -= dt;
+    const pos = b.points.geometry.attributes.position.array;
+    const fallen = (b.maxLife - b.life);
+    for (let j = 0; j < b.velocities.length; j++) {
+      pos[j * 3] += b.velocities[j].x * dt;
+      pos[j * 3 + 1] += (b.velocities[j].y - b.gravity * fallen) * dt;
+      pos[j * 3 + 2] += b.velocities[j].z * dt;
+    }
+    b.points.geometry.attributes.position.needsUpdate = true;
+    b.points.material.opacity = Math.max(0, b.life / b.maxLife);
+    if (b.life <= 0) {
+      scene.remove(b.points);
+      b.points.geometry.dispose();
+      b.points.material.dispose();
+      particleBursts.splice(i, 1);
+    }
+  }
+}
+// Small spark/glow burst on any spell hit — Плеск/Искра/Разряд previously
+// had zero impact feedback beyond the HP bar moving. One shared function
+// keeps every school's basic hit consistent.
+function spawnImpactFx(pos, colorHex) {
+  spawnParticleBurst(pos, { count: 10, texture: PARTICLE_TEX.glow, color: colorHex, speed: 2.2, size: 0.22, life: 0.35, upBias: 0.3 });
+}
+
 // Fireball impact — an expanding, fading sphere at the hit point so
 // Огненный шар's splash damage actually reads as an explosion instead of
 // being invisible. growFrom/growTo drive the scale-up in the FX decay loop.
@@ -1016,6 +1078,8 @@ function spawnExplosionFx(pos, colorHex, radius) {
   flash.position.copy(pos);
   scene.add(flash);
   fx.push({ obj: flash, life: 0.3 });
+  spawnParticleBurst(pos, { count: 26, texture: PARTICLE_TEX.flame, color: colorHex, speed: 4.5, size: 0.6, life: 0.45, upBias: 0.6 });
+  spawnParticleBurst(pos, { count: 14, texture: PARTICLE_TEX.glow, color: 0xffcc66, speed: 3, size: 0.25, life: 0.5, upBias: 0.4, gravity: 4 });
 }
 
 // Волна's nova — an expanding ring on the floor centered on the caster,
@@ -1033,6 +1097,8 @@ function spawnNovaFx(centerPos, radius, colorHex) {
   flash.position.set(centerPos.x, 0.6, centerPos.z);
   scene.add(flash);
   fx.push({ obj: flash, life: 0.35 });
+  spawnParticleBurst(new THREE.Vector3(centerPos.x, 0.3, centerPos.z),
+    { count: 30, texture: PARTICLE_TEX.glow, color: colorHex, speed: radius * 2.2, size: 0.3, life: 0.4, upBias: 0.8, gravity: 6 });
 }
 
 // ============================================================
@@ -1385,6 +1451,14 @@ function hostResolveCast(msg, casterPid) {
     const blastCenter = e.mesh.position.clone().add(new THREE.Vector3(0, 1.1, 0));
     broadcast({ t: 'fx', kind: 'explosion', pos: blastCenter.toArray(), color: spell.color, radius: spell.splashRadius });
     spawnExplosionFx(blastCenter, spell.color, spell.splashRadius);
+  }
+  if (!(spell.school === 'Fire' && spell.tier === 2)) {
+    // Every other spell (Искра/Плеск/Разряд/Chain Shock) previously had no
+    // impact feedback beyond the HP bar moving — Огненный шар's own
+    // explosion above already covers this for Fire tier 2.
+    const hitCenter = e.mesh.position.clone().add(new THREE.Vector3(0, 1.1, 0));
+    broadcast({ t: 'fx', kind: 'impact', pos: hitCenter.toArray(), color: spell.color });
+    spawnImpactFx(hitCenter, spell.color);
   }
   hostApplyDamage(e, dmg, casterPid);
 
@@ -1775,6 +1849,7 @@ function handleFx(msg) {
   else if (msg.kind === 'proj') spawnProjectile(msg.from, msg.dir, msg.color, msg.speed, false, -1, msg.big);
   else if (msg.kind === 'explosion') spawnExplosionFx(new THREE.Vector3().fromArray(msg.pos), msg.color, msg.radius);
   else if (msg.kind === 'nova') spawnNovaFx(new THREE.Vector3().fromArray(msg.pos), msg.radius, msg.color);
+  else if (msg.kind === 'impact') spawnImpactFx(new THREE.Vector3().fromArray(msg.pos), msg.color);
   if (msg.pid && msg.pid !== myPeerId) triggerRemoteCast(msg.pid);
 }
 function tryCast() {
@@ -1983,6 +2058,7 @@ function animate() {
     if (f.obj.intensity !== undefined) f.obj.intensity = Math.max(0, f.life * 12);
     if (f.life <= 0) { scene.remove(f.obj); fx.splice(i, 1); }
   }
+  updateParticleBursts(dt);
 
   renderer.render(scene, camera);
 }

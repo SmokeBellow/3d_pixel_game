@@ -69,6 +69,12 @@ Real multi-client test pending.
 
 - FPS view (camera-system.md formulas), pointer-lock + touchpad/arrow-key
   look fallback, shared `sensitivity` value for mouse + keyboard look
+- **Real particle effects on every spell hit** — Kenney's CC0 Particle Pack
+  (`textures/particles/`, see its `LICENSE.txt`) drives a small CPU-updated
+  `THREE.Points` burst system (`spawnParticleBurst`/`updateParticleBursts`):
+  flame + ember burst on Огненный шар's explosion, droplets flying outward
+  on Волна's nova, and a small spark/glow burst on every other spell's hit
+  (Искра/Плеск/Разряд/Chain Shock) that previously had zero impact feedback
 - **One element per player, chosen at lobby** — each school has a 2-spell
   unlock ladder (basic → advanced), each with its own icon (✨💥 Fire,
   💧🌊 Water, ⚡🌩️ Lightning). Fire/Water = flying projectiles, Lightning =
@@ -193,4 +199,17 @@ Real multi-client test pending.
   gained an optional `growFrom`/`growTo` scale animation (used by both the
   explosion sphere and the nova ring) rather than adding a second effects
   system just for expanding shapes.
+- "Where do I get proper ability animations from?" — for a browser/Three.js
+  prototype this means particle textures, not skeletal animation (the caster
+  body already uses Mixamo). Went with Kenney's CC0 Particle Pack
+  (kenney.nl/assets/particle-pack) — free, no-attribution-required license,
+  and its sprites (soft flame, soft glow, ring) are designed exactly for
+  additive-blended billboard particles. Downloaded the ~15MB pack, kept only
+  the 4 textures actually used (~256KB), discarded the rest (Unity samples,
+  black-background variants, unused sprite variants) rather than committing
+  the whole archive.
+- Built a minimal CPU-side particle system (position array rewritten per
+  frame, no GPU shader) rather than pulling in a particle library — plenty
+  fast at the ~10-30 particles per burst this prototype uses, and much
+  easier to read/tweak than a shader-based system for a throwaway prototype.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)
