@@ -26,10 +26,14 @@ server, no installation. This is the fastest path to the still-outstanding
    stand**, **L toggles full brightness / no fog**, **K instantly kills
    every enemy on the map** (debug cheats). You can't cast again (any spell
    slot) until your cast animation finishes, even if the spell's own
-   cooldown is shorter.
-6. The combo: a Water player soaks an enemy, a Lightning player hits it —
-   3x damage + zigzag chain to nearby enemies (Lightning renders as a jagged
-   bolt now, not a straight line, but still lands exactly on the cursor).
+   cooldown is shorter. **Every spell is a self-centered area effect around
+   your own character — there is no cursor/crosshair aiming at all**, so the
+   third-person camera is purely for seeing your surroundings, not for
+   lining up a shot.
+6. The combo: a Water player soaks every enemy in their own area with wet,
+   a Lightning player's area hits the same spot — 3x damage + chain to
+   nearby enemies, no aiming required by either player, just standing near
+   the target.
 7. Clear all enemies in a level → the whole party is teleported into a
    dedicated **hub/progression room** (its own space, not a UI overlay over
    the dungeon). The shop is **physical, not a modal**: walk up to a glowing
@@ -74,8 +78,9 @@ Real multi-client test pending.
 
 ## Features
 
-- FPS view (camera-system.md formulas), pointer-lock + touchpad/arrow-key
-  look fallback, shared `sensitivity` value for mouse + keyboard look
+- Third-person-behind-the-head camera (see Findings for why, not FPS),
+  pointer-lock + touchpad/arrow-key look fallback, shared `sensitivity`
+  value for mouse + keyboard look
 - **Real particle effects on every spell hit** — Kenney's CC0 Particle Pack
   (`textures/particles/`, see its `LICENSE.txt`) drives a small CPU-updated
   `THREE.Points` burst system (`spawnParticleBurst`/`updateParticleBursts`):
@@ -84,8 +89,11 @@ Real multi-client test pending.
   (Искра/Плеск/Разряд/Chain Shock) that previously had zero impact feedback
 - **One element per player, chosen at lobby** — each school has a 2-spell
   unlock ladder (basic → advanced), each with its own icon (✨💥 Fire,
-  💧🌊 Water, ⚡🌩️ Lightning). Fire/Water = flying projectiles, Lightning =
-  hitscan; Water→Lightning = Chain Shock synergy (x3 dmg + chain)
+  💧🌊 Water, ⚡🌩️ Lightning). **Every spell is a self-centered area effect
+  around the caster's own position** — no cursor aiming, no projectiles or
+  hitscan raycasts (see Findings — this replaced the original
+  aimed-projectile/hitscan design); Water→Lightning = Chain Shock synergy
+  (x3 dmg + chain to nearby enemies)
 - **Spell leveling by use**: only landed hits count; damage scales +12%/level
 - **Gold** (random 5-15 per kill) and **shared party XP/level** — clearing
   a level guarantees enough XP for the next party level; leveling raises
@@ -121,8 +129,6 @@ Real multi-client test pending.
   external image file. Enemies cannot enter its `SPAWN_SAFE_RADIUS` (6) ward
 - **Player color = element color** (each school has a fixed color, not a
   round-robin per-connection color)
-- **Lightning renders as a zigzag bolt** (hit detection unchanged — still a
-  straight raycast from the camera; only the visual is jagged)
 - **Lobby with chat**: joining players see a waiting room (with player list
   + chat, shared with the host's lobby chat) until the host starts; late
   joiners after the game has started also get chat/lobby state correctly
@@ -130,11 +136,17 @@ Real multi-client test pending.
   per element, rendered for every player including yourself — see the
   third-person camera above (two FPS-viewmodel attempts were tried and
   reverted first — see Findings). Movement animation is a Running clip, not
-  Walking — a deliberate swap. The cast gesture starts playing immediately
-  on cast, but the actual shot (projectile/hitscan/nova) is deliberately
-  delayed ~1.2s to fire exactly when the animation's arm reaches full
-  extension, not before. No spell (any slot) can be cast again until the
-  cast animation finishes, even if that spell's own cooldown is shorter
+  Walking — a deliberate swap, played at a tuned `MOVE_ANIM_TIMESCALE` (0.6)
+  so the leg-cycle roughly matches actual ground speed instead of sliding.
+  There's only one directional run clip, so the body faces whichever
+  direction the player is actually moving (forward/backward/strafing), not
+  always the camera's aim direction — it only snaps back to facing the aim
+  direction once the player stops (see Findings). The cast gesture starts
+  playing immediately on cast, but the actual area-effect resolution is
+  deliberately delayed ~1.2s to fire exactly when the animation's arm
+  reaches full extension, not before. No spell (any slot) can be cast again
+  until the cast animation finishes, even if that spell's own cooldown is
+  shorter
 - **Multi-zone world**: level 1/2/3 and the hub room are separate, far-apart
   spaces built by one shared `buildArena()` helper and coexisting statically
   in the same Three.js scene; moving between them is a teleport of `playerPos`
@@ -211,7 +223,10 @@ Real multi-client test pending.
   caster's own authoritative position instead. The generic FX decay loop
   gained an optional `growFrom`/`growTo` scale animation (used by both the
   explosion sphere and the nova ring) rather than adding a second effects
-  system just for expanding shapes.
+  system just for expanding shapes. **Superseded** by the full AoE rewrite
+  below — every spell now uses this same self-centered-area shape, so
+  `castNova`/`hostResolveNova` were merged into the single `castArea`/
+  `hostResolveArea` path rather than existing as a special case.
 - "Where do I get proper ability animations from?" — for a browser/Three.js
   prototype this means particle textures, not skeletal animation (the caster
   body already uses Mixamo). Went with Kenney's CC0 Particle Pack
@@ -362,4 +377,52 @@ Real multi-client test pending.
   normal viewing angle) and was verified working — including the cast
   animation itself, which is now genuinely visible — in the same
   console-driven pass that confirmed camera pull-in near a wall.
+- **Removed cursor aiming entirely — every spell converted to a
+  self-centered area effect.** With only one Running clip and a third-person
+  camera (no crosshair concept that made sense anymore), aiming had become
+  vestigial. `SCHOOL_SPELLS` dropped `speed`/`splashRadius`/`splashDmgMult`/
+  `selfNova` in favor of one uniform `radius` field per spell; the separate
+  `hostResolveCast` (aimed) and `hostResolveNova` (self-nova) resolvers were
+  merged into a single `hostResolveArea(msg, casterPid)` keyed off the
+  caster's own authoritative position from `getPlayerPositions()` — Fire/
+  Water/Lightning AoE damage, Water's wet application, and the Water→
+  Lightning Chain Shock synergy (including its own inner chain-radius loop)
+  all live in this one function now. All now-dead projectile/hitscan
+  infrastructure was deleted outright rather than left unreachable:
+  `spawnTracer`, `spawnLightningBolt`, `spawnProjectile`, `resolveHit`,
+  `updateProjectiles`, and the `raycaster`/`projectiles` globals. Verified
+  via direct console calls to `hostResolveArea`: a lone wet+Lightning hit
+  deals exactly `dmg × SYNERGY_MULT` (10 × 3 = 30), and two wet enemies
+  within chain radius of each other each end up taking their own synergy
+  hit *plus* the other's chain hit (30 + 15 = 45 each, from 100 → 55) —
+  confirms the chain math isn't double-counting. Also confirmed the full
+  `tryCast()` → delayed `castArea` dispatch pipeline actually lands damage
+  ~1.2s after the button press, not just the resolver function in
+  isolation. **Caveat found while testing**: enemies run their own
+  patrol/chase AI every frame, so directly poking `enemy.mesh.position` in
+  a console test gets silently overwritten a frame or two later by that
+  AI — any future scripted combat test needs to move the *player* next to
+  a stationary/tracked enemy position (or hook the AI's own target state),
+  not just teleport the enemy mesh and assume it'll stay put across a
+  multi-frame delay.
+- **"Character always runs forward even when strafing or backing up"** —
+  there's only one directional (forward) Running clip, no strafe/backward
+  variants, so playing it while moving sideways looked like the character
+  was skating rather than running. Fixed without any new animation assets:
+  the body's yaw now tracks the actual movement vector
+  (`Math.atan2(-move.x, -move.z)`) while moving, and only snaps back to the
+  camera/aim yaw once movement stops — matters for the cast gesture, which
+  should still visibly "throw" toward where the player is looking once
+  they've stopped to cast. Verified by dispatching synthetic `keydown`
+  events (`KeyW`/`KeyS`/`KeyD`) at the `window` (the game's listener is on
+  `window`, not `document` — a raw `document.dispatchEvent` doesn't reach
+  it) and reading `ownBodyGroup.rotation.y`: 0° holding W, 180° holding S,
+  -90° holding D, snapping back to 0° (the current yaw) on release.
+- **"Run animation plays faster than the character actually moves"**
+  (foot-sliding) — added a `MOVE_ANIM_TIMESCALE` (0.6) applied to the walk
+  `AnimationAction`, tuned by eye against `MOVE_SPEED`. This is a first-pass
+  estimate, not a derived value — Mixamo's in-place Running clip carries no
+  root-motion data to compute the "correct" scale analytically from, so
+  it's a candidate to revisit if it still reads as sliding during a real
+  playtest.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)
