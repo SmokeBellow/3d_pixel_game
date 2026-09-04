@@ -24,18 +24,14 @@ server, no installation. This is the fastest path to the still-outstanding
    is preserved on the `third-person-camera-aoe` branch, but was reverted
    back to first-person per user request). Controls: WASD move, mouse look
    (click to lock; also works unlocked for touchpads, plus arrow keys), LMB
-   or Space cast, wheel/Q/1-2-3 switch spell slot, **E to interact with a
-   shop stand**, **L toggles full brightness / no fog**, **K instantly kills
-   every enemy on the map** (debug cheats). You can't cast again (any spell
-   slot) until your cast animation finishes, even if the spell's own
-   cooldown is shorter. **Every spell is a self-centered area effect around
-   your own character — there is no cursor/crosshair aiming at all**; the
-   crosshair on screen is now purely a reticle for orientation, not an aim
-   point.
-6. The combo: a Water player soaks every enemy in their own area with wet,
-   a Lightning player's area hits the same spot — 3x damage + chain to
-   nearby enemies, no aiming required by either player, just standing near
-   the target.
+   or Space cast (aimed at the crosshair — see below), wheel/Q/1-2-3 switch
+   spell slot, **E to interact with a shop stand**, **L toggles full
+   brightness / no fog**, **K instantly kills every enemy on the map**
+   (debug cheats). You can't cast again (any spell slot) until your cast
+   animation finishes, even if the spell's own cooldown is shorter.
+6. The combo: a Water player soaks an enemy, a Lightning player hits it —
+   3x damage + zigzag chain to nearby enemies (Lightning renders as a jagged
+   bolt, not a straight line, but still lands exactly on the cursor).
 7. Clear all enemies in a level → the whole party is teleported into a
    dedicated **hub/progression room** (its own space, not a UI overlay over
    the dungeon). The shop is **physical, not a modal**: walk up to a glowing
@@ -91,11 +87,11 @@ Real multi-client test pending.
   (Искра/Плеск/Разряд/Chain Shock) that previously had zero impact feedback
 - **One element per player, chosen at lobby** — each school has a 2-spell
   unlock ladder (basic → advanced), each with its own icon (✨💥 Fire,
-  💧🌊 Water, ⚡🌩️ Lightning). **Every spell is a self-centered area effect
-  around the caster's own position** — no cursor aiming, no projectiles or
-  hitscan raycasts (see Findings — this replaced the original
-  aimed-projectile/hitscan design); Water→Lightning = Chain Shock synergy
-  (x3 dmg + chain to nearby enemies)
+  💧🌊 Water, ⚡🌩️ Lightning). Fire/Water = flying projectiles, Lightning =
+  hitscan, both aimed at the crosshair (see Findings — a self-centered
+  no-aim AoE version was tried in between and reverted); Волна (Water
+  tier 2) is the one exception, a self-centered nova around the caster with
+  no aiming. Water→Lightning = Chain Shock synergy (x3 dmg + chain)
 - **Spell leveling by use**: only landed hits count; damage scales +12%/level
 - **Gold** (random 5-15 per kill) and **shared party XP/level** — clearing
   a level guarantees enough XP for the next party level; leveling raises
@@ -131,6 +127,8 @@ Real multi-client test pending.
   external image file. Enemies cannot enter its `SPAWN_SAFE_RADIUS` (6) ward
 - **Player color = element color** (each school has a fixed color, not a
   round-robin per-connection color)
+- **Lightning renders as a zigzag bolt** (hit detection unchanged — still a
+  straight raycast from the camera; only the visual is jagged)
 - **Lobby with chat**: joining players see a waiting room (with player list
   + chat, shared with the host's lobby chat) until the host starts; late
   joiners after the game has started also get chat/lobby state correctly
@@ -141,10 +139,10 @@ Real multi-client test pending.
   experiments were both tried and reverted). The cast gesture starts
   playing immediately on cast (a simple arm-recoil animation in first
   person; the full Mixamo cast clip for anyone watching you), but the
-  actual area-effect resolution is deliberately delayed ~1.2s to fire
-  exactly when the animation's arm reaches full extension for onlookers,
-  not before. No spell (any slot) can be cast again until the cast
-  animation finishes, even if that spell's own cooldown is shorter.
+  actual shot (projectile/hitscan/nova) is deliberately delayed ~1.2s to
+  fire exactly when the animation's arm reaches full extension for
+  onlookers, not before. No spell (any slot) can be cast again until the
+  cast animation finishes, even if that spell's own cooldown is shorter.
   Remote players' movement animation is a Running clip, not Walking — a
   deliberate swap, played at a tuned `MOVE_ANIM_TIMESCALE` (0.6) so the
   leg-cycle roughly matches actual ground speed instead of sliding; their
@@ -462,4 +460,26 @@ Real multi-client test pending.
   the local player's own body existing, so no regression was expected, and
   a scripted cast against a repositioned enemy confirmed a landed hit in
   first-person view exactly like the earlier third-person test.
+- **"Bring back ranged attacks"** — after returning to first-person view, the
+  self-centered-AoE-only combat (no aiming at all) no longer fit: aiming is
+  natural again in first person, so it was reverted back to the original
+  aimed design. Fire/Water are flying projectiles again (`spawnProjectile`/
+  `updateProjectiles`, hit-tested against enemies on impact), Lightning is
+  an instant hitscan raycast against the crosshair (`spawnLightningBolt` for
+  the zigzag visual), and `hostResolveArea`/`castArea` were split back into
+  the original two paths: `hostResolveCast`/`'cast'` for anything that hits
+  a specific raycast-resolved enemy, and `hostResolveNova`/`'castNova'` kept
+  as the one deliberate exception — Волна (Water tier 2) stays a
+  self-centered nova with no aiming, since "instant burst around yourself"
+  is its whole mechanical identity, not a workaround for missing aim
+  support. `SCHOOL_SPELLS` got its `speed`/`splashRadius`/`splashDmgMult`/
+  `selfNova` fields back (the interim `radius`-only shape is gone). The
+  self-centered-AoE version and the third-person camera it was designed
+  around are both still preserved on the `third-person-camera-aoe` branch.
+  Verified via scripted casts against a repositioned enemy: Fire tier-1
+  (Искра) projectile lands for exactly its base 15 dmg, Lightning hitscan
+  for 12 dmg, Fire tier-2 (Огненный шар) for its base 22 dmg with splash
+  wired for enemies within `splashRadius`, and Water tier-2 (Волна) hits
+  every enemy in `selfNova` radius with damage + wet and no aiming
+  involved — all four paths confirmed with zero console errors.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)
