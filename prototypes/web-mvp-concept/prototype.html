@@ -1158,6 +1158,29 @@ function randomCode() {
 }
 function peerIdFor(code) { return 'covenant-mages-mvp-' + code; }
 
+// PeerJS's default Peer() config ships STUN only, no TURN. STUN alone works
+// fine for two browsers on the same machine/LAN (which is all this was
+// tested with) but fails for real players behind symmetric NAT or a
+// restrictive router/firewall — common on real home/office networks — since
+// there's no relay fallback once direct P2P punch-through fails. That
+// failure isn't always a clean "couldn't connect": a struggling ICE
+// negotiation can also retry/renegotiate in the background and show up as
+// periodic freezes rather than an outright error. OpenRelay's public demo
+// TURN server (metered.ca/tools/openrelay, no signup) fixes both — swap for
+// your own TURN credentials if this shared demo one gets rate-limited.
+const PEER_ICE_CONFIG = {
+  config: {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun.relay.metered.ca:80' },
+      { urls: 'turn:global.relay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:global.relay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:global.relay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+    ],
+  },
+};
+
 function broadcast(msg, exceptConn) {
   const s = JSON.stringify(msg);
   for (const c of connections) if (c.open && c !== exceptConn) c.send(s);
@@ -1166,7 +1189,7 @@ function broadcast(msg, exceptConn) {
 function startHost() {
   const code = randomCode();
   isHost = true;
-  peer = new Peer(peerIdFor(code));
+  peer = new Peer(peerIdFor(code), PEER_ICE_CONFIG);
   peer.on('open', id => {
     myPeerId = id;
     document.getElementById('panelMain').style.display = 'none';
@@ -1198,7 +1221,7 @@ function startHost() {
 
 function joinGame(code) {
   isHost = false;
-  peer = new Peer();
+  peer = new Peer(PEER_ICE_CONFIG);
   peer.on('open', () => {
     const conn = peer.connect(peerIdFor(code.toUpperCase()), { reliable: true });
     let opened = false;
@@ -1217,7 +1240,7 @@ function joinGame(code) {
       alert('Хост отключился — сессия завершена.'); // ADR-0001 host-disconnect policy
       location.reload();
     });
-    setTimeout(() => { if (!opened) showMenuError('Не удалось подключиться. Проверь код.'); }, 8000);
+    setTimeout(() => { if (!opened) showMenuError('Не удалось подключиться. Проверь код.'); }, 15000); // TURN relay negotiation (needed across real networks) is slower than same-LAN direct P2P
   });
   peer.on('error', e => showMenuError('Ошибка сети: ' + e.type));
 }

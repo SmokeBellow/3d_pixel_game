@@ -52,7 +52,9 @@ server, no installation. This is the fastest path to the still-outstanding
 
 Networking: PeerJS (WebRTC data channels), P2P, host-authoritative — mirrors
 ADR-0001's listen-server topology in spirit. Host disconnect ends the session
-(same policy as ADR-0001).
+(same policy as ADR-0001). Uses explicit STUN + TURN servers (see Findings)
+so real players on different networks can actually connect, not just two
+browsers on the same machine.
 
 ## Status
 
@@ -212,4 +214,24 @@ Real multi-client test pending.
   frame, no GPU shader) rather than pulling in a particle library — plenty
   fast at the ~10-30 particles per burst this prototype uses, and much
   easier to read/tweak than a shader-based system for a throwaway prototype.
+- **"Couldn't connect from two different computers, worked fine as two
+  browsers on one machine"** + **"lags/freezes with 2+ players"** — same
+  root cause: `new Peer()` was using PeerJS's default config, which ships
+  STUN only, no TURN. STUN-only WebRTC works for two browsers on one
+  machine (or a simple/permissive LAN) because direct P2P punch-through is
+  trivial there, but fails outright for real players behind symmetric NAT
+  or a restrictive router/firewall — there's no relay fallback once direct
+  connection attempts fail. A struggling ICE negotiation doesn't always
+  fail cleanly either; it can retry/renegotiate in the background, which
+  likely explains the freezing — not proven from this environment (no
+  second physical machine to test with), but consistent with both symptoms
+  appearing together and getting worse with more peers. Fixed by adding an
+  explicit `iceServers` list (multiple STUN + OpenRelay's public demo TURN
+  server, metered.ca/tools/openrelay — free, no signup) to both `new
+  Peer()` calls, and raising the join timeout from 8s to 15s since TURN
+  relay negotiation is slower than same-LAN direct P2P. The demo TURN
+  server is shared/public and could get rate-limited under real load — swap
+  in your own free TURN credentials (metered.ca or Twilio) if that happens.
+  **Needs a real two-computer retest to confirm — could not be verified
+  from this environment.**
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)
