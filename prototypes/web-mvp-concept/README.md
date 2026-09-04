@@ -215,23 +215,45 @@ Real multi-client test pending.
   fast at the ~10-30 particles per burst this prototype uses, and much
   easier to read/tweak than a shader-based system for a throwaway prototype.
 - **"Couldn't connect from two different computers, worked fine as two
-  browsers on one machine"** + **"lags/freezes with 2+ players"** — same
-  root cause: `new Peer()` was using PeerJS's default config, which ships
-  STUN only, no TURN. STUN-only WebRTC works for two browsers on one
-  machine (or a simple/permissive LAN) because direct P2P punch-through is
-  trivial there, but fails outright for real players behind symmetric NAT
-  or a restrictive router/firewall — there's no relay fallback once direct
-  connection attempts fail. A struggling ICE negotiation doesn't always
-  fail cleanly either; it can retry/renegotiate in the background, which
-  likely explains the freezing — not proven from this environment (no
-  second physical machine to test with), but consistent with both symptoms
-  appearing together and getting worse with more peers. Fixed by adding an
-  explicit `iceServers` list (multiple STUN + OpenRelay's public demo TURN
-  server, metered.ca/tools/openrelay — free, no signup) to both `new
-  Peer()` calls, and raising the join timeout from 8s to 15s since TURN
-  relay negotiation is slower than same-LAN direct P2P. The demo TURN
-  server is shared/public and could get rate-limited under real load — swap
-  in your own free TURN credentials (metered.ca or Twilio) if that happens.
-  **Needs a real two-computer retest to confirm — could not be verified
-  from this environment.**
+  browsers on one machine"** — `new Peer()` was using PeerJS's default
+  config, which ships STUN only, no TURN. STUN-only WebRTC works for two
+  browsers on one machine (or a simple/permissive LAN) because direct P2P
+  punch-through is trivial there, but fails outright for real players
+  behind symmetric NAT or a restrictive router/firewall — no relay fallback
+  once direct connection attempts fail. Fixed by adding an explicit
+  `iceServers` list (multiple STUN + OpenRelay's public demo TURN server,
+  metered.ca/tools/openrelay — free, no signup) to both `new Peer()` calls,
+  and raising the join timeout from 8s to 15s since TURN relay negotiation
+  is slower than same-LAN direct P2P. The demo TURN server is shared/public
+  and could get rate-limited under real load — swap in your own free TURN
+  credentials (metered.ca or Twilio) if that happens. **Needs a real
+  two-computer retest to confirm — could not be verified from this
+  environment (no second physical machine).**
+- **"Lags/freezes, especially with 2+ players" — initially misdiagnosed as
+  the same networking issue above; it wasn't** (the user retested on one
+  machine, where TURN is never needed, and the freezing was still there).
+  Root cause: every spell hit was adding a `THREE.PointLight` to the scene
+  for its impact flash and `scene.remove()`-ing it a fraction of a second
+  later (explosion/nova/bolt/chain flashes, plus **every single
+  Fire/Water projectile** — the most frequent case, since that's the basic
+  attack). Adding or removing a light forces WebGL to recompile every lit
+  material's shader program — a genuinely expensive synchronous stall, and
+  it happens more often the more players are actively casting. Fixed two
+  ways: (1) dropped the projectile's point light entirely — the unlit
+  glowing sphere already reads as "glowing" without it; (2) added an
+  8-light pool for the remaining impact flashes (bolt/chain/explosion/nova)
+  — "spawning" a flash now just repositions/re-lights an existing pooled
+  light instead of adding a new one, so the scene's light count never
+  changes after startup. Verified in-session: casting Огненный шар 5 times
+  in a row now leaves the scene's total light count unchanged (62 before,
+  62 after) — previously each cast would have added and removed one.
+  Also found and fixed a related but separate issue while investigating:
+  all 4 zones' ~50 torch/pentagram/shop-stand lights were permanently
+  live simultaneously (a WebGL forward renderer evaluates every scene
+  light for every lit fragment regardless of visibility), even though the
+  player is only ever in one zone at a time. Added `setZoneLightsVisible()`,
+  toggled at zone transitions (not per frame, to avoid re-triggering the
+  same recompile problem), cutting the always-on light count from 50 down
+  to whichever zone's own lights are actually relevant (9-21 depending on
+  the zone).
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)

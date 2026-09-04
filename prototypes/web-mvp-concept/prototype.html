@@ -347,8 +347,23 @@ function stoneMaterial(baseHex, mortarHex, repeatX, repeatY) {
 // a world-space offset (cx, cz). All zones coexist statically in the same
 // scene; "traveling" between them is just teleporting playerPos elsewhere.
 // ============================================================
+// All 4 zones' torches/pentagrams/lights coexist statically in the scene
+// (see the zones comment above), but a WebGL forward renderer evaluates
+// EVERY light in the scene for every lit fragment regardless of whether the
+// player can currently see it — with ~50 always-on PointLights across 4
+// zones that's real, constant overhead. zoneLights buckets every such light
+// by owning zone so setZoneLightsVisible() can keep only the current zone's
+// lights actually visible (toggled at zone transitions, not per frame).
+const zoneLights = {}; // zoneId -> THREE.Light[]
+function registerZoneLight(zoneId, light) { (zoneLights[zoneId] = zoneLights[zoneId] || []).push(light); }
+function setZoneLightsVisible(zoneId) {
+  for (const key of Object.keys(zoneLights)) {
+    const visible = String(key) === String(zoneId);
+    for (const light of zoneLights[key]) light.visible = visible;
+  }
+}
 const torches = [];
-function makeTorch(x, y, z) {
+function makeTorch(x, y, z, zoneId) {
   const group = new THREE.Group();
   const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.6, 6), new THREE.MeshLambertMaterial({ color: 0x3a2a1a }));
   stick.position.y = 0.3;
@@ -362,6 +377,7 @@ function makeTorch(x, y, z) {
   group.position.set(x, y, z);
   scene.add(group);
   torches.push({ flame, light, phase: Math.random() * 10, baseIntensity: 2.4 });
+  if (zoneId !== undefined) registerZoneLight(zoneId, light);
 }
 const pillarMat = stoneMaterial(0x4a4358, 0x201e28, 2, 3);
 function buildArena(zoneId, cx, cz, half, relPillars, mortarHex) {
@@ -383,9 +399,9 @@ function buildArena(zoneId, cx, cz, half, relPillars, mortarHex) {
     const p = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 1, 5, 8), pillarMat);
     p.position.set(x, 2.5, z);
     scene.add(p);
-    makeTorch(x, 4.6, z);
+    makeTorch(x, 4.6, z, zoneId);
   }
-  for (const [x, z] of [[0, -w2 + 0.6], [0, w2 - 0.6], [-w2 + 0.6, 0], [w2 - 0.6, 0]]) makeTorch(cx + x, 2.4, cz + z);
+  for (const [x, z] of [[0, -w2 + 0.6], [0, w2 - 0.6], [-w2 + 0.6, 0], [w2 - 0.6, 0]]) makeTorch(cx + x, 2.4, cz + z, zoneId);
   ZONE_PILLARS[zoneId] = absPillars;
 }
 const PILLAR_CLEARANCE = 1.3; // pillar radius (~1) + a bit of enemy body radius
@@ -442,6 +458,7 @@ buildArena('hub', ZONES.hub.cx, ZONES.hub.cz, ZONES.hub.half, [], 0x2a1a12);
   const hubGlow = new THREE.PointLight(0xffaa55, 1.1, ZONES.hub.half * 2.5, 1.5);
   hubGlow.position.set(ZONES.hub.cx, 3.5, ZONES.hub.cz);
   scene.add(hubGlow);
+  registerZoneLight('hub', hubGlow);
 }
 
 // ============================================================
@@ -465,6 +482,7 @@ function makeShopStand(x, z, colorHex) {
   group.add(light);
   group.position.set(x, 0, z);
   scene.add(group);
+  registerZoneLight('hub', light);
   return { group, orb, x, z, labelY: 1.85 };
 }
 function makeContinuePortal(x, z) {
@@ -477,6 +495,7 @@ function makeContinuePortal(x, z) {
   group.add(light);
   group.position.set(x, 0, z);
   scene.add(group);
+  registerZoneLight('hub', light);
   return { group, ring, x, z, labelY: 2.5 };
 }
 const shopBuyStand = makeShopStand(ZONES.hub.cx - 3, ZONES.hub.cz - 3, 0xffaa33);
@@ -671,7 +690,7 @@ function makePentagramTexture(size) {
   return new THREE.CanvasTexture(cnv);
 }
 const pentagrams = [];
-function makePentagram(x, z) {
+function makePentagram(x, z, zoneId) {
   const mat = new THREE.MeshBasicMaterial({ map: makePentagramTexture(), transparent: true, depthWrite: false });
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 3.2), mat);
   mesh.rotation.x = -Math.PI / 2;
@@ -681,8 +700,10 @@ function makePentagram(x, z) {
   light.position.set(x, 0.6, z);
   scene.add(light);
   pentagrams.push({ mat, light, phase: Math.random() * 6.28 });
+  if (zoneId !== undefined) registerZoneLight(zoneId, light);
 }
-for (const key of Object.keys(ZONES)) makePentagram(ZONES[key].spawn[0], ZONES[key].spawn[1]);
+for (const key of Object.keys(ZONES)) makePentagram(ZONES[key].spawn[0], ZONES[key].spawn[1], key);
+setZoneLightsVisible(currentZone); // all zone lights are registered now — cull everything but the starting zone
 function updatePentagram(t) {
   for (const p of pentagrams) {
     const pulse = 0.75 + 0.25 * Math.sin(t * 1.5 + p.phase);
@@ -939,7 +960,31 @@ function advanceCharacterAnimation(entity, wantState, dt) {
 // ============================================================
 // FX: tracers and chain lines (everyone renders, host broadcasts)
 // ============================================================
-const fx = []; // {obj, life}
+// Flash-light pool — every spell's impact flash used to add a fresh
+// THREE.PointLight and scene.remove() it a moment later. Adding/removing a
+// light forces WebGL to recompile every lit material's shader program, and
+// with 2+ players casting frequently that recompilation churn was the real
+// cause of the reported freezes (not networking). These lights are added to
+// the scene once and reused forever — "spawning" one just repositions/
+// re-lights an existing pool member, so the scene's light count never
+// changes after startup.
+const FLASH_LIGHT_POOL_SIZE = 8;
+const flashLightPool = [];
+for (let i = 0; i < FLASH_LIGHT_POOL_SIZE; i++) {
+  const l = new THREE.PointLight(0xffffff, 0, 5);
+  scene.add(l);
+  flashLightPool.push(l);
+}
+let flashLightCursor = 0;
+function borrowFlashLight(colorHex, intensity, distance) {
+  const l = flashLightPool[flashLightCursor];
+  flashLightCursor = (flashLightCursor + 1) % flashLightPool.length;
+  l.color.setHex(colorHex);
+  l.intensity = intensity;
+  l.distance = distance;
+  return l;
+}
+const fx = []; // {obj, life, pooled?}
 function spawnTracer(from, to, colorHex) {
   const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...from), new THREE.Vector3(...to)]);
   const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: colorHex, transparent: true }));
@@ -976,10 +1021,9 @@ function spawnLightningBolt(fromArr, toArr, colorHex, thick) {
   const boltMesh = new THREE.Mesh(tubeGeo, new THREE.MeshBasicMaterial({ color: colorHex, transparent: true }));
   scene.add(boltMesh);
   fx.push({ obj: boltMesh, life: 0.15 });
-  const flash = new THREE.PointLight(colorHex, 1.5, 5);
+  const flash = borrowFlashLight(colorHex, 1.5, 5);
   flash.position.copy(to);
-  scene.add(flash);
-  fx.push({ obj: flash, life: 0.12 });
+  fx.push({ obj: flash, life: 0.12, pooled: true });
 }
 function spawnChainFx(centerEnemyId, targetIds) {
   const c = enemies[centerEnemyId];
@@ -994,10 +1038,9 @@ function spawnChainFx(centerEnemyId, targetIds) {
     scene.add(line);
     fx.push({ obj: line, life: 0.4 });
   }
-  const flash = new THREE.PointLight(0xffe14d, 4, 12);
+  const flash = borrowFlashLight(0xffe14d, 4, 12);
   flash.position.copy(from);
-  scene.add(flash);
-  fx.push({ obj: flash, life: 0.3 });
+  fx.push({ obj: flash, life: 0.3, pooled: true });
 }
 
 // ============================================================
@@ -1074,10 +1117,9 @@ function spawnExplosionFx(pos, colorHex, radius) {
   scene.add(mesh);
   const maxLife = 0.35;
   fx.push({ obj: mesh, life: maxLife, maxLife, growFrom: 0.05, growTo: radius || 3 });
-  const flash = new THREE.PointLight(colorHex, 3, (radius || 3) * 2.5);
+  const flash = borrowFlashLight(colorHex, 3, (radius || 3) * 2.5);
   flash.position.copy(pos);
-  scene.add(flash);
-  fx.push({ obj: flash, life: 0.3 });
+  fx.push({ obj: flash, life: 0.3, pooled: true });
   spawnParticleBurst(pos, { count: 26, texture: PARTICLE_TEX.flame, color: colorHex, speed: 4.5, size: 0.6, life: 0.45, upBias: 0.6 });
   spawnParticleBurst(pos, { count: 14, texture: PARTICLE_TEX.glow, color: 0xffcc66, speed: 3, size: 0.25, life: 0.5, upBias: 0.4, gravity: 4 });
 }
@@ -1093,10 +1135,9 @@ function spawnNovaFx(centerPos, radius, colorHex) {
   scene.add(mesh);
   const maxLife = 0.45;
   fx.push({ obj: mesh, life: maxLife, maxLife, growFrom: 0.05, growTo: 1 });
-  const flash = new THREE.PointLight(colorHex, 2.5, radius * 2.5);
+  const flash = borrowFlashLight(colorHex, 2.5, radius * 2.5);
   flash.position.set(centerPos.x, 0.6, centerPos.z);
-  scene.add(flash);
-  fx.push({ obj: flash, life: 0.35 });
+  fx.push({ obj: flash, life: 0.35, pooled: true });
   spawnParticleBurst(new THREE.Vector3(centerPos.x, 0.3, centerPos.z),
     { count: 30, texture: PARTICLE_TEX.glow, color: colorHex, speed: radius * 2.2, size: 0.3, life: 0.4, upBias: 0.8, gravity: 6 });
 }
@@ -1341,6 +1382,7 @@ function onClientData(msg) {
   } else if (msg.t === 'shopOpen') {
     shopPhase = true;
     currentZone = msg.zone || 'hub';
+    setZoneLightsVisible(currentZone);
     respawnLocalPlayer();
     openShopUI();
   } else if (msg.t === 'shopClose') {
@@ -1594,6 +1636,7 @@ function startLevel(level) {
   closeShopUI();
   currentLevel = level;
   currentZone = level;
+  setZoneLightsVisible(currentZone);
   levelActive = true;
   buildLevelEnemies(level);
   respawnLocalPlayer();
@@ -1601,6 +1644,7 @@ function startLevel(level) {
 function startShopPhase() {
   shopPhase = true;
   currentZone = 'hub'; // teleport the whole party into the dedicated progression room
+  setZoneLightsVisible(currentZone);
   respawnLocalPlayer();
   if (currentLevel === MAX_LEVEL) hostLog('🏆 Босс повержен! Отряд возвращается в комнату прокачки.');
   else hostLog('✨ Уровень зачищен! Отряд телепортирован в комнату прокачки.');
@@ -1831,10 +1875,14 @@ document.addEventListener('pointerlockerror', () => {
 const raycaster = new THREE.Raycaster();
 const projectiles = []; // {mesh, dir, speed, color, isLocal, life, spellIndex}
 function spawnProjectile(fromArr, dirArr, color, speed, isLocal, spellIndex, big) {
+  // No real THREE.PointLight here on purpose: every cast (very frequent —
+  // this is the basic-attack projectile) was adding then removing a live
+  // light, and add/remove of a light forces WebGL to recompile every lit
+  // material's shader program. With 2+ players casting, that churn was the
+  // actual cause of the reported freezes, not networking. The unlit
+  // MeshBasicMaterial sphere already reads as "glowing" on its own.
   const mesh = new THREE.Mesh(new THREE.SphereGeometry(big ? 0.22 : 0.14, 8, 8), new THREE.MeshBasicMaterial({ color }));
   mesh.position.fromArray(fromArr);
-  const glow = new THREE.PointLight(color, big ? 1.8 : 1.2, big ? 5.5 : 4);
-  mesh.add(glow);
   scene.add(mesh);
   projectiles.push({ mesh, dir: new THREE.Vector3().fromArray(dirArr), speed, isLocal, life: 3, spellIndex });
 }
@@ -2079,7 +2127,7 @@ function animate() {
     }
     if (f.obj.material) f.obj.material.opacity = Math.max(0, f.life * 4);
     if (f.obj.intensity !== undefined) f.obj.intensity = Math.max(0, f.life * 12);
-    if (f.life <= 0) { scene.remove(f.obj); fx.splice(i, 1); }
+    if (f.life <= 0) { if (!f.pooled) scene.remove(f.obj); fx.splice(i, 1); }
   }
   updateParticleBursts(dt);
 
@@ -2205,6 +2253,7 @@ window.__debug = {
   hostKillAllEnemies, cheatKillAllEnemies, SCHOOL_SPELLS, cloneSpell, switchSlot,
   hostResolveNova, hostResolveCast, get activeSlot() { return activeSlot; }, get cooldowns() { return cooldowns; },
   getPlayerPositions, get fx() { return fx; },
+  get zoneLights() { return zoneLights; }, setZoneLightsVisible, get flashLightPool() { return flashLightPool; },
   get ZONE_PILLARS() { return ZONE_PILLARS; },
   get playerData() { return playerData; },
   get myGold() { return myGold; },
