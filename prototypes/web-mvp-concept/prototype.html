@@ -161,8 +161,8 @@ const WET_DURATION_S = 6;
 const CHAIN_RADIUS = 6;
 const ENEMY_WANDER_SPEED = 1.2;
 const ENEMY_CHASE_SPEED = 2.6;
-const AGGRO_RADIUS = 7;          // enemy notices a player within this range
-const PATROL_LEASH_RADIUS = 13;  // > AGGRO_RADIUS: enemy gives up chase beyond this (measured from its home)
+const AGGRO_RADIUS = 11;         // enemy notices a player within this range
+const PATROL_LEASH_RADIUS = 20;  // > AGGRO_RADIUS: enemy gives up chase beyond this (measured from its home)
 const STOP_RANGE = 2.1;          // enemy stops closing once this near — stays visible instead of hugging the player
 const ATTACK_RANGE = 2.6;        // can still land a hit slightly beyond STOP_RANGE
 const ATTACK_ANIM_DURATION = 0.35;
@@ -405,7 +405,7 @@ function buildArena(zoneId, cx, cz, half, relPillars, mortarHex) {
   ZONE_PILLARS[zoneId] = absPillars;
 }
 const PILLAR_CLEARANCE = 1.3; // pillar radius (~1) + a bit of enemy body radius
-const SPAWN_SAFE_RADIUS = 4;  // enemies can't enter the pentagram's ward
+const SPAWN_SAFE_RADIUS = 6;  // enemies can't enter the pentagram's ward — scaled up alongside the bigger pentagram
 // Enemy chase/wander above is pure steering with no obstacle awareness —
 // this is the only thing stopping them walking through walls/pillars/the ward.
 function clampEnemyToArena(e, zoneId) {
@@ -692,7 +692,7 @@ function makePentagramTexture(size) {
 const pentagrams = [];
 function makePentagram(x, z, zoneId) {
   const mat = new THREE.MeshBasicMaterial({ map: makePentagramTexture(), transparent: true, depthWrite: false });
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 3.2), mat);
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(5, 5), mat);
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.set(x, 0.02, z); // just above the floor to avoid z-fighting
   scene.add(mesh);
@@ -919,7 +919,8 @@ function makeRemotePlayer(name, element) {
   // *right now*", not "were they moving when the cast started") — see the
   // "Remote player interpolation" block in animate().
   const rp = { mesh: group, target: { p: [0, 0, 0], ry: 0 }, downed: false,
-           mixer: model.mixer, actions: model.actions, current: model.current, lastPos: new THREE.Vector3() };
+           mixer: model.mixer, actions: model.actions, current: model.current, lastPos: new THREE.Vector3(),
+           placed: false }; // placed=false: snap to the first real position instead of lerping from world origin
   return rp;
 }
 // Shared by remote players AND the local first-person viewmodel below —
@@ -1407,6 +1408,12 @@ function hostLog(text) {
 function hostApplyDamage(e, amount, casterPid) {
   e.hp = Math.min(e.maxHp, Math.max(0, e.hp - amount)); // hp_clamp
   if (e.hp <= 0 && e.alive) hostOnEnemyKilled(e, casterPid); // must flip e.alive BEFORE the visual refresh below
+  else if (e.alive && casterPid) {
+    // Getting hit always aggros the attacker, even from outside AGGRO_RADIUS
+    // or mid-patrol — matches "enemies should start chasing if attacked".
+    e.aiState = 'chase';
+    e.targetPeerId = casterPid;
+  }
   updateEnemyVisual(e);
 }
 
@@ -2094,7 +2101,16 @@ function animate() {
     // Remote player interpolation + locomotion animation crossfade
     for (const rp of Object.values(remotePlayers)) {
       const t = rp.target;
-      rp.mesh.position.lerp(new THREE.Vector3(t.p[0], 0, t.p[2]), Math.min(1, dt * 12));
+      if (!rp.placed) {
+        // First position update after joining/loading — appear exactly where
+        // they actually are (the spawn pentagram) instead of at the world
+        // origin and lerping visibly across the room to get there.
+        rp.mesh.position.set(t.p[0], 0, t.p[2]);
+        rp.lastPos.copy(rp.mesh.position);
+        rp.placed = true;
+      } else {
+        rp.mesh.position.lerp(new THREE.Vector3(t.p[0], 0, t.p[2]), Math.min(1, dt * 12));
+      }
       rp.mesh.rotation.y = t.ry;
       rp.mesh.scale.y = rp.downed ? 0.3 : 1; // crude "downed" pose
 

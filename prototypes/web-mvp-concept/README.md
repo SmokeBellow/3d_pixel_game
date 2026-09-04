@@ -103,16 +103,17 @@ Real multi-client test pending.
   auto-respawning enemies mid-level
 - Humanoid enemies with walk + attack-lunge animation; AI: patrol (wander
   near home) → aggro (chase, **stopping at a visible distance** rather than
-  hugging the player) within AGGRO_RADIUS → de-aggro beyond the larger
-  PATROL_LEASH_RADIUS (returns home)
+  hugging the player) within AGGRO_RADIUS (11) → de-aggro beyond the larger
+  PATROL_LEASH_RADIUS (20, returns home). **Getting hit always aggros the
+  attacker**, even from outside AGGRO_RADIUS or mid-patrol
 - Player HP, melee damage from enemies, downed state (movement/casting
   locked) → timed respawn
 - Procedural stone-brick textures, flickering torches (brightened after
   playtest feedback), dim ambient + fog + player glow for a lit-circle
   vignette — **press L to disable for debugging**
-- One fixed **spawn/respawn point with a canvas-drawn pentagram** (glowing
-  circle + five-point star + runes, pulsing light) — no external image file.
-  Enemies cannot enter its `SPAWN_SAFE_RADIUS` ward
+- One fixed **spawn/respawn point per zone with a canvas-drawn pentagram**
+  (glowing circle + five-point star + runes, pulsing light, 5×5 units) — no
+  external image file. Enemies cannot enter its `SPAWN_SAFE_RADIUS` (6) ward
 - **Player color = element color** (each school has a fixed color, not a
   round-robin per-connection color)
 - **Lightning renders as a zigzag bolt** (hit detection unchanged — still a
@@ -256,4 +257,15 @@ Real multi-client test pending.
   same recompile problem), cutting the always-on light count from 50 down
   to whichever zone's own lights are actually relevant (9-21 depending on
   the zone).
+- **"Freezing is much better, but still there"** — the light-churn fix
+  above was a real, confirmed contributor, not the whole story; some
+  residual cause remains unidentified. Not yet root-caused.
+- **A newly-joined remote player's model appeared at the world origin and
+  visibly slid across the room to the pentagram** — `makeRemotePlayer()`
+  left the mesh at THREE's default `(0,0,0)`, and the per-frame
+  interpolation (`position.lerp(...)`) animated it from there to its real
+  position over the next few frames instead of appearing there immediately.
+  Fixed with a one-time "placed" flag: the very first position update for a
+  remote player snaps the mesh directly to that position; only subsequent
+  updates lerp (for smooth movement once they're actually walking around).
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)
