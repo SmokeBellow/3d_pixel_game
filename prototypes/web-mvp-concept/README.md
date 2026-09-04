@@ -122,10 +122,14 @@ Real multi-client test pending.
 - **Lobby with chat**: joining players see a waiting room (with player list
   + chat, shared with the host's lobby chat) until the host starts; late
   joiners after the game has started also get chat/lobby state correctly
-- **Player visuals**: Mixamo "Ganfaul M Aure" model (idle/walk/cast animations,
-  cast synced to actual cast pace) tinted per element for third-person/remote
-  players; first-person view kept the original placeholder box/sphere arms
-  (a real FPS viewmodel was tried and reverted — see Findings)
+- **Player visuals**: Mixamo "Brady" model (idle/run/cast animations) tinted
+  per element for third-person/remote players; first-person view kept the
+  original placeholder box/sphere arms (a real FPS viewmodel was tried and
+  reverted — see Findings). Movement animation is a Running clip, not
+  Walking — a deliberate swap. The cast gesture starts playing immediately
+  on cast, but the actual shot (projectile/hitscan/nova) is deliberately
+  delayed ~1.2s to fire exactly when the animation's arm reaches full
+  extension, not before
 - **Multi-zone world**: level 1/2/3 and the hub room are separate, far-apart
   spaces built by one shared `buildArena()` helper and coexisting statically
   in the same Three.js scene; moving between them is a teleport of `playerPos`
@@ -287,4 +291,47 @@ Real multi-client test pending.
   fully connected, and a chasing enemy placed 2 cells away behind a wall
   correctly detoured through the corridors and reached the player within
   60 simulated seconds rather than getting stuck.
+- **Tried generating a custom "water mage" model with Meshy AI** (text-to-3D)
+  to give Water its own distinct look instead of a re-tinted Ganfaul.
+  Multiple prompt iterations hit the same handful of failure modes:
+  "elemental" in the prompt pulled toward a non-human creature (hooves,
+  horns, tail — broke Mixamo Auto-Rigger's human-skeleton assumptions and
+  visibly sank into the floor); flowing robes/hoods/loose cloth caused
+  rigging artifacts (a recurring, well-known issue — cloth has no physics
+  in a simple bone-weight rig, it just clips); and each fix attempt
+  sometimes silently dropped an earlier constraint (asked for a jumpsuit,
+  got no clothing at all) — long prompts with many stacked negative
+  constraints appear to lose weight on earlier details. None of the
+  iterations produced a clean result before switching approaches.
+- **Switched to Brady** (a built-in, pre-rigged Mixamo catalog character)
+  instead of continuing to fight AI generation — sidesteps rigging entirely
+  since Mixamo characters come pre-rigged with the same `mixamorig`
+  skeleton already used by the animation pipeline. Tradeoff accepted
+  knowingly: Brady's own textures are far heavier than Ganfaul's — idle.fbx
+  (which carries the mesh, "With Skin") is **~116MB** vs. Ganfaul's ~7MB,
+  a real page-load cost for a web multiplayer prototype. User's call to
+  keep it as-is rather than spend time compressing textures in Blender.
+  Also: Mixamo "With Skin" downloads for some characters embed
+  **multiple material slots per mesh** (an array) instead of one material —
+  Brady is one of these, and `makeRemotePlayerModel`'s per-mesh material
+  clone/tint (`o.material.clone()`) crashed on the array case; fixed to
+  handle both shapes. Movement animation is Running (not Walking) per
+  explicit request — swap was just a file substitution, no code changes
+  needed since 'walk' is just an internal state-machine key, not tied to
+  the literal animation content.
+- **Cast animation and the actual shot didn't line up** — the game fired
+  the projectile/hitscan/nova the instant the player pressed cast, while
+  the third-person Magic Spell Casting clip takes ~1.2s (at its sped-up
+  timeScale) to reach the arm-fully-extended pose — so viewers saw the bolt
+  leave the hand before the throwing motion got there. Split casting into
+  two steps: an immediate `castStart` fx message (triggers the visual
+  gesture on every client right away, does nothing else) and the actual
+  shot logic moved into a `setTimeout` delayed by
+  `CAST_ARM_EXTEND_TIME / CAST_ANIM_TIMESCALE` (3s into the original clip,
+  scaled down by the same speed-up factor already applied to the
+  animation) — so the delay stays correct even if that speed-up factor is
+  retuned later. `activeSlot` is snapshotted at press time (`castSlot`)
+  since the player can scroll to a different spell during the delay
+  window. Verified in-session: both the projectile and lightning hitscan
+  now land ~1.2s after `tryCast()` is called, matching the intended delay.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)

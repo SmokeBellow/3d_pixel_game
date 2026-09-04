@@ -151,6 +151,15 @@ const EYE_HEIGHT = 1.65;          // camera-system.md eye_height_offset
 const PITCH_CLAMP = 89 * Math.PI / 180; // camera-system.md pitch clamp
 const BASE_FOV = 80;              // vertical FOV (three.js), ~90 horizontal
 const KICK_PEAK = 5, KICK_ATTACK = 0.05, KICK_DECAY = 0.20; // fov_kick_response
+// Cast animation timing — Magic Spell Casting's right arm reaches full
+// extension around the 3s mark of the ORIGINAL (timeScale=1) clip. The clip
+// is sped up (see makeRemotePlayerModel) so casts keep pace with spell
+// cooldowns, so the real-world delay before the actual shot fires has to
+// scale down by the same factor, or the bolt visibly leaves the hand before
+// the animation's arm gets there.
+const CAST_ANIM_TIMESCALE = 2.5;
+const CAST_ARM_EXTEND_TIME = 3.0; // seconds into the original clip
+const CAST_FIRE_DELAY_MS = (CAST_ARM_EXTEND_TIME / CAST_ANIM_TIMESCALE) * 1000;
 const BASE_SENSITIVITY = 0.0022;
 let sensitivity = BASE_SENSITIVITY; // shared camera/mouse sensitivity — TODO: expose as a settings slider
 const LOOK_KEY_SPEED = 2.0; // rad/sec baseline at BASE_SENSITIVITY, scales with `sensitivity`
@@ -988,10 +997,13 @@ function makeNameSprite(text, colorHex) {
   return sprite;
 }
 
-// Mixamo "Ganfaul" rig — idle.fbx carries the actual mesh+skeleton; walk.fbx
-// and cast.fbx are downloaded "With Skin" too (self-contained) but we only
-// need their AnimationClip since all three share the exact same skeleton —
-// no retargeting math needed, just play each clip on the idle mesh's rig.
+// Mixamo "Brady" rig — idle.fbx carries the actual mesh+skeleton (downloaded
+// "With Skin"); walk.fbx (a Running clip) and cast.fbx (Magic Spell Casting)
+// are downloaded "Without Skin" — they're motion-only and share the exact
+// same skeleton as idle.fbx, so no retargeting math is needed, just play
+// each clip on idle's rig. idle.fbx is ~116MB (Brady's own textures are
+// much heavier than the previous Ganfaul model's ~7MB) — a known, accepted
+// tradeoff, see the README's Findings.
 const MODEL_BASE = 'models/mage/';
 let mageTemplate = null; // { root, idleClip, walkClip, castClip } once all three load
 (function loadMageAssets() {
@@ -1018,8 +1030,15 @@ function makeRemotePlayerModel(color) {
   clone.rotation.y = Math.PI;
   clone.traverse(o => {
     if (o.isMesh) {
-      o.material = o.material.clone(); // never share materials across instances
-      o.material.color.set(color);
+      // Some characters (e.g. Brady) export multiple material slots per
+      // mesh as an array instead of one material — handle both shapes.
+      if (Array.isArray(o.material)) {
+        o.material = o.material.map(m => m.clone()); // never share materials across instances
+        o.material.forEach(m => m.color && m.color.set(color));
+      } else {
+        o.material = o.material.clone();
+        o.material.color.set(color);
+      }
     }
   });
   const mixer = new THREE.AnimationMixer(clone);
@@ -1034,7 +1053,7 @@ function makeRemotePlayerModel(color) {
   // 0.5-1.0s — left at native speed the gesture visibly lags behind how
   // fast the player is actually casting. Speeding it up keeps the visual
   // roughly synced with the game's actual casting pace.
-  actions.cast.timeScale = 2.5;
+  actions.cast.timeScale = CAST_ANIM_TIMESCALE;
   actions.idle.play();
   return { object: clone, mixer, actions, current: 'idle' };
 }
@@ -2116,54 +2135,66 @@ function tryCast() {
   if (myDowned || mySpells.length === 0) return;
   if (cooldowns[activeSlot] > 0) return;
   const spell = mySpells[activeSlot];
+  const castSlot = activeSlot; // snapshot — player might scroll to another slot before the delayed shot below fires
   cooldowns[activeSlot] = spell.cooldown; // cooldownMult from passives is applied client-side for feel only
   fovKickT = 0; // fov_kick_response trigger (re-trigger resets, no stacking)
   castRecoilT = 0;
-
-  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-  const handWorld = camera.localToWorld(new THREE.Vector3(0.32, -0.25, -0.6));
-
   const big = spell.tier === 2; // tier-2 spells read as visibly "bigger" tools, not just re-skinned numbers
 
-  if (spell.selfNova) {
-    // Волна: instant nova around the caster — no aiming, hits everyone in
-    // radius. Host resolves it (needs the authoritative caster position)
-    // and broadcasts the ring effect back to everyone, including the caster.
-    const castMsg = { t: 'castNova', spellIndex: activeSlot };
-    if (isHost) hostResolveNova(castMsg, myPeerId);
-    else if (connections[0] && connections[0].open) connections[0].send(JSON.stringify(castMsg));
-    return;
-  }
+  // Let everyone see the cast gesture start right away; the actual shot
+  // (projectile/hitscan/nova) is deliberately delayed to CAST_FIRE_DELAY_MS
+  // so it fires exactly when the animation's arm reaches full extension,
+  // instead of visibly leaving the hand before the gesture gets there.
+  const castStartMsg = { t: 'fx', kind: 'castStart', pid: myPeerId };
+  if (isHost) broadcast(castStartMsg);
+  else if (connections[0] && connections[0].open) connections[0].send(JSON.stringify(castStartMsg));
 
-  if (spell.speed > 0) {
-    // Fire/Water: flying projectile — shooter owns hit detection on impact
-    const dir = raycaster.ray.direction.clone().normalize();
-    spawnProjectile(handWorld.toArray(), dir.toArray(), spell.color, spell.speed, true, activeSlot, big);
-    const fxMsg = { t: 'fx', kind: 'proj', from: handWorld.toArray(), dir: dir.toArray(), color: spell.color, speed: spell.speed, pid: myPeerId, big };
-    if (isHost) broadcast(fxMsg);
-    else if (connections[0] && connections[0].open) connections[0].send(JSON.stringify(fxMsg));
-    return;
-  }
+  setTimeout(() => {
+    if (myDowned) return; // got downed mid-windup — no shot
 
-  // Lightning: instant hitscan
-  const targets = enemies.filter(e => e.alive).flatMap(e => e.parts);
-  const hits = raycaster.intersectObjects(targets, false);
-  let to, enemyId = null;
-  if (hits.length > 0) {
-    to = hits[0].point;
-    enemyId = hits[0].object.userData.enemyId;
-  } else {
-    to = camera.position.clone().addScaledVector(raycaster.ray.direction, 40);
-  }
-  spawnLightningBolt(handWorld.toArray(), to.toArray(), spell.color, big);
+    if (spell.selfNova) {
+      // Волна: instant nova around the caster — no aiming, hits everyone in
+      // radius. Host resolves it (needs the authoritative caster position)
+      // and broadcasts the ring effect back to everyone, including the caster.
+      const castMsg = { t: 'castNova', spellIndex: castSlot };
+      if (isHost) hostResolveNova(castMsg, myPeerId);
+      else if (connections[0] && connections[0].open) connections[0].send(JSON.stringify(castMsg));
+      return;
+    }
 
-  const castMsg = { t: 'cast', spellIndex: activeSlot, enemyId, from: handWorld.toArray(), to: to.toArray(), color: spell.color };
-  if (isHost) {
-    hostResolveCast(castMsg, myPeerId);
-    broadcast({ t: 'fx', kind: 'bolt', from: castMsg.from, to: castMsg.to, color: spell.color, pid: myPeerId, big });
-  } else if (connections[0] && connections[0].open) {
-    connections[0].send(JSON.stringify(castMsg));
-  }
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    const handWorld = camera.localToWorld(new THREE.Vector3(0.32, -0.25, -0.6));
+
+    if (spell.speed > 0) {
+      // Fire/Water: flying projectile — shooter owns hit detection on impact
+      const dir = raycaster.ray.direction.clone().normalize();
+      spawnProjectile(handWorld.toArray(), dir.toArray(), spell.color, spell.speed, true, castSlot, big);
+      const fxMsg = { t: 'fx', kind: 'proj', from: handWorld.toArray(), dir: dir.toArray(), color: spell.color, speed: spell.speed, pid: myPeerId, big };
+      if (isHost) broadcast(fxMsg);
+      else if (connections[0] && connections[0].open) connections[0].send(JSON.stringify(fxMsg));
+      return;
+    }
+
+    // Lightning: instant hitscan
+    const targets = enemies.filter(e => e.alive).flatMap(e => e.parts);
+    const hits = raycaster.intersectObjects(targets, false);
+    let to, enemyId = null;
+    if (hits.length > 0) {
+      to = hits[0].point;
+      enemyId = hits[0].object.userData.enemyId;
+    } else {
+      to = camera.position.clone().addScaledVector(raycaster.ray.direction, 40);
+    }
+    spawnLightningBolt(handWorld.toArray(), to.toArray(), spell.color, big);
+
+    const castMsg = { t: 'cast', spellIndex: castSlot, enemyId, from: handWorld.toArray(), to: to.toArray(), color: spell.color };
+    if (isHost) {
+      hostResolveCast(castMsg, myPeerId);
+      broadcast({ t: 'fx', kind: 'bolt', from: castMsg.from, to: castMsg.to, color: spell.color, pid: myPeerId, big });
+    } else if (connections[0] && connections[0].open) {
+      connections[0].send(JSON.stringify(castMsg));
+    }
+  }, CAST_FIRE_DELAY_MS);
 }
 
 // ============================================================
@@ -2452,6 +2483,7 @@ window.__debug = {
   hostApplyDamage, get partyXp() { return partyXp; },
   hostKillAllEnemies, cheatKillAllEnemies, SCHOOL_SPELLS, cloneSpell, switchSlot,
   hostResolveNova, hostResolveCast, get activeSlot() { return activeSlot; }, get cooldowns() { return cooldowns; },
+  get projectiles() { return projectiles; }, CAST_FIRE_DELAY_MS,
   getPlayerPositions, get fx() { return fx; },
   get zoneLights() { return zoneLights; }, setZoneLightsVisible, get flashLightPool() { return flashLightPool; },
   get ZONE_MAZE() { return ZONE_MAZE; }, mazeCellAt, mazeBFSPath, mazeCellCenter,
