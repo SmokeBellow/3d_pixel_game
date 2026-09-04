@@ -19,17 +19,19 @@ server, no installation. This is the fastest path to the still-outstanding
    You only see your own school's spells; combos require teammates on other
    elements. **Joining friends wait in a lobby (with chat) until the host
    clicks Начать** — nobody enters the arena early.
-5. **Third-person camera, orbiting behind your own character's head** (not
-   FPS — see Findings for why). Controls: WASD move, mouse look (click to
-   lock; also works unlocked for touchpads, plus arrow keys), LMB or Space
-   cast, wheel/Q/1-2-3 switch spell slot, **E to interact with a shop
-   stand**, **L toggles full brightness / no fog**, **K instantly kills
+5. **First-person view** with simple placeholder box/sphere arms (see
+   Findings — a third-person-behind-the-head camera was tried in between and
+   is preserved on the `third-person-camera-aoe` branch, but was reverted
+   back to first-person per user request). Controls: WASD move, mouse look
+   (click to lock; also works unlocked for touchpads, plus arrow keys), LMB
+   or Space cast, wheel/Q/1-2-3 switch spell slot, **E to interact with a
+   shop stand**, **L toggles full brightness / no fog**, **K instantly kills
    every enemy on the map** (debug cheats). You can't cast again (any spell
    slot) until your cast animation finishes, even if the spell's own
    cooldown is shorter. **Every spell is a self-centered area effect around
-   your own character — there is no cursor/crosshair aiming at all**, so the
-   third-person camera is purely for seeing your surroundings, not for
-   lining up a shot.
+   your own character — there is no cursor/crosshair aiming at all**; the
+   crosshair on screen is now purely a reticle for orientation, not an aim
+   point.
 6. The combo: a Water player soaks every enemy in their own area with wet,
    a Lightning player's area hits the same spot — 3x damage + chain to
    nearby enemies, no aiming required by either player, just standing near
@@ -78,9 +80,9 @@ Real multi-client test pending.
 
 ## Features
 
-- Third-person-behind-the-head camera (see Findings for why, not FPS),
-  pointer-lock + touchpad/arrow-key look fallback, shared `sensitivity`
-  value for mouse + keyboard look
+- First-person view with placeholder box/sphere arms (camera-system.md
+  formulas), pointer-lock + touchpad/arrow-key look fallback, shared
+  `sensitivity` value for mouse + keyboard look
 - **Real particle effects on every spell hit** — Kenney's CC0 Particle Pack
   (`textures/particles/`, see its `LICENSE.txt`) drives a small CPU-updated
   `THREE.Points` burst system (`spawnParticleBurst`/`updateParticleBursts`):
@@ -133,20 +135,22 @@ Real multi-client test pending.
   + chat, shared with the host's lobby chat) until the host starts; late
   joiners after the game has started also get chat/lobby state correctly
 - **Player visuals**: Mixamo "Brady" model (idle/run/cast animations) tinted
-  per element, rendered for every player including yourself — see the
-  third-person camera above (two FPS-viewmodel attempts were tried and
-  reverted first — see Findings). Movement animation is a Running clip, not
-  Walking — a deliberate swap, played at a tuned `MOVE_ANIM_TIMESCALE` (0.6)
-  so the leg-cycle roughly matches actual ground speed instead of sliding.
-  There's only one directional run clip, so the body faces whichever
-  direction the player is actually moving (forward/backward/strafing), not
-  always the camera's aim direction — it only snaps back to facing the aim
-  direction once the player stops (see Findings). The cast gesture starts
-  playing immediately on cast, but the actual area-effect resolution is
-  deliberately delayed ~1.2s to fire exactly when the animation's arm
-  reaches full extension, not before. No spell (any slot) can be cast again
-  until the cast animation finishes, even if that spell's own cooldown is
-  shorter
+  per element, rendered for every **remote** player as seen by their
+  teammates. Your own view is first-person with simple placeholder
+  box/sphere arms (see Findings — the real-viewmodel and third-person
+  experiments were both tried and reverted). The cast gesture starts
+  playing immediately on cast (a simple arm-recoil animation in first
+  person; the full Mixamo cast clip for anyone watching you), but the
+  actual area-effect resolution is deliberately delayed ~1.2s to fire
+  exactly when the animation's arm reaches full extension for onlookers,
+  not before. No spell (any slot) can be cast again until the cast
+  animation finishes, even if that spell's own cooldown is shorter.
+  Remote players' movement animation is a Running clip, not Walking — a
+  deliberate swap, played at a tuned `MOVE_ANIM_TIMESCALE` (0.6) so the
+  leg-cycle roughly matches actual ground speed instead of sliding; their
+  body also faces whichever direction they're actually moving
+  (forward/backward/strafing) rather than always the forward pose, since
+  there's only one directional run clip
 - **Multi-zone world**: level 1/2/3 and the hub room are separate, far-apart
   spaces built by one shared `buildArena()` helper and coexisting statically
   in the same Three.js scene; moving between them is a teleport of `playerPos`
@@ -425,4 +429,37 @@ Real multi-client test pending.
   root-motion data to compute the "correct" scale analytically from, so
   it's a candidate to revisit if it still reads as sliding during a real
   playtest.
+- **"Run animation is still faster than the actual movement, and running
+  backward/sideways sends the character flying off-screen"** — reported
+  against the third-person camera added earlier this session. Rather than
+  keep tuning that camera, went back to **first-person view with
+  placeholder box/sphere arms** per user request (the two prior
+  real-viewmodel attempts had already shown a full-body asset glued to the
+  camera doesn't work well as a viewmodel — see the entry below). The
+  third-person-behind-the-head camera and the Brady-as-own-body code are
+  preserved on the **`third-person-camera-aoe`** branch in case they're
+  worth revisiting later (e.g. with a dedicated FPS arm rig instead of a
+  full-body model). Returning to first-person removes the reported symptoms
+  for the *local* player entirely (there's no longer a visible own-body
+  model to glitch), but the underlying "only one directional Running clip"
+  issue still exists for **remote** players' bodies (which always render in
+  third person, from a teammate's point of view) — so the strafe-facing fix
+  from earlier in this session (facing the actual movement vector instead
+  of always the aim yaw) was additionally ported over to the remote-player
+  render path (`rp.mesh.rotation.y`, derived from each remote player's own
+  actual per-frame position delta rather than the aim yaw they broadcast),
+  verified via a scripted fake remote player driven through backward/
+  strafe/idle target sequences (0°/180°/-90°/back-to-0°, matching the local
+  fix's earlier verification exactly). The reported "runs off-screen"
+  symptom itself was never root-caused beyond "was specific to the
+  third-person camera" — it may have been the camera's own wall-avoidance
+  raycast reacting to the mismatch between the animation's facing and the
+  player's real movement, but this wasn't confirmed before switching away
+  from that camera entirely.
+- **All AoE combat math (self-centered radius damage, Water wet
+  application, and the Water→Lightning Chain Shock synergy) re-verified
+  after the first-person revert** — none of it depends on camera mode or
+  the local player's own body existing, so no regression was expected, and
+  a scripted cast against a repositioned enemy confirmed a landed hit in
+  first-person view exactly like the earlier third-person test.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)

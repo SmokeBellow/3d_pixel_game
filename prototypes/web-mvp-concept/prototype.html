@@ -261,39 +261,42 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
-// Third-person-behind-the-head camera (per user request, after two failed
-// FPS-viewmodel attempts — Ganfaul's pauldrons dominated the frame, Brady's
-// extended cast arm foreshortened into invisibility along the view axis —
-// both boiling down to the same root cause: a full-body third-person asset
-// glued to the camera doesn't work as a viewmodel without a dedicated FPS
-// rig/IK). This is simpler: render the local player's own body exactly like
-// a remote player's (see makeRemotePlayerModel), and orbit the camera behind
-// its head instead of sitting inside it.
+// First-person arms — parented to the camera so they follow the view.
+// Back to this after the third-person experiment: two real-viewmodel
+// attempts (Ganfaul, then Brady) were tried and reverted before, for two
+// different specific reasons that both trace to the same root cause — a
+// full-body third-person asset glued to the camera doesn't work as a
+// viewmodel without a dedicated FPS rig/IK (Ganfaul's shoulder pauldrons
+// dominated the frame; Brady's extended cast arm foreshortened into
+// near-invisibility along the view axis). Simple placeholder box/sphere
+// arms sidestep both problems entirely. (The third-person-behind-the-head
+// camera this replaces still lives on the `third-person-camera-aoe` branch
+// if it's worth revisiting later — e.g. with a dedicated FPS arm rig.)
 scene.add(camera);
-const THIRD_PERSON_DISTANCE = 2.4;  // camera pulled back this far from the head pivot
-const THIRD_PERSON_MIN_DISTANCE = 0.4; // never let a wall push the camera closer than this (would clip into the player)
-let myViewmodel = null;
-let ownBodyGroup = null; // yaw-only group at ground level, exactly like a remote player's mesh
-let usingRealViewmodel = false;
-function trySetupFpViewmodel() {
-  if (!mageTemplate) { setTimeout(trySetupFpViewmodel, 300); return; }
-  ownBodyGroup = new THREE.Group();
-  scene.add(ownBodyGroup);
-  myViewmodel = makeRemotePlayerModel(ELEMENT_COLOR[myElement] || 0xffffff);
-  ownBodyGroup.add(myViewmodel.object);
-  usingRealViewmodel = true;
+const armMat = new THREE.MeshLambertMaterial({ color: 0x2a2347 });
+const handMat = new THREE.MeshLambertMaterial({ color: 0xc9a07a });
+function makeFpArm(side) {
+  const arm = new THREE.Group();
+  const forearm = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.42), armMat);
+  forearm.rotation.x = -0.25;
+  arm.add(forearm);
+  const hand = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 8), handMat);
+  hand.position.set(0, 0.05, -0.24);
+  arm.add(hand);
+  arm.position.set(side * 0.32, -0.32, -0.55);
+  camera.add(arm);
+  return arm;
 }
-const tpCamRaycaster = new THREE.Raycaster();
-// Pulls the third-person camera in when a wall/pillar is between it and the
-// player's head, instead of clipping through geometry.
-function resolveThirdPersonCameraDistance(pivot, dir, desiredDistance) {
-  tpCamRaycaster.set(pivot, dir);
-  tpCamRaycaster.far = desiredDistance;
-  const hits = tpCamRaycaster.intersectObjects(scene.children, true);
-  const blocking = hits.find(h => h.object !== ownBodyGroup && !ownBodyGroup.getObjectById(h.object.id));
-  if (blocking) return Math.max(THIRD_PERSON_MIN_DISTANCE, blocking.distance - 0.15);
-  return desiredDistance;
-}
+const fpArmL = makeFpArm(-1);
+const fpArmR = makeFpArm(1);
+const orbMat = new THREE.MeshBasicMaterial({ color: 0xff6622 });
+const fpOrb = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), orbMat);
+fpOrb.position.set(0, 0.1, -0.3);
+fpArmR.add(fpOrb);
+const orbLight = new THREE.PointLight(0xff6622, 0.6, 2);
+fpOrb.add(orbLight);
+const FP_ARM_BASE_Y = -0.32, FP_ARM_BASE_Z = -0.55;
+let castRecoilT = Infinity, walkBobT = 0;
 
 // Ambient is deliberately dim — visibility comes from torches + the player's
 // own glow, not flat scene-wide lighting (needed for the vignette to read).
@@ -1997,6 +2000,10 @@ function updateSlotUI() {
       el.style.display = 'none';
     }
   }
+  if (mySpells[activeSlot]) {
+    orbMat.color.setHex(mySpells[activeSlot].color);
+    orbLight.color.setHex(mySpells[activeSlot].color);
+  }
 }
 
 // Mouse look ONLY applies while the pointer is actually locked — otherwise
@@ -2038,7 +2045,7 @@ function tryCast() {
   cooldowns[activeSlot] = spell.cooldown; // cooldownMult from passives is applied client-side for feel only
   castLockedUntil = performance.now() + (castAnimDurationMs || spell.cooldown * 1000);
   fovKickT = 0; // fov_kick_response trigger (re-trigger resets, no stacking)
-  if (usingRealViewmodel) triggerCast(myViewmodel); // local player now sees their own cast gesture too
+  castRecoilT = 0; // local first-person arm recoil
 
   // Let everyone see the cast gesture start right away; the actual AoE
   // effect is deliberately delayed to CAST_FIRE_DELAY_MS so it triggers
@@ -2124,36 +2131,21 @@ function animate() {
     if (keys['ArrowDown'])  pitch -= keyLookSpeed * dt;
     pitch = Math.max(-PITCH_CLAMP, Math.min(PITCH_CLAMP, pitch));
 
-    // Own body: positioned/rotated exactly like a remote player's, and its
-    // idle/walk/cast animation driven the same way via advanceCharacterAnimation.
-    // There's only one Running clip (no strafe/backward variants), so instead
-    // of always facing the camera's yaw (which made the character visibly
-    // "run forward" while actually strafing or backing up), the body turns to
-    // face whichever direction it's actually moving; it only faces the
-    // camera/aim direction again once movement stops (matters for the cast
-    // gesture visually throwing the right way).
-    if (usingRealViewmodel) {
-      ownBodyGroup.position.set(playerPos.x, 0, playerPos.z);
-      ownBodyGroup.rotation.y = isMoving ? Math.atan2(-move.x, -move.z) : yaw;
-      advanceCharacterAnimation(myViewmodel, isMoving ? 'walk' : 'idle', dt);
-    }
+    // First-person arm animation: walk bob + cast recoil on the right arm
+    if (isMoving) walkBobT += dt * 9;
+    const bobY = isMoving ? Math.sin(walkBobT) * 0.02 : 0;
+    castRecoilT += dt;
+    let recoilZ = 0;
+    if (castRecoilT < 0.08) recoilZ = 0.18 * (castRecoilT / 0.08);
+    else if (castRecoilT < 0.3) recoilZ = 0.18 * (1 - (castRecoilT - 0.08) / 0.22);
+    fpArmL.position.y = FP_ARM_BASE_Y + bobY;
+    fpArmR.position.y = FP_ARM_BASE_Y - bobY;
+    fpArmR.position.z = FP_ARM_BASE_Z + recoilZ;
 
-    // Third-person-behind-the-head camera: orbits the head pivot at yaw+pitch,
-    // pulled in by resolveThirdPersonCameraDistance if a wall is in the way.
+    camera.position.set(playerPos.x, EYE_HEIGHT, playerPos.z);
     camera.rotation.set(0, 0, 0);
     camera.rotateY(yaw);
     camera.rotateX(pitch);
-    const lookDir = new THREE.Vector3(
-      -Math.sin(yaw) * Math.cos(pitch),
-      Math.sin(pitch),
-      -Math.cos(yaw) * Math.cos(pitch)
-    );
-    const headPivot = new THREE.Vector3(playerPos.x, EYE_HEIGHT, playerPos.z);
-    const backDir = lookDir.clone().negate();
-    const camDist = usingRealViewmodel
-      ? resolveThirdPersonCameraDistance(headPivot, backDir, THIRD_PERSON_DISTANCE)
-      : 0; // no body rendered yet (still loading) — stay at the head like before
-    camera.position.copy(headPivot).addScaledVector(backDir, camDist);
 
     fovKickT += dt;
     camera.fov = BASE_FOV + fovKickOffset(fovKickT);
@@ -2201,13 +2193,21 @@ function animate() {
       } else {
         rp.mesh.position.lerp(new THREE.Vector3(t.p[0], 0, t.p[2]), Math.min(1, dt * 12));
       }
-      rp.mesh.rotation.y = t.ry;
+      // Same fix as the (now-removed) local third-person body: there's only
+      // one directional Running clip, so facing the sender's own aim yaw
+      // while actually moving sideways/backward looked like skating. Derive
+      // facing from the mesh's own actual per-frame movement delta instead
+      // (computed BEFORE lastPos is overwritten below), falling back to the
+      // sender's aim yaw once they stop moving.
+      const delta = rp.mesh.position.clone().sub(rp.lastPos);
+      const speed = delta.length() / Math.max(dt, 0.001);
+      const rpMoving = speed > 0.3;
+      rp.mesh.rotation.y = rpMoving ? Math.atan2(-delta.x, -delta.z) : t.ry;
       rp.mesh.scale.y = rp.downed ? 0.3 : 1; // crude "downed" pose
+      rp.lastPos.copy(rp.mesh.position);
 
       if (rp.mixer) {
-        const speed = rp.mesh.position.distanceTo(rp.lastPos) / Math.max(dt, 0.001);
-        rp.lastPos.copy(rp.mesh.position);
-        advanceCharacterAnimation(rp, speed > 0.3 ? 'walk' : 'idle', dt);
+        advanceCharacterAnimation(rp, rpMoving ? 'walk' : 'idle', dt);
       }
     }
 
@@ -2298,7 +2298,6 @@ function enterGame() {
   inGame = true;
   applyLightingMode();
   switchSlot(0);
-  trySetupFpViewmodel();
   combatLog('Кликни по экрану, чтобы захватить мышь');
 }
 document.getElementById('btnHost').onclick = () => { readName(); startHost(); };
@@ -2360,8 +2359,7 @@ window.__debug = {
   hostKillAllEnemies, cheatKillAllEnemies, SCHOOL_SPELLS, cloneSpell, switchSlot,
   hostResolveArea, get activeSlot() { return activeSlot; }, get cooldowns() { return cooldowns; },
   CAST_FIRE_DELAY_MS,
-  get usingRealViewmodel() { return usingRealViewmodel; }, get myViewmodel() { return myViewmodel; },
-  get ownBodyGroup() { return ownBodyGroup; }, get castAnimDurationMs() { return castAnimDurationMs; },
+  get castAnimDurationMs() { return castAnimDurationMs; },
   get castLockedUntil() { return castLockedUntil; }, camera,
   getPlayerPositions, get fx() { return fx; },
   get zoneLights() { return zoneLights; }, setZoneLightsVisible, get flashLightPool() { return flashLightPool; },
