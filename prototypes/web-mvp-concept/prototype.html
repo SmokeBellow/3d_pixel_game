@@ -32,11 +32,17 @@
   #elementPanel { position: fixed; inset: 0; display: none; z-index: 5; flex-direction: column; align-items: center; box-sizing: border-box; padding: 3vh 3vw; background: radial-gradient(circle at center, #171331, #05040a); color: #eee; }
   .epTitle { margin: 0 0 6px; font-size: 32px; color: #c9b8ff; text-align: center; }
   .epSub { margin: 0 0 24px; font-size: 13px; color: #999; text-align: center; max-width: 640px; }
-  .epCards { display: flex; gap: 24px; width: 100%; max-width: 1400px; flex: 1; min-height: 0; }
-  .epCard { flex: 1; display: flex; flex-direction: column; background: rgba(20,18,35,0.75); border: 2px solid #443; border-radius: 14px; padding: 16px; cursor: pointer; transition: transform .15s, border-color .15s, box-shadow .15s, background .15s; overflow: hidden; min-width: 0; }
+  .epCards { position: relative; display: flex; gap: 24px; width: 100%; max-width: 1400px; flex: 1; min-height: 0; }
+  /* Higher z-index than .epCard, on purpose: the canvas is fully
+     transparent except inside each card's scissored .epCanvasWrap
+     rectangle, so it must paint on TOP of the card's own translucent
+     background there (otherwise that background dims the 3D model), while
+     staying invisible (and non-blocking, via pointer-events:none) over the
+     text below it. */
+  #epPreviewCanvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 3; }
+  .epCard { position: relative; z-index: 2; flex: 1; display: flex; flex-direction: column; background: rgba(20,18,35,0.75); border: 2px solid #443; border-radius: 14px; padding: 16px; cursor: pointer; transition: transform .15s, border-color .15s, box-shadow .15s, background .15s; overflow: hidden; min-width: 0; }
   .epCard:hover { transform: translateY(-6px) scale(1.02); border-color: var(--el-color); box-shadow: 0 0 30px var(--el-glow); background: rgba(30,26,50,0.9); }
   .epCanvasWrap { flex: 1; min-height: 0; border-radius: 10px; background: radial-gradient(circle at 50% 30%, rgba(255,255,255,0.08), transparent 70%); }
-  .epCanvasWrap canvas { width: 100%; height: 100%; display: block; }
   .epCard h3 { margin: 12px 0 6px; font-size: 21px; text-align: center; }
   .epLore { font-size: 12px; color: #aaa; line-height: 1.5; text-align: center; margin: 0 0 10px; }
   .epSpells { font-size: 12px; color: #ddd; border-top: 1px solid #333; padding-top: 8px; }
@@ -109,20 +115,27 @@
   <h1 class="epTitle">Выбери стихию</h1>
   <div class="epSub">Заклинания твоей школы будут доступны только тебе — комбинируй со стихиями союзников. Наведи, чтобы рассмотреть, кликни, чтобы выбрать.</div>
   <div class="epCards">
+    <!-- One shared canvas overlays all 3 cards (see epPreviewCanvas JS) —
+         3 separate WebGLRenderer contexts each needed their own shader
+         compilation for this model's skinning shader, which is what
+         actually caused the multi-second freeze on this screen, not the
+         mesh cloning itself. A single renderer draws each card's model
+         into its own scissored region instead. -->
+    <canvas id="epPreviewCanvas"></canvas>
     <div class="epCard" data-el="Fire" style="--el-color:#ff5533; --el-glow:rgba(255,85,51,0.45)">
-      <div class="epCanvasWrap"><canvas></canvas></div>
+      <div class="epCanvasWrap"></div>
       <h3>🔥 Орден Пламени</h3>
       <p class="epLore">Маги Ордена Пламени поклоняются огню как высшей силе разрушения. Они бьют быстро и жёстко, не оставляя врагу времени опомниться.</p>
       <div class="epSpells"></div>
     </div>
     <div class="epCard" data-el="Water" style="--el-color:#2288ee; --el-glow:rgba(34,136,238,0.45)">
-      <div class="epCanvasWrap"><canvas></canvas></div>
+      <div class="epCanvasWrap"></div>
       <h3>💧 Орден Волн</h3>
       <p class="epLore">Орден Волн черпает силу из океанских глубин — вода податлива, но неумолима. Они ослабляют врагов перед решающим ударом союзников.</p>
       <div class="epSpells"></div>
     </div>
     <div class="epCard" data-el="Lightning" style="--el-color:#ffdd33; --el-glow:rgba(255,221,51,0.45)">
-      <div class="epCanvasWrap"><canvas></canvas></div>
+      <div class="epCanvasWrap"></div>
       <h3>⚡ Орден Бури</h3>
       <p class="epLore">Маги Бури повелевают молнией — быстрой, безжалостной, разящей сразу нескольких врагов. Их удар многократно усиливается против уже мокрого противника.</p>
       <div class="epSpells"></div>
@@ -1057,6 +1070,7 @@ let castAnimDurationMs = null; // real-world duration of the full cast clip (sca
         idleObj.scale.setScalar(0.01); // Mixamo exports in cm
         mageTemplate = { root: idleObj, idleClip, walkClip, castClip };
         castAnimDurationMs = (castClip.duration / CAST_ANIM_TIMESCALE) * 1000;
+        warmupElementPreviews();
       }, undefined, err => console.error('Failed to load cast.fbx', err));
     }, undefined, err => console.error('Failed to load walk.fbx', err));
   }, undefined, err => console.error('Failed to load idle.fbx', err));
@@ -1141,14 +1155,23 @@ function makeRemotePlayer(name, element) {
 // mage model tinted to that element's color, slowly rotating. Runs its own
 // requestAnimationFrame loop, separate from the main game loop, since it
 // must render before the game (and its own animate()) has even started.
+//
+// All 3 cards share ONE THREE.WebGLRenderer/canvas (absolutely positioned
+// over the whole .epCards row) instead of one renderer per card: creating
+// 3 separate WebGL contexts meant 3 independent shader compiles for this
+// model's skinning shader, which is what actually caused a multi-second
+// freeze the first time this screen opened (measured via PerformanceObserver
+// longtask entries: two ~5-8s blocking tasks) — not the mesh cloning
+// itself. A single context lets Three.js reuse one compiled program across
+// all 3 clones. Each card still gets an independent scene/camera/model and
+// is drawn into its own scissored viewport matching its DOM rect.
 // ============================================================
 const ELEMENTS = ['Fire', 'Water', 'Lightning'];
-const elementPreviews = {}; // el -> { renderer, scene, camera, model, canvas, usingReal }
+const elementPreviews = {}; // el -> { scene, camera, model, wrapEl, usingReal }
+let elementPreviewRenderer = null;
 let elementPreviewRAF = null;
 const elementPreviewClock = new THREE.Clock();
 function buildElementPreview(el) {
-  const canvas = document.querySelector(`.epCard[data-el="${el}"] canvas`);
-  const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 10);
   camera.position.set(0, 1.15, 3.1);
@@ -1157,10 +1180,13 @@ function buildElementPreview(el) {
   const dir = new THREE.DirectionalLight(0xffffff, 0.9);
   dir.position.set(2, 4, 3);
   scene.add(dir);
-  const color = ELEMENT_COLOR[el] || 0xaaaaaa;
-  const model = mageTemplate ? makeRemotePlayerModel(color) : makePlaceholderModel(color);
+  // Always start with the cheap placeholder capsule, even if mageTemplate
+  // already finished loading — elementPreviewLoop() below upgrades to the
+  // real model one card at a time instead of all 3 synchronously.
+  const model = makePlaceholderModel(ELEMENT_COLOR[el] || 0xaaaaaa);
   scene.add(model.object);
-  elementPreviews[el] = { renderer, scene, camera, model, canvas, usingReal: !!mageTemplate };
+  const wrapEl = document.querySelector(`.epCard[data-el="${el}"] .epCanvasWrap`);
+  elementPreviews[el] = { scene, camera, model, wrapEl, usingReal: false };
 }
 function upgradeElementPreview(el) {
   const p = elementPreviews[el];
@@ -1169,20 +1195,41 @@ function upgradeElementPreview(el) {
   p.scene.add(p.model.object);
   p.usingReal = true;
 }
-function resizeElementPreview(el) {
-  const p = elementPreviews[el];
-  if (!p) return;
-  const w = p.canvas.clientWidth, h = p.canvas.clientHeight;
-  if (w === 0 || h === 0) return; // panel still hidden/mid-layout — skip, retried next call
-  p.renderer.setSize(w, h, false);
-  p.camera.aspect = w / h;
-  p.camera.updateProjectionMatrix();
+function resizeElementPreviewCanvas() {
+  const canvas = document.getElementById('epPreviewCanvas');
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (w === 0 || h === 0 || !elementPreviewRenderer) return; // panel still hidden/mid-layout
+  elementPreviewRenderer.setSize(w, h, false);
+}
+// Pre-pays the one-time WebGL shader-compile cost for this model's skinning
+// shader as soon as the asset finishes loading, off-screen — measured via
+// PerformanceObserver longtask entries at ~2.7s (down from ~12.5s across 3
+// separate contexts before elementPreviewRenderer was shared). Doing it
+// here means that cost lands while the player is still on the main menu
+// (which, on a real first-time ~116MB download, they're on far longer than
+// this takes anyway) instead of right when they click "host" and expect
+// the class-selection screen to respond immediately.
+function warmupElementPreviews() {
+  if (elementPreviewRenderer) return;
+  elementPreviewRenderer = new THREE.WebGLRenderer({ canvas: document.getElementById('epPreviewCanvas'), alpha: true, antialias: true });
+  elementPreviewRenderer.setSize(64, 64, false); // arbitrary small off-screen size — just needs a real render pass
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 10);
+  camera.position.set(0, 1.15, 3.1);
+  camera.lookAt(0, 1.0, 0);
+  scene.add(new THREE.HemisphereLight(0x9090ff, 0x201020, 1.0));
+  const model = makeRemotePlayerModel(0xffffff);
+  scene.add(model.object);
+  elementPreviewRenderer.render(scene, camera); // pays the shader-compile cost now, discarded after
 }
 function ensureElementPreviews() {
+  if (!elementPreviewRenderer) {
+    elementPreviewRenderer = new THREE.WebGLRenderer({ canvas: document.getElementById('epPreviewCanvas'), alpha: true, antialias: true });
+  }
   for (const el of ELEMENTS) {
     if (!elementPreviews[el]) buildElementPreview(el);
-    resizeElementPreview(el);
   }
+  resizeElementPreviewCanvas();
   if (!elementPreviewRAF) {
     elementPreviewClock.start();
     elementPreviewLoop();
@@ -1194,17 +1241,37 @@ function stopElementPreviewLoop() {
 function elementPreviewLoop() {
   elementPreviewRAF = requestAnimationFrame(elementPreviewLoop);
   const dt = Math.min(elementPreviewClock.getDelta(), 0.05);
+  // idle.fbx is ~116MB — mageTemplate often isn't loaded yet the first time
+  // this screen shows, so cards start with a placeholder capsule and swap
+  // in the real model once it's ready. Upgrading is itself real work (full
+  // skeleton+material clone) — at most ONE card upgrades per frame so the
+  // 3 cards' costs land on separate frames instead of stalling one frame 3x.
+  if (mageTemplate) {
+    const pending = ELEMENTS.find(el => elementPreviews[el] && !elementPreviews[el].usingReal);
+    if (pending) upgradeElementPreview(pending);
+  }
+  const canvas = document.getElementById('epPreviewCanvas');
+  const canvasRect = canvas.getBoundingClientRect();
+  if (canvasRect.width === 0 || canvasRect.height === 0) return; // panel hidden
+  elementPreviewRenderer.setScissorTest(false);
+  elementPreviewRenderer.clear();
+  elementPreviewRenderer.setScissorTest(true);
   for (const el of ELEMENTS) {
     const p = elementPreviews[el];
     if (!p) continue;
-    // idle.fbx is ~116MB — mageTemplate often isn't loaded yet the first
-    // time this screen shows, so start with a placeholder capsule and swap
-    // in the real model the moment it finishes loading, mid-rotation.
-    if (mageTemplate && !p.usingReal) upgradeElementPreview(el);
     p.model.object.rotation.y += dt * 0.6;
     if (p.model.mixer) p.model.mixer.update(dt);
-    p.renderer.render(p.scene, p.camera);
+    const r = p.wrapEl.getBoundingClientRect();
+    const x = r.left - canvasRect.left, yTop = r.top - canvasRect.top;
+    const yGl = canvasRect.height - (yTop + r.height); // WebGL viewport origin is bottom-left
+    if (r.width <= 0 || r.height <= 0) continue;
+    elementPreviewRenderer.setViewport(x, yGl, r.width, r.height);
+    elementPreviewRenderer.setScissor(x, yGl, r.width, r.height);
+    p.camera.aspect = r.width / r.height;
+    p.camera.updateProjectionMatrix();
+    elementPreviewRenderer.render(p.scene, p.camera);
   }
+  elementPreviewRenderer.setScissorTest(false);
 }
 // One-line mechanical hint per spell, shown on the class-selection card —
 // separate from SCHOOL_SPELLS itself so tuning numbers there don't need

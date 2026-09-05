@@ -490,26 +490,56 @@ Real multi-client test pending.
   involved — all four paths confirmed with zero console errors.
 - **Rebuilt the class-selection screen** (was a small centered modal with 3
   plain buttons) into a full-screen, 3-card layout with a live 3D preview
-  per element. Each card gets its own independent `THREE.WebGLRenderer`
-  bound to its own `<canvas>`, its own tiny scene/camera/lights, and a
-  clone of the shared mage model (via the same `makeRemotePlayerModel()`
-  used for actual players) tinted to that element's color, slowly rotating
-  — run by a dedicated `requestAnimationFrame` loop separate from the main
-  game loop, since the picker can be shown before the game (and its own
-  `animate()`) has started. Since `idle.fbx` is ~116MB, the previews often
-  need to show *before* `mageTemplate` finishes loading — each card starts
-  with the existing lightweight placeholder capsule
-  (`makePlaceholderModel`) and the loop swaps in the real model
-  mid-rotation the moment `mageTemplate` becomes available, with no visible
-  hitch. Canvas sizing needs one `requestAnimationFrame` deferral after
+  per element: a clone of the shared mage model (via the same
+  `makeRemotePlayerModel()` used for actual players) tinted to that
+  element's color, slowly rotating, run by a dedicated
+  `requestAnimationFrame` loop separate from the main game loop since the
+  picker can be shown before the game (and its own `animate()`) has
+  started. Since `idle.fbx` is ~116MB, the previews often need to show
+  *before* `mageTemplate` finishes loading — each card starts with the
+  existing lightweight placeholder capsule (`makePlaceholderModel`) and the
+  loop swaps in the real model mid-rotation once `mageTemplate` becomes
+  available. Canvas sizing needs one `requestAnimationFrame` deferral after
   `display:flex` is set — a `display:none` element reports `clientWidth`/
-  `clientHeight` of 0, so sizing the renderer synchronously on show would
-  produce a 0×0 canvas. Hover-highlight is plain CSS (`:hover` + a
-  per-card `--el-color`/`--el-glow` custom property set inline) — no JS
-  state needed. Spell blurbs are a separate small lookup table keyed by
-  spell name (`SPELL_BLURB`) rather than baked into `SCHOOL_SPELLS`, so
+  `clientHeight` of 0, so sizing synchronously on show would produce a 0×0
+  canvas. Hover-highlight is plain CSS (`:hover` + a per-card
+  `--el-color`/`--el-glow` custom property set inline) — no JS state
+  needed. Spell blurbs are a separate small lookup table keyed by spell
+  name (`SPELL_BLURB`) rather than baked into `SCHOOL_SPELLS`, so
   balance tuning there can't accidentally desync the flavor text; only the
   name/icon are pulled live from the real spell data. Lore paragraphs are
   static hand-written prose per card (2 sentences each) — not derived from
   anything, since there's no lore document yet for the three orders.
+- **"Game hangs after picking host, class-selection screen takes forever
+  to appear"** — the initial class-selection implementation gave each of
+  the 3 cards its own independent `THREE.WebGLRenderer`/canvas/GL context.
+  Diagnosed with a `PerformanceObserver({entryTypes:['longtask']})` probe:
+  clicking host produced two back-to-back main-thread-blocking tasks
+  totaling ~12.5s (7.8s + 4.7s). Root cause was **not** the mesh cloning —
+  it was WebGL shader compilation: 3 separate GL contexts each need their
+  own independent compile of this model's (many-bone) skinning shader on
+  first render, and that compile is synchronous and expensive. Fixed by
+  switching to a **single shared `THREE.WebGLRenderer`** for all 3 cards —
+  one full-viewport `<canvas>` absolutely positioned over the `.epCards`
+  row (`pointer-events:none`, so hover/click still reach the actual card
+  `<div>`s underneath), with each card's model drawn into its own
+  `renderer.setScissor()`/`setViewport()` region computed from that card's
+  `.epCanvasWrap` `getBoundingClientRect()` every frame. One shared GL
+  context means Three.js's program cache only has to compile the shader
+  once for all 3 (functionally identical) cloned materials — this alone
+  cut the freeze to a single ~2.7s task. Went one step further and moved
+  even that remaining cost off the critical path entirely: `warmupElementPreviews()`
+  builds the shared renderer and renders one throwaway 64×64 off-screen
+  instance the moment `mageTemplate` finishes loading (in the background,
+  usually while the player is still reading the main menu — on a real
+  first-time ~116MB download they're on that screen far longer than the
+  compile takes anyway), so by the time they actually open the picker the
+  shader is already warm. Re-measured after this fix: clicking host now
+  produces at most a single ~79ms task — imperceptible. Also fixed a
+  z-index/paint-order detail while restructuring: the shared canvas must
+  paint *above* each card's own translucent background (otherwise that
+  background visibly dims the 3D model drawn beneath it) but the scissored
+  regions leave everything else on the canvas fully transparent, so the
+  card's text underneath is unaffected despite being "under" a
+  higher-z-index element.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)
