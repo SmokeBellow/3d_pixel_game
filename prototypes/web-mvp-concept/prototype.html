@@ -1104,7 +1104,7 @@ let castAnimDurationMs1 = null, castAnimDurationMs2 = null; // real-world durati
   }).catch(err => console.error('Failed to load mage assets', err));
 })();
 
-function makeRemotePlayerModel(color, element) {
+function makeRemotePlayerModel(element) {
   const tmpl = (element === 'Fire' && mageTemplateFire) ? mageTemplateFire : mageTemplate;
   const clone = skeletonClone(tmpl.root);
   // Measured geometrically: at rotation.y=0 this Mixamo rig's cast animation
@@ -1112,16 +1112,19 @@ function makeRemotePlayerModel(color, element) {
   // player movement code) is -Z at yaw 0. Without this correction every
   // remote player visually faces/casts backward relative to their real aim.
   clone.rotation.y = Math.PI;
+  // Materials are still cloned per-instance (never shared across players)
+  // in case a future per-instance effect needs to mutate one (e.g. a
+  // downed-state fade) — but no longer recolored by element. Players keep
+  // each model's original look; `color` is only used for the name tag and
+  // the (temporary, pre-load) placeholder capsule now.
   clone.traverse(o => {
     if (o.isMesh) {
       // Some characters (e.g. Brady) export multiple material slots per
       // mesh as an array instead of one material — handle both shapes.
       if (Array.isArray(o.material)) {
-        o.material = o.material.map(m => m.clone()); // never share materials across instances
-        o.material.forEach(m => m.color && m.color.set(color));
+        o.material = o.material.map(m => m.clone());
       } else {
         o.material = o.material.clone();
-        o.material.color.set(color);
       }
     }
   });
@@ -1166,7 +1169,7 @@ function makePlaceholderModel(color) {
 function makeRemotePlayer(name, element) {
   const group = new THREE.Group();
   const color = ELEMENT_COLOR[element] || 0xaaaaaa;
-  const model = mageTemplate ? makeRemotePlayerModel(color, element) : makePlaceholderModel(color);
+  const model = mageTemplate ? makeRemotePlayerModel(element) : makePlaceholderModel(color);
   group.add(model.object);
   const label = makeNameSprite(name, color);
   label.position.y = 2.6;
@@ -1228,7 +1231,7 @@ function buildElementPreview(el) {
 }
 function upgradeElementPreview(el) {
   const p = elementPreviews[el];
-  p.model = makeRemotePlayerModel(ELEMENT_COLOR[el] || 0xaaaaaa, el);
+  p.model = makeRemotePlayerModel(el);
   p.scene.add(p.model.object);
   p.usingReal = true;
   if (p.loaderEl) p.loaderEl.style.display = 'none';

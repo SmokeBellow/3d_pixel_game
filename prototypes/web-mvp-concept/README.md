@@ -131,17 +131,22 @@ Real multi-client test pending.
 - One fixed **spawn/respawn point per zone with a canvas-drawn pentagram**
   (glowing circle + five-point star + runes, pulsing light, 5×5 units) — no
   external image file. Enemies cannot enter its `SPAWN_SAFE_RADIUS` (6) ward
-- **Player color = element color** (each school has a fixed color, not a
-  round-robin per-connection color)
+- **Player color = element color** — for the **name tag** only now (each
+  school has a fixed color, not a round-robin per-connection color); the
+  3D model itself keeps its own original, untinted look (see Findings —
+  per-element recoloring was removed by request)
 - **Lightning renders as a zigzag bolt** (hit detection unchanged — still a
   straight raycast from the camera; only the visual is jagged)
 - **Lobby with chat**: joining players see a waiting room (with player list
   + chat, shared with the host's lobby chat) until the host starts; late
   joiners after the game has started also get chat/lobby state correctly
 - **Player visuals**: **Fire has its own distinct Mixamo model**; Water and
-  Lightning still share "Brady" (tinted per element) — the first step
-  toward every school eventually having its own look, per user request
-  (see Findings). Both idle rigs share the same standard Mixamo skeleton,
+  Lightning still share "Brady" — the first step toward every school
+  eventually having its own look, per user request (see Findings). Models
+  render in their **original, untinted colors** (per-element recoloring
+  was removed by request — see Findings); only the name tag above a
+  player's head still uses their element's color. Both idle rigs share the
+  same standard Mixamo skeleton,
   so the same walk/cast clips retarget onto either with no extra work.
   Rendered for every **remote** player as seen by their teammates — your
   own view is first-person with simple placeholder box/sphere arms (see
@@ -653,4 +658,20 @@ Real multi-client test pending.
   ever be as correct as your understanding of every input that affects the
   cost, and this one was missing something neither the light setup nor the
   scissor state (both checked) turned out to be.
+- **Removed per-element model recoloring** now that Fire has its own
+  distinct model — tinting made more sense when Water/Lightning/Fire were
+  all the same re-colored Brady mesh as the only way to tell them apart at
+  a glance; now that models can just look different from each other, the
+  user asked to drop the tint and keep each model's original art
+  (skin/cloth colors as authored) instead. `makeRemotePlayerModel()` still
+  clones every material per-instance (never shares a Material object
+  across players — kept in case a future per-instance effect, e.g. a
+  downed-state fade, needs to mutate one) but no longer overwrites
+  `.color`; the function's now-unused `color` parameter was removed
+  entirely rather than left as dead weight. Element color is still used
+  for the floating name tag above each player's head (`makeNameSprite`)
+  and for the brief pre-load placeholder capsule (`makePlaceholderModel`,
+  shown for the handful of frames before a real model finishes loading) —
+  neither of those has an "original" appearance to preserve, so tinting
+  those still makes sense for at-a-glance element identification.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)
