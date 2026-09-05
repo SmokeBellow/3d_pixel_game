@@ -196,15 +196,20 @@ const EYE_HEIGHT = 1.65;          // camera-system.md eye_height_offset
 const PITCH_CLAMP = 89 * Math.PI / 180; // camera-system.md pitch clamp
 const BASE_FOV = 80;              // vertical FOV (three.js), ~90 horizontal
 const KICK_PEAK = 5, KICK_ATTACK = 0.05, KICK_DECAY = 0.20; // fov_kick_response
-// Cast animation timing — Magic Spell Casting's right arm reaches full
-// extension around the 3s mark of the ORIGINAL (timeScale=1) clip. The clip
-// is sped up (see makeRemotePlayerModel) so casts keep pace with spell
-// cooldowns, so the real-world delay before the actual shot fires has to
-// scale down by the same factor, or the bolt visibly leaves the hand before
-// the animation's arm gets there.
+// Cast animation timing — two distinct cast clips now, one per spell tier
+// (tier-1 spells play cast1.fbx "Standing 1H Magic Attack 01", tier-2
+// spells play cast2.fbx, the original "Magic Spell Casting"). Each clip's
+// right arm reaches full extension/release at a different point in its own
+// ORIGINAL (timeScale=1) timeline, so each needs its own extend-time
+// constant. Both clips are sped up equally (see makeRemotePlayerModel) so
+// casts keep pace with spell cooldowns, so the real-world delay before the
+// actual shot fires has to scale down by that same factor, or the bolt
+// visibly leaves the hand before the animation's arm gets there.
 const CAST_ANIM_TIMESCALE = 2.5;
-const CAST_ARM_EXTEND_TIME = 3.0; // seconds into the original clip
-const CAST_FIRE_DELAY_MS = (CAST_ARM_EXTEND_TIME / CAST_ANIM_TIMESCALE) * 1000;
+const CAST_ARM_EXTEND_TIME_T1 = 34 / 30; // cast1.fbx: frame 34 of 69 @ 30fps (user-measured in Mixamo)
+const CAST_ARM_EXTEND_TIME_T2 = 3.0;     // cast2.fbx: seconds into the original clip
+const CAST_FIRE_DELAY_MS_T1 = (CAST_ARM_EXTEND_TIME_T1 / CAST_ANIM_TIMESCALE) * 1000;
+const CAST_FIRE_DELAY_MS_T2 = (CAST_ARM_EXTEND_TIME_T2 / CAST_ANIM_TIMESCALE) * 1000;
 const BASE_SENSITIVITY = 0.0022;
 let sensitivity = BASE_SENSITIVITY; // shared camera/mouse sensitivity — TODO: expose as a settings slider
 const LOOK_KEY_SPEED = 2.0; // rad/sec baseline at BASE_SENSITIVITY, scales with `sensitivity`
@@ -1053,28 +1058,34 @@ function makeNameSprite(text, colorHex) {
 }
 
 // Mixamo "Brady" rig — idle.fbx carries the actual mesh+skeleton (downloaded
-// "With Skin"); walk.fbx (a Running clip) and cast.fbx (Magic Spell Casting)
-// are downloaded "Without Skin" — they're motion-only and share the exact
-// same skeleton as idle.fbx, so no retargeting math is needed, just play
-// each clip on idle's rig. idle.fbx is ~116MB (Brady's own textures are
-// much heavier than the previous Ganfaul model's ~7MB) — a known, accepted
-// tradeoff, see the README's Findings.
+// "With Skin"); walk.fbx (a Running clip), cast1.fbx (tier-1 spells:
+// "Standing 1H Magic Attack 01") and cast2.fbx (tier-2 spells: the original
+// "Magic Spell Casting") are all downloaded "Without Skin" — they're
+// motion-only and share the exact same skeleton as idle.fbx, so no
+// retargeting math is needed, just play each clip on idle's rig. idle.fbx
+// is ~116MB (Brady's own textures are much heavier than the previous
+// Ganfaul model's ~7MB) — a known, accepted tradeoff, see the README's
+// Findings.
 const MODEL_BASE = 'models/mage/';
-let mageTemplate = null; // { root, idleClip, walkClip, castClip } once all three load
-let castAnimDurationMs = null; // real-world duration of the full cast clip (scaled) — how long casting locks out any further cast
+let mageTemplate = null; // { root, idleClip, walkClip, castClip1, castClip2 } once all four load
+let castAnimDurationMs1 = null, castAnimDurationMs2 = null; // real-world duration of each cast clip (scaled) — how long casting locks out any further cast
 (function loadMageAssets() {
   const loader = new FBXLoader();
   loader.load(MODEL_BASE + 'idle.fbx', idleObj => {
     const idleClip = idleObj.animations[0];
     loader.load(MODEL_BASE + 'walk.fbx', walkObj => {
       const walkClip = walkObj.animations[0];
-      loader.load(MODEL_BASE + 'cast.fbx', castObj => {
-        const castClip = castObj.animations[0];
-        idleObj.scale.setScalar(0.01); // Mixamo exports in cm
-        mageTemplate = { root: idleObj, idleClip, walkClip, castClip };
-        castAnimDurationMs = (castClip.duration / CAST_ANIM_TIMESCALE) * 1000;
-        warmupElementPreviews();
-      }, undefined, err => console.error('Failed to load cast.fbx', err));
+      loader.load(MODEL_BASE + 'cast1.fbx', cast1Obj => {
+        const castClip1 = cast1Obj.animations[0];
+        loader.load(MODEL_BASE + 'cast2.fbx', cast2Obj => {
+          const castClip2 = cast2Obj.animations[0];
+          idleObj.scale.setScalar(0.01); // Mixamo exports in cm
+          mageTemplate = { root: idleObj, idleClip, walkClip, castClip1, castClip2 };
+          castAnimDurationMs1 = (castClip1.duration / CAST_ANIM_TIMESCALE) * 1000;
+          castAnimDurationMs2 = (castClip2.duration / CAST_ANIM_TIMESCALE) * 1000;
+          warmupElementPreviews();
+        }, undefined, err => console.error('Failed to load cast2.fbx', err));
+      }, undefined, err => console.error('Failed to load cast1.fbx', err));
     }, undefined, err => console.error('Failed to load walk.fbx', err));
   }, undefined, err => console.error('Failed to load idle.fbx', err));
 })();
@@ -1103,20 +1114,24 @@ function makeRemotePlayerModel(color) {
   const actions = {
     idle: mixer.clipAction(mageTemplate.idleClip),
     walk: mixer.clipAction(mageTemplate.walkClip),
-    cast: mixer.clipAction(mageTemplate.castClip),
+    cast1: mixer.clipAction(mageTemplate.castClip1),
+    cast2: mixer.clipAction(mageTemplate.castClip2),
   };
   // The Running clip's native leg-cycle rate is faster than MOVE_SPEED
   // actually covers on the ground, so feet visibly slide/overshoot —
   // slow the clip down to roughly match. First-pass estimate; retune by
   // feel if it still looks off.
   actions.walk.timeScale = MOVE_ANIM_TIMESCALE;
-  actions.cast.setLoop(THREE.LoopOnce);
-  actions.cast.clampWhenFinished = true;
-  // The Mixamo clip is a native ~2.3s gesture, but spell cooldowns are
-  // 0.5-1.0s — left at native speed the gesture visibly lags behind how
-  // fast the player is actually casting. Speeding it up keeps the visual
-  // roughly synced with the game's actual casting pace.
-  actions.cast.timeScale = CAST_ANIM_TIMESCALE;
+  // Both cast clips play once and hold their last pose — advanceCharacterAnimation()
+  // crossfades back to idle/walk once each one finishes. Left at native
+  // speed the gesture visibly lags behind how fast the player is actually
+  // casting (spell cooldowns are 0.5-1.0s), so both are sped up equally to
+  // keep the visual roughly synced with the game's actual casting pace.
+  for (const key of ['cast1', 'cast2']) {
+    actions[key].setLoop(THREE.LoopOnce);
+    actions[key].clampWhenFinished = true;
+    actions[key].timeScale = CAST_ANIM_TIMESCALE;
+  }
   actions.idle.play();
   return { object: clone, mixer, actions, current: 'idle' };
 }
@@ -1299,33 +1314,36 @@ function populateElementCards() {
 populateElementCards();
 
 // Shared by remote players AND the local first-person viewmodel below —
-// both are just {mixer, actions, current} driven the same way.
-function triggerCast(entity) {
+// both are just {mixer, actions, current} driven the same way. `tier`
+// picks which of the two cast clips to play (1 -> cast1.fbx, 2 -> cast2.fbx).
+function triggerCast(entity, tier) {
   if (!entity || !entity.actions) return;
-  if (entity.current === 'cast') {
+  const castKey = tier === 2 ? 'cast2' : 'cast1';
+  if (entity.current === castKey) {
     // Re-triggered before the previous cast finished (cooldowns are shorter
     // than the clip) — restart cleanly instead of crossfading an action
     // into itself, which visibly glitches.
-    entity.actions.cast.stop().reset().play();
+    entity.actions[castKey].stop().reset().play();
   } else {
-    entity.actions.cast.reset();
-    entity.actions[entity.current].crossFadeTo(entity.actions.cast, 0.05, false);
-    entity.actions.cast.play();
-    entity.current = 'cast';
+    entity.actions[castKey].reset();
+    entity.actions[entity.current].crossFadeTo(entity.actions[castKey], 0.05, false);
+    entity.actions[castKey].play();
+    entity.current = castKey;
   }
 }
-function triggerRemoteCast(pid) { triggerCast(remotePlayers[pid]); }
+function triggerRemoteCast(pid, tier) { triggerCast(remotePlayers[pid], tier); }
 
 function advanceCharacterAnimation(entity, wantState, dt) {
   if (!entity.mixer) return;
-  const castDone = entity.current === 'cast' &&
-    entity.actions.cast.time >= entity.actions.cast.getClip().duration - 0.05;
+  const isCasting = entity.current === 'cast1' || entity.current === 'cast2';
+  const castDone = isCasting &&
+    entity.actions[entity.current].time >= entity.actions[entity.current].getClip().duration - 0.05;
   if (castDone) {
     // Resume whatever they're *actually* doing right now, not a hardcoded idle.
     entity.actions[wantState].reset().play();
-    entity.actions.cast.crossFadeTo(entity.actions[wantState], 0.15, false);
+    entity.actions[entity.current].crossFadeTo(entity.actions[wantState], 0.15, false);
     entity.current = wantState;
-  } else if (wantState !== entity.current && entity.current !== 'cast') {
+  } else if (wantState !== entity.current && !isCasting) {
     entity.actions[wantState].reset().play();
     entity.actions[entity.current].crossFadeTo(entity.actions[wantState], 0.2, false);
     entity.current = wantState;
@@ -2338,7 +2356,7 @@ function handleFx(msg) {
   else if (msg.kind === 'explosion') spawnExplosionFx(new THREE.Vector3().fromArray(msg.pos), msg.color, msg.radius);
   else if (msg.kind === 'nova') spawnNovaFx(new THREE.Vector3().fromArray(msg.pos), msg.radius, msg.color);
   else if (msg.kind === 'impact') spawnImpactFx(new THREE.Vector3().fromArray(msg.pos), msg.color);
-  if (msg.pid && msg.pid !== myPeerId) triggerRemoteCast(msg.pid);
+  if (msg.pid && msg.pid !== myPeerId) triggerRemoteCast(msg.pid, msg.tier);
 }
 let castLockedUntil = 0; // performance.now() timestamp — no spell (any slot) can be cast again until the cast animation finishes
 function tryCast() {
@@ -2348,16 +2366,19 @@ function tryCast() {
   const spell = mySpells[activeSlot];
   const castSlot = activeSlot; // snapshot — player might scroll to another slot before the delayed effect below fires
   cooldowns[activeSlot] = spell.cooldown; // cooldownMult from passives is applied client-side for feel only
+  const big = spell.tier === 2; // tier-2 spells read as visibly "bigger" tools, not just re-skinned numbers
+  const castAnimDurationMs = big ? castAnimDurationMs2 : castAnimDurationMs1;
+  const castFireDelayMs = big ? CAST_FIRE_DELAY_MS_T2 : CAST_FIRE_DELAY_MS_T1;
   castLockedUntil = performance.now() + (castAnimDurationMs || spell.cooldown * 1000);
   fovKickT = 0; // fov_kick_response trigger (re-trigger resets, no stacking)
   castRecoilT = 0; // local first-person arm recoil
-  const big = spell.tier === 2; // tier-2 spells read as visibly "bigger" tools, not just re-skinned numbers
 
   // Let everyone see the cast gesture start right away; the actual shot
-  // (projectile/hitscan/nova) is deliberately delayed to CAST_FIRE_DELAY_MS
+  // (projectile/hitscan/nova) is deliberately delayed to castFireDelayMs
   // so it fires exactly when the animation's arm reaches full extension,
   // instead of visibly leaving the hand before the gesture gets there.
-  const castStartMsg = { t: 'fx', kind: 'castStart', pid: myPeerId };
+  // `tier` tells onlookers which of the two cast clips (cast1/cast2) to play.
+  const castStartMsg = { t: 'fx', kind: 'castStart', pid: myPeerId, tier: spell.tier };
   if (isHost) broadcast(castStartMsg);
   else if (connections[0] && connections[0].open) connections[0].send(JSON.stringify(castStartMsg));
 
@@ -2406,7 +2427,7 @@ function tryCast() {
     } else if (connections[0] && connections[0].open) {
       connections[0].send(JSON.stringify(castMsg));
     }
-  }, CAST_FIRE_DELAY_MS);
+  }, castFireDelayMs);
 }
 
 // ============================================================
@@ -2708,8 +2729,8 @@ window.__debug = {
   hostApplyDamage, get partyXp() { return partyXp; },
   hostKillAllEnemies, cheatKillAllEnemies, SCHOOL_SPELLS, cloneSpell, switchSlot,
   hostResolveNova, hostResolveCast, get activeSlot() { return activeSlot; }, get cooldowns() { return cooldowns; },
-  get projectiles() { return projectiles; }, CAST_FIRE_DELAY_MS,
-  get castAnimDurationMs() { return castAnimDurationMs; },
+  get projectiles() { return projectiles; }, CAST_FIRE_DELAY_MS_T1, CAST_FIRE_DELAY_MS_T2,
+  get castAnimDurationMs1() { return castAnimDurationMs1; }, get castAnimDurationMs2() { return castAnimDurationMs2; },
   get castLockedUntil() { return castLockedUntil; }, camera,
   getPlayerPositions, get fx() { return fx; },
   get zoneLights() { return zoneLights; }, setZoneLightsVisible, get flashLightPool() { return flashLightPool; },

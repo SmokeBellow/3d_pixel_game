@@ -138,17 +138,22 @@ Real multi-client test pending.
 - **Lobby with chat**: joining players see a waiting room (with player list
   + chat, shared with the host's lobby chat) until the host starts; late
   joiners after the game has started also get chat/lobby state correctly
-- **Player visuals**: Mixamo "Brady" model (idle/run/cast animations) tinted
-  per element, rendered for every **remote** player as seen by their
-  teammates. Your own view is first-person with simple placeholder
-  box/sphere arms (see Findings — the real-viewmodel and third-person
-  experiments were both tried and reverted). The cast gesture starts
+- **Player visuals**: Mixamo "Brady" model (idle/run + **two separate cast
+  animations**) tinted per element, rendered for every **remote** player as
+  seen by their teammates. Your own view is first-person with simple
+  placeholder box/sphere arms (see Findings — the real-viewmodel and
+  third-person experiments were both tried and reverted). **Tier-1 spells
+  play `cast1.fbx` ("Standing 1H Magic Attack 01"), tier-2 spells play
+  `cast2.fbx`** (the original "Magic Spell Casting") — each has its own
+  timing calibration for when its swing actually releases, so the shot
+  fires in sync with either clip, not just one. The cast gesture starts
   playing immediately on cast (a simple arm-recoil animation in first
   person; the full Mixamo cast clip for anyone watching you), but the
-  actual shot (projectile/hitscan/nova) is deliberately delayed ~1.2s to
-  fire exactly when the animation's arm reaches full extension for
-  onlookers, not before. No spell (any slot) can be cast again until the
-  cast animation finishes, even if that spell's own cooldown is shorter.
+  actual shot (projectile/hitscan/nova) is deliberately delayed (~0.45s for
+  tier-1, ~1.2s for tier-2) to fire exactly when that clip's arm reaches
+  full extension for onlookers, not before. No spell (any slot) can be cast
+  again until its own cast animation finishes, even if that spell's own
+  cooldown is shorter.
   Remote players' movement animation is a Running clip, not Walking — a
   deliberate swap, played at a tuned `MOVE_ANIM_TIMESCALE` (0.6) so the
   leg-cycle roughly matches actual ground speed instead of sliding; their
@@ -569,4 +574,32 @@ Real multi-client test pending.
   even when `mageTemplate` had already finished loading at page-load time,
   confirming the loading state always shows for at least one frame rather
   than being racy.
+- **Split the single shared cast animation into two, one per spell tier**
+  (`cast1.fbx` = "Standing 1H Magic Attack 01" for tier-1 spells,
+  `cast2.fbx` = the original "Magic Spell Casting" for tier-2), per user
+  request, so each tier reads as visually distinct rather than every spell
+  in the game playing the exact same gesture. This meant the single
+  `CAST_ARM_EXTEND_TIME`/`CAST_FIRE_DELAY_MS` timing pair (and the single
+  `actions.cast`/`'cast'` animation-state key throughout
+  `triggerCast`/`advanceCharacterAnimation`) had to become two of
+  everything — `CAST_ARM_EXTEND_TIME_T1`/`_T2`,
+  `CAST_FIRE_DELAY_MS_T1`/`_T2`, `castAnimDurationMs1`/`2`, and
+  `actions.cast1`/`cast2` as separate `AnimationAction`s sharing one
+  `AnimationMixer`. `triggerCast(entity, tier)` now picks the clip key from
+  `tier`, and the `castStart` fx message carries `tier` over the network so
+  remote viewers play the *correct* clip for what the caster is actually
+  casting, not always the same one. Getting the new clip's release-frame
+  timing right needed the user to read it off directly in Mixamo's own
+  preview (34th of 69 frames) rather than guessing a duration-relative
+  percentage — Mixamo exports at 30fps, so `34/30 ≈ 1.133s` into the
+  original (unscaled) clip is when the arm actually releases, mirroring how
+  the original clip's "~3s mark" was identified the same way. Verified via
+  `triggerRemoteCast(pid, tier)` on a scripted fake remote player: tier 1
+  plays `cast1` and returns to idle at ~920ms (2.3s clip / 2.5x timescale),
+  tier 2 plays `cast2` and returns at ~1707ms (4.27s clip / 2.5x timescale)
+  — independent of each other, no cross-contamination between the two
+  action states. Also re-verified the full `tryCast()` pipeline end to end
+  for tier 1: the projectile now visibly leaves the hand ~0.45s after
+  pressing cast (down from the shared clip's ~1.2s), matching `cast1`'s
+  much shorter, snappier swing instead of the longer tier-2 gesture.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)
