@@ -496,10 +496,12 @@ Real multi-client test pending.
   `requestAnimationFrame` loop separate from the main game loop since the
   picker can be shown before the game (and its own `animate()`) has
   started. Since `idle.fbx` is ~116MB, the previews often need to show
-  *before* `mageTemplate` finishes loading — each card starts with the
-  existing lightweight placeholder capsule (`makePlaceholderModel`) and the
-  loop swaps in the real model mid-rotation once `mageTemplate` becomes
-  available. Canvas sizing needs one `requestAnimationFrame` deferral after
+  *before* `mageTemplate` finishes loading — each card shows a small CSS
+  spinner + "Загрузка модели…" (`.epLoader`) over its empty canvas region
+  until `mageTemplate` is ready, then the real model fades in as that
+  card's spinner is hidden (a placeholder capsule was tried first here —
+  see Findings below for why it was replaced). Canvas sizing needs one
+  `requestAnimationFrame` deferral after
   `display:flex` is set — a `display:none` element reports `clientWidth`/
   `clientHeight` of 0, so sizing synchronously on show would produce a 0×0
   canvas. Hover-highlight is plain CSS (`:hover` + a per-card
@@ -542,4 +544,29 @@ Real multi-client test pending.
   regions leave everything else on the canvas fully transparent, so the
   card's text underneath is unaffected despite being "under" a
   higher-z-index element.
+- **"Placeholders show for a couple seconds before the real models"** — the
+  freeze fix above meant loading no longer *blocked* the picker, but the
+  generic capsule placeholder sitting there for a couple seconds still
+  read as broken/unfinished rather than "loading." Replaced it with an
+  actual loading state: each card's `.epCanvasWrap` shows a CSS spinner +
+  "Загрузка модели…" (`.epLoader`, plain `border-top-color` spin
+  animation) instead of adding a placeholder model to that card's scene at
+  all. `elementPreviews[el].model` is `null` until `upgradeElementPreview()`
+  builds the real one; `elementPreviewLoop()` simply skips rendering into a
+  card's scissored region while its model is null, leaving that part of
+  the shared canvas transparent so the spinner underneath shows through
+  (relies on standard per-pixel alpha compositing — the canvas's paint
+  order/z-index being *above* the card doesn't matter for transparent
+  pixels, only opaque ones actually obscure what's beneath). The moment a
+  card's real model is added, it starts drawing into that region every
+  frame and naturally covers the spinner completely from then on — no
+  explicit "did the render happen" bookkeeping needed beyond hiding the
+  spinner `<div>` itself (belt-and-suspenders, since the model would visually
+  cover it either way once `usingReal` flips). Verified the spinner is
+  present at the correct moment (not just briefly on a cold cache) by
+  checking `getComputedStyle` on `.epLoader` synchronously right after
+  clicking host, before any animation frame has run — all 3 read `flex`
+  even when `mageTemplate` had already finished loading at page-load time,
+  confirming the loading state always shows for at least one frame rather
+  than being racy.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)

@@ -42,7 +42,10 @@
   #epPreviewCanvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 3; }
   .epCard { position: relative; z-index: 2; flex: 1; display: flex; flex-direction: column; background: rgba(20,18,35,0.75); border: 2px solid #443; border-radius: 14px; padding: 16px; cursor: pointer; transition: transform .15s, border-color .15s, box-shadow .15s, background .15s; overflow: hidden; min-width: 0; }
   .epCard:hover { transform: translateY(-6px) scale(1.02); border-color: var(--el-color); box-shadow: 0 0 30px var(--el-glow); background: rgba(30,26,50,0.9); }
-  .epCanvasWrap { flex: 1; min-height: 0; border-radius: 10px; background: radial-gradient(circle at 50% 30%, rgba(255,255,255,0.08), transparent 70%); }
+  .epCanvasWrap { position: relative; flex: 1; min-height: 0; border-radius: 10px; background: radial-gradient(circle at 50% 30%, rgba(255,255,255,0.08), transparent 70%); }
+  .epLoader { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #999; font-size: 12px; }
+  .epSpinner { width: 34px; height: 34px; border: 3px solid rgba(255,255,255,0.15); border-top-color: var(--el-color); border-radius: 50%; animation: epSpin 0.8s linear infinite; }
+  @keyframes epSpin { to { transform: rotate(360deg); } }
   .epCard h3 { margin: 12px 0 6px; font-size: 21px; text-align: center; }
   .epLore { font-size: 12px; color: #aaa; line-height: 1.5; text-align: center; margin: 0 0 10px; }
   .epSpells { font-size: 12px; color: #ddd; border-top: 1px solid #333; padding-top: 8px; }
@@ -123,19 +126,19 @@
          into its own scissored region instead. -->
     <canvas id="epPreviewCanvas"></canvas>
     <div class="epCard" data-el="Fire" style="--el-color:#ff5533; --el-glow:rgba(255,85,51,0.45)">
-      <div class="epCanvasWrap"></div>
+      <div class="epCanvasWrap"><div class="epLoader"><div class="epSpinner"></div><span>Загрузка модели…</span></div></div>
       <h3>🔥 Орден Пламени</h3>
       <p class="epLore">Маги Ордена Пламени поклоняются огню как высшей силе разрушения. Они бьют быстро и жёстко, не оставляя врагу времени опомниться.</p>
       <div class="epSpells"></div>
     </div>
     <div class="epCard" data-el="Water" style="--el-color:#2288ee; --el-glow:rgba(34,136,238,0.45)">
-      <div class="epCanvasWrap"></div>
+      <div class="epCanvasWrap"><div class="epLoader"><div class="epSpinner"></div><span>Загрузка модели…</span></div></div>
       <h3>💧 Орден Волн</h3>
       <p class="epLore">Орден Волн черпает силу из океанских глубин — вода податлива, но неумолима. Они ослабляют врагов перед решающим ударом союзников.</p>
       <div class="epSpells"></div>
     </div>
     <div class="epCard" data-el="Lightning" style="--el-color:#ffdd33; --el-glow:rgba(255,221,51,0.45)">
-      <div class="epCanvasWrap"></div>
+      <div class="epCanvasWrap"><div class="epLoader"><div class="epSpinner"></div><span>Загрузка модели…</span></div></div>
       <h3>⚡ Орден Бури</h3>
       <p class="epLore">Маги Бури повелевают молнией — быстрой, безжалостной, разящей сразу нескольких врагов. Их удар многократно усиливается против уже мокрого противника.</p>
       <div class="epSpells"></div>
@@ -1180,20 +1183,21 @@ function buildElementPreview(el) {
   const dir = new THREE.DirectionalLight(0xffffff, 0.9);
   dir.position.set(2, 4, 3);
   scene.add(dir);
-  // Always start with the cheap placeholder capsule, even if mageTemplate
-  // already finished loading — elementPreviewLoop() below upgrades to the
-  // real model one card at a time instead of all 3 synchronously.
-  const model = makePlaceholderModel(ELEMENT_COLOR[el] || 0xaaaaaa);
-  scene.add(model.object);
+  // No model yet — the spinner (.epLoader, shown by default in the markup)
+  // covers the empty canvas region until upgradeElementPreview() below adds
+  // the real model. (A placeholder capsule used to sit here to avoid a
+  // completely empty card, but showing nothing behind a proper loading
+  // spinner reads better than a generic capsule that looks like a bug.)
   const wrapEl = document.querySelector(`.epCard[data-el="${el}"] .epCanvasWrap`);
-  elementPreviews[el] = { scene, camera, model, wrapEl, usingReal: false };
+  const loaderEl = document.querySelector(`.epCard[data-el="${el}"] .epLoader`);
+  elementPreviews[el] = { scene, camera, model: null, wrapEl, loaderEl, usingReal: false };
 }
 function upgradeElementPreview(el) {
   const p = elementPreviews[el];
-  p.scene.remove(p.model.object);
   p.model = makeRemotePlayerModel(ELEMENT_COLOR[el] || 0xaaaaaa);
   p.scene.add(p.model.object);
   p.usingReal = true;
+  if (p.loaderEl) p.loaderEl.style.display = 'none';
 }
 function resizeElementPreviewCanvas() {
   const canvas = document.getElementById('epPreviewCanvas');
@@ -1242,10 +1246,10 @@ function elementPreviewLoop() {
   elementPreviewRAF = requestAnimationFrame(elementPreviewLoop);
   const dt = Math.min(elementPreviewClock.getDelta(), 0.05);
   // idle.fbx is ~116MB — mageTemplate often isn't loaded yet the first time
-  // this screen shows, so cards start with a placeholder capsule and swap
-  // in the real model once it's ready. Upgrading is itself real work (full
-  // skeleton+material clone) — at most ONE card upgrades per frame so the
-  // 3 cards' costs land on separate frames instead of stalling one frame 3x.
+  // this screen shows, so cards show a loading spinner (.epLoader) until
+  // it's ready. Upgrading is itself real work (full skeleton+material
+  // clone) — at most ONE card upgrades per frame so the 3 cards' costs
+  // land on separate frames instead of stalling one frame 3x.
   if (mageTemplate) {
     const pending = ELEMENTS.find(el => elementPreviews[el] && !elementPreviews[el].usingReal);
     if (pending) upgradeElementPreview(pending);
@@ -1258,7 +1262,7 @@ function elementPreviewLoop() {
   elementPreviewRenderer.setScissorTest(true);
   for (const el of ELEMENTS) {
     const p = elementPreviews[el];
-    if (!p) continue;
+    if (!p || !p.model) continue; // still loading — nothing to render, spinner covers it
     p.model.object.rotation.y += dt * 0.6;
     if (p.model.mixer) p.model.mixer.update(dt);
     const r = p.wrapEl.getBoundingClientRect();
