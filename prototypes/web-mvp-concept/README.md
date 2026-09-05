@@ -85,8 +85,14 @@ Real multi-client test pending.
   flame + ember burst on Огненный шар's explosion, droplets flying outward
   on Волна's nova, and a small spark/glow burst on every other spell's hit
   (Искра/Плеск/Разряд/Chain Shock) that previously had zero impact feedback
-- **One element per player, chosen at lobby** — each school has a 2-spell
-  unlock ladder (basic → advanced), each with its own icon (✨💥 Fire,
+- **One element per player, chosen at lobby via a full-screen class-selection
+  screen**: three cards side by side, each with its own live rotating 3D
+  preview (the shared mage model tinted to that element's color — swap for
+  distinct per-school models later), a short lore blurb for that element's
+  order, and its spell list with one-line mechanical hints. Hovering a card
+  highlights it (glowing border in the element's color); clicking commits
+  the choice. Each school has a 2-spell unlock ladder (basic → advanced),
+  each with its own icon (✨💥 Fire,
   💧🌊 Water, ⚡🌩️ Lightning). Fire/Water = flying projectiles, Lightning =
   hitscan, both aimed at the crosshair (see Findings — a self-centered
   no-aim AoE version was tried in between and reverted); Волна (Water
@@ -482,4 +488,28 @@ Real multi-client test pending.
   wired for enemies within `splashRadius`, and Water tier-2 (Волна) hits
   every enemy in `selfNova` radius with damage + wet and no aiming
   involved — all four paths confirmed with zero console errors.
+- **Rebuilt the class-selection screen** (was a small centered modal with 3
+  plain buttons) into a full-screen, 3-card layout with a live 3D preview
+  per element. Each card gets its own independent `THREE.WebGLRenderer`
+  bound to its own `<canvas>`, its own tiny scene/camera/lights, and a
+  clone of the shared mage model (via the same `makeRemotePlayerModel()`
+  used for actual players) tinted to that element's color, slowly rotating
+  — run by a dedicated `requestAnimationFrame` loop separate from the main
+  game loop, since the picker can be shown before the game (and its own
+  `animate()`) has started. Since `idle.fbx` is ~116MB, the previews often
+  need to show *before* `mageTemplate` finishes loading — each card starts
+  with the existing lightweight placeholder capsule
+  (`makePlaceholderModel`) and the loop swaps in the real model
+  mid-rotation the moment `mageTemplate` becomes available, with no visible
+  hitch. Canvas sizing needs one `requestAnimationFrame` deferral after
+  `display:flex` is set — a `display:none` element reports `clientWidth`/
+  `clientHeight` of 0, so sizing the renderer synchronously on show would
+  produce a 0×0 canvas. Hover-highlight is plain CSS (`:hover` + a
+  per-card `--el-color`/`--el-glow` custom property set inline) — no JS
+  state needed. Spell blurbs are a separate small lookup table keyed by
+  spell name (`SPELL_BLURB`) rather than baked into `SCHOOL_SPELLS`, so
+  balance tuning there can't accidentally desync the flavor text; only the
+  name/icon are pulled live from the real spell data. Lore paragraphs are
+  static hand-written prose per card (2 sentences each) — not derived from
+  anything, since there's no lore document yet for the three orders.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)
