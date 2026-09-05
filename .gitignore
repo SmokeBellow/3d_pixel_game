@@ -116,9 +116,11 @@ node_modules/
 credentials.json
 secrets.json
 
-# === Web MVP: model hosted on GitHub Releases instead of git (too big — see
-#     prototypes/web-mvp-concept/README.md) ===
+# === Web MVP: models kept out of git (too big — see
+#     prototypes/web-mvp-concept/README.md; distributed via the itch.io
+#     build's zip instead) ===
 prototypes/web-mvp-concept/models/mage/idle.fbx
+prototypes/web-mvp-concept/models/mage/idle_fire.fbx
 
 # === Large Binary Assets (use Git LFS instead) ===
 # Uncomment and configure with Git LFS for your project:

@@ -138,11 +138,15 @@ Real multi-client test pending.
 - **Lobby with chat**: joining players see a waiting room (with player list
   + chat, shared with the host's lobby chat) until the host starts; late
   joiners after the game has started also get chat/lobby state correctly
-- **Player visuals**: Mixamo "Brady" model (idle/run + **two separate cast
-  animations**) tinted per element, rendered for every **remote** player as
-  seen by their teammates. Your own view is first-person with simple
-  placeholder box/sphere arms (see Findings — the real-viewmodel and
-  third-person experiments were both tried and reverted). **Tier-1 spells
+- **Player visuals**: **Fire has its own distinct Mixamo model**; Water and
+  Lightning still share "Brady" (tinted per element) — the first step
+  toward every school eventually having its own look, per user request
+  (see Findings). Both idle rigs share the same standard Mixamo skeleton,
+  so the same walk/cast clips retarget onto either with no extra work.
+  Rendered for every **remote** player as seen by their teammates — your
+  own view is first-person with simple placeholder box/sphere arms (see
+  Findings — the real-viewmodel and third-person experiments were both
+  tried and reverted). **Tier-1 spells
   play `cast1.fbx` ("Standing 1H Magic Attack 01"), tier-2 spells play
   `cast2.fbx`** (the original "Magic Spell Casting") — each has its own
   timing calibration for when its swing actually releases, so the shot
@@ -602,4 +606,51 @@ Real multi-client test pending.
   for tier 1: the projectile now visibly leaves the hand ~0.45s after
   pressing cast (down from the shared clip's ~1.2s), matching `cast1`'s
   much shorter, snappier swing instead of the longer tier-2 gesture.
+- **Gave Fire its own model** (`idle_fire.fbx`, ~120MB) instead of a
+  re-tinted Brady, per user request — the first school to get a distinct
+  look. Verified its skeleton before wiring anything up (loaded it
+  standalone and inspected bone names): 65 bones, all `mixamorig`-prefixed,
+  identical convention to Brady's, so `walk.fbx`/`cast1.fbx`/`cast2.fbx`
+  retarget onto it with zero extra work — same pattern as when Ganfaul was
+  swapped for Brady earlier. Code-wise, `mageTemplate` (Water/Lightning)
+  and `mageTemplateFire` are now two parallel template objects loaded
+  together via one `Promise.all`, and `makeRemotePlayerModel(color,
+  element)` picks the right one by element, falling back to the shared
+  template for anything that isn't `'Fire'` — keeping the door open to add
+  more per-school templates later without restructuring again.
+- **The class-selection freeze came back the moment Fire's model was
+  added, and the earlier "warmup" fix turned out to have never actually
+  been fixing the real cause.** Re-profiled with the same
+  `PerformanceObserver` longtask technique plus manual `performance.now()`
+  timing dropped into the warmup and upgrade code paths, and found: the
+  throwaway warmup scene's very first render *did* pay a real ~2.3s
+  shader-compile cost (confirmed in the console), and cloning was
+  confirmed cheap (2-3ms) — so the earlier diagnosis of "which cost" was
+  right. What was wrong was the assumption that warming it once would warm
+  the *real* scene too. The real per-card scene, rendered later through
+  `elementPreviewLoop()`'s scissored-viewport path, paid its own separate
+  ~2.2s cost anyway, despite an apparently-matching light setup between
+  the two scenes (this was tried first, as the obvious mismatch — didn't
+  fix it). Rather than keep guessing at exactly which Three.js internal
+  state differed between the throwaway warmup scene and the real one,
+  replaced the whole approach: **the class-selection panel is now always
+  laid out** (`display:flex` permanently; a `.epVisible` class toggles
+  `visibility`/`pointer-events` instead of `display:none`/`flex`), so its
+  cards have real, correctly-sized canvas regions from the moment the page
+  loads, whether or not the player has opened the screen yet. This means
+  `ensureElementPreviews()` — the exact same function and render path used
+  when the screen is actually visible — can just be called directly as
+  soon as `mageTemplate`/`mageTemplateFire` finish loading, with no
+  separate warmup implementation to keep in sync with the real one at all.
+  Re-measured after this change: clicking host now produces no freeze
+  whatsoever (longtask entries near the click are ~50-80ms, and don't even
+  coincide with the click timing) — confirmed on a completely fresh page
+  load, not just a warm-cache repeat. Lesson for next time: when a
+  "pre-warm a side-effect" fix doesn't hold up under a changed condition
+  (here: a second distinct model), prefer making the warmup literally reuse
+  the production code path over trying to more carefully replicate its
+  conditions in a parallel implementation — the parallel version can only
+  ever be as correct as your understanding of every input that affects the
+  cost, and this one was missing something neither the light setup nor the
+  scissor state (both checked) turned out to be.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)

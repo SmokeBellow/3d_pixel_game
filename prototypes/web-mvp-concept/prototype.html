@@ -29,7 +29,17 @@
   /* Full-screen class-selection screen: three cards, each with a live
      rotating 3D preview of the (currently shared) mage model tinted to
      that element's color, short lore, and its spell list. */
-  #elementPanel { position: fixed; inset: 0; display: none; z-index: 5; flex-direction: column; align-items: center; box-sizing: border-box; padding: 3vh 3vw; background: radial-gradient(circle at center, #171331, #05040a); color: #eee; }
+  /* Always laid out (display:flex), toggled via visibility rather than
+     display:none/flex — the 3D previews inside need real, non-zero
+     clientWidth/clientHeight on their card elements to render into at the
+     correct size the moment the mage model finishes loading, which can
+     happen long before the player ever opens this screen (see
+     ensureElementPreviews()'s call site). A display:none panel reports 0
+     for all of that. pointer-events is toggled alongside visibility since
+     this is a full-screen fixed overlay that would otherwise block clicks
+     on the menu underneath even while invisible. */
+  #elementPanel { position: fixed; inset: 0; display: flex; visibility: hidden; pointer-events: none; z-index: 5; flex-direction: column; align-items: center; box-sizing: border-box; padding: 3vh 3vw; background: radial-gradient(circle at center, #171331, #05040a); color: #eee; }
+  #elementPanel.epVisible { visibility: visible; pointer-events: auto; }
   .epTitle { margin: 0 0 6px; font-size: 32px; color: #c9b8ff; text-align: center; }
   .epSub { margin: 0 0 24px; font-size: 13px; color: #999; text-align: center; max-width: 640px; }
   .epCards { position: relative; display: flex; gap: 24px; width: 100%; max-width: 1400px; flex: 1; min-height: 0; }
@@ -1057,41 +1067,46 @@ function makeNameSprite(text, colorHex) {
   return sprite;
 }
 
-// Mixamo "Brady" rig — idle.fbx carries the actual mesh+skeleton (downloaded
-// "With Skin"); walk.fbx (a Running clip), cast1.fbx (tier-1 spells:
-// "Standing 1H Magic Attack 01") and cast2.fbx (tier-2 spells: the original
-// "Magic Spell Casting") are all downloaded "Without Skin" — they're
-// motion-only and share the exact same skeleton as idle.fbx, so no
-// retargeting math is needed, just play each clip on idle's rig. idle.fbx
-// is ~116MB (Brady's own textures are much heavier than the previous
-// Ganfaul model's ~7MB) — a known, accepted tradeoff, see the README's
-// Findings.
+// Mixamo rigs — idle.fbx ("Brady", used for Water & Lightning) and
+// idle_fire.fbx (Fire's own model) each carry their own mesh+skeleton
+// (downloaded "With Skin"); walk.fbx (a Running clip), cast1.fbx (tier-1
+// spells: "Standing 1H Magic Attack 01") and cast2.fbx (tier-2 spells: the
+// original "Magic Spell Casting") are all downloaded "Without Skin" —
+// they're motion-only and both idle rigs share the same standard Mixamo
+// skeleton (verified: both are 65 `mixamorig*`-prefixed bones), so the
+// same 3 clips retarget onto either character with no extra work. Both
+// idle files are heavy (~116-120MB — a known, accepted tradeoff, see the
+// README's Findings).
 const MODEL_BASE = 'models/mage/';
-let mageTemplate = null; // { root, idleClip, walkClip, castClip1, castClip2 } once all four load
+let mageTemplate = null; // Water/Lightning's model: { root, idleClip, walkClip, castClip1, castClip2 }
+let mageTemplateFire = null; // Fire's own model, same shape
 let castAnimDurationMs1 = null, castAnimDurationMs2 = null; // real-world duration of each cast clip (scaled) — how long casting locks out any further cast
 (function loadMageAssets() {
   const loader = new FBXLoader();
-  loader.load(MODEL_BASE + 'idle.fbx', idleObj => {
-    const idleClip = idleObj.animations[0];
-    loader.load(MODEL_BASE + 'walk.fbx', walkObj => {
-      const walkClip = walkObj.animations[0];
-      loader.load(MODEL_BASE + 'cast1.fbx', cast1Obj => {
-        const castClip1 = cast1Obj.animations[0];
-        loader.load(MODEL_BASE + 'cast2.fbx', cast2Obj => {
-          const castClip2 = cast2Obj.animations[0];
-          idleObj.scale.setScalar(0.01); // Mixamo exports in cm
-          mageTemplate = { root: idleObj, idleClip, walkClip, castClip1, castClip2 };
-          castAnimDurationMs1 = (castClip1.duration / CAST_ANIM_TIMESCALE) * 1000;
-          castAnimDurationMs2 = (castClip2.duration / CAST_ANIM_TIMESCALE) * 1000;
-          warmupElementPreviews();
-        }, undefined, err => console.error('Failed to load cast2.fbx', err));
-      }, undefined, err => console.error('Failed to load cast1.fbx', err));
-    }, undefined, err => console.error('Failed to load walk.fbx', err));
-  }, undefined, err => console.error('Failed to load idle.fbx', err));
+  const loadOne = url => new Promise((resolve, reject) => loader.load(url, resolve, undefined, reject));
+  Promise.all([
+    loadOne(MODEL_BASE + 'idle.fbx'),
+    loadOne(MODEL_BASE + 'idle_fire.fbx'),
+    loadOne(MODEL_BASE + 'walk.fbx'),
+    loadOne(MODEL_BASE + 'cast1.fbx'),
+    loadOne(MODEL_BASE + 'cast2.fbx'),
+  ]).then(([idleObj, fireIdleObj, walkObj, cast1Obj, cast2Obj]) => {
+    const walkClip = walkObj.animations[0];
+    const castClip1 = cast1Obj.animations[0];
+    const castClip2 = cast2Obj.animations[0];
+    idleObj.scale.setScalar(0.01); // Mixamo exports in cm
+    fireIdleObj.scale.setScalar(0.01);
+    mageTemplate = { root: idleObj, idleClip: idleObj.animations[0], walkClip, castClip1, castClip2 };
+    mageTemplateFire = { root: fireIdleObj, idleClip: fireIdleObj.animations[0], walkClip, castClip1, castClip2 };
+    castAnimDurationMs1 = (castClip1.duration / CAST_ANIM_TIMESCALE) * 1000;
+    castAnimDurationMs2 = (castClip2.duration / CAST_ANIM_TIMESCALE) * 1000;
+    ensureElementPreviews();
+  }).catch(err => console.error('Failed to load mage assets', err));
 })();
 
-function makeRemotePlayerModel(color) {
-  const clone = skeletonClone(mageTemplate.root);
+function makeRemotePlayerModel(color, element) {
+  const tmpl = (element === 'Fire' && mageTemplateFire) ? mageTemplateFire : mageTemplate;
+  const clone = skeletonClone(tmpl.root);
   // Measured geometrically: at rotation.y=0 this Mixamo rig's cast animation
   // reaches toward world +Z, but this game's forward convention (see the
   // player movement code) is -Z at yaw 0. Without this correction every
@@ -1112,10 +1127,10 @@ function makeRemotePlayerModel(color) {
   });
   const mixer = new THREE.AnimationMixer(clone);
   const actions = {
-    idle: mixer.clipAction(mageTemplate.idleClip),
-    walk: mixer.clipAction(mageTemplate.walkClip),
-    cast1: mixer.clipAction(mageTemplate.castClip1),
-    cast2: mixer.clipAction(mageTemplate.castClip2),
+    idle: mixer.clipAction(tmpl.idleClip),
+    walk: mixer.clipAction(tmpl.walkClip),
+    cast1: mixer.clipAction(tmpl.castClip1),
+    cast2: mixer.clipAction(tmpl.castClip2),
   };
   // The Running clip's native leg-cycle rate is faster than MOVE_SPEED
   // actually covers on the ground, so feet visibly slide/overshoot —
@@ -1151,7 +1166,7 @@ function makePlaceholderModel(color) {
 function makeRemotePlayer(name, element) {
   const group = new THREE.Group();
   const color = ELEMENT_COLOR[element] || 0xaaaaaa;
-  const model = mageTemplate ? makeRemotePlayerModel(color) : makePlaceholderModel(color);
+  const model = mageTemplate ? makeRemotePlayerModel(color, element) : makePlaceholderModel(color);
   group.add(model.object);
   const label = makeNameSprite(name, color);
   label.position.y = 2.6;
@@ -1189,7 +1204,7 @@ const elementPreviews = {}; // el -> { scene, camera, model, wrapEl, usingReal }
 let elementPreviewRenderer = null;
 let elementPreviewRAF = null;
 const elementPreviewClock = new THREE.Clock();
-function buildElementPreview(el) {
+function makePreviewSceneAndCamera() {
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 10);
   camera.position.set(0, 1.15, 3.1);
@@ -1198,6 +1213,10 @@ function buildElementPreview(el) {
   const dir = new THREE.DirectionalLight(0xffffff, 0.9);
   dir.position.set(2, 4, 3);
   scene.add(dir);
+  return { scene, camera };
+}
+function buildElementPreview(el) {
+  const { scene, camera } = makePreviewSceneAndCamera();
   // No model yet — the spinner (.epLoader, shown by default in the markup)
   // covers the empty canvas region until upgradeElementPreview() below adds
   // the real model. (A placeholder capsule used to sit here to avoid a
@@ -1209,7 +1228,7 @@ function buildElementPreview(el) {
 }
 function upgradeElementPreview(el) {
   const p = elementPreviews[el];
-  p.model = makeRemotePlayerModel(ELEMENT_COLOR[el] || 0xaaaaaa);
+  p.model = makeRemotePlayerModel(ELEMENT_COLOR[el] || 0xaaaaaa, el);
   p.scene.add(p.model.object);
   p.usingReal = true;
   if (p.loaderEl) p.loaderEl.style.display = 'none';
@@ -1220,27 +1239,20 @@ function resizeElementPreviewCanvas() {
   if (w === 0 || h === 0 || !elementPreviewRenderer) return; // panel still hidden/mid-layout
   elementPreviewRenderer.setSize(w, h, false);
 }
-// Pre-pays the one-time WebGL shader-compile cost for this model's skinning
-// shader as soon as the asset finishes loading, off-screen — measured via
-// PerformanceObserver longtask entries at ~2.7s (down from ~12.5s across 3
-// separate contexts before elementPreviewRenderer was shared). Doing it
-// here means that cost lands while the player is still on the main menu
-// (which, on a real first-time ~116MB download, they're on far longer than
-// this takes anyway) instead of right when they click "host" and expect
-// the class-selection screen to respond immediately.
-function warmupElementPreviews() {
-  if (elementPreviewRenderer) return;
-  elementPreviewRenderer = new THREE.WebGLRenderer({ canvas: document.getElementById('epPreviewCanvas'), alpha: true, antialias: true });
-  elementPreviewRenderer.setSize(64, 64, false); // arbitrary small off-screen size — just needs a real render pass
-  const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 10);
-  camera.position.set(0, 1.15, 3.1);
-  camera.lookAt(0, 1.0, 0);
-  scene.add(new THREE.HemisphereLight(0x9090ff, 0x201020, 1.0));
-  const model = makeRemotePlayerModel(0xffffff);
-  scene.add(model.object);
-  elementPreviewRenderer.render(scene, camera); // pays the shader-compile cost now, discarded after
-}
+// Called as soon as the mage models finish loading (see loadMageAssets),
+// long before the player necessarily opens this screen — the panel is
+// always laid out (display:flex, just visibility:hidden — see its CSS) so
+// every card already has a real, correctly-sized canvas region to render
+// into. This pays the one-time WebGL shader-compile cost (measured via
+// PerformanceObserver longtask entries at ~2.3s per distinct model/material
+// setup) in the background while the player is still on the main menu,
+// using the EXACT same render path the real, visible previews use — an
+// earlier version tried to pre-warm via a separate throwaway 64x64 scene,
+// but Three.js's compiled-shader cache key turned out to depend on more
+// than just matching the light setup (something about the real per-card
+// scene/scissored-viewport render path still forced a fresh compile
+// despite an apparently-matching warmup pass), so warming the real thing
+// directly was the only fix that actually eliminated the freeze.
 function ensureElementPreviews() {
   if (!elementPreviewRenderer) {
     elementPreviewRenderer = new THREE.WebGLRenderer({ canvas: document.getElementById('epPreviewCanvas'), alpha: true, antialias: true });
@@ -2650,15 +2662,18 @@ function readName() {
 }
 function showElementPicker(onChosen) {
   const panel = document.getElementById('elementPanel');
-  panel.style.display = 'flex';
-  // Wait a frame so the panel's real (now-visible) layout size is available
-  // before measuring canvas dimensions — a display:none element reports 0.
-  requestAnimationFrame(ensureElementPreviews);
+  panel.classList.add('epVisible');
+  // Usually a no-op by this point — ensureElementPreviews() already ran as
+  // soon as the mage models finished loading (see loadMageAssets), while
+  // this panel was still invisible-but-laid-out. Called again here only as
+  // a safety net for the (rare) case a player reaches this screen before
+  // the models finish loading at all.
+  ensureElementPreviews();
   document.querySelectorAll('#elementPanel .epCard').forEach(card => {
     card.onclick = () => {
       myElement = card.dataset.el;
       stopElementPreviewLoop();
-      panel.style.display = 'none';
+      panel.classList.remove('epVisible');
       onChosen();
     };
   });
@@ -2712,7 +2727,7 @@ wireChatBox('waitingChatInput', 'waitingChatSend');
 // read-only debug hook exists purely so the browser console (or automated
 // QA) can inspect live state. Harmless for players; not used by the game.
 window.__debug = {
-  get mageTemplate() { return mageTemplate; },
+  get mageTemplate() { return mageTemplate; }, get mageTemplateFire() { return mageTemplateFire; },
   get enemies() { return enemies; },
   get playerPos() { return playerPos; },
   get remotePlayers() { return remotePlayers; },
