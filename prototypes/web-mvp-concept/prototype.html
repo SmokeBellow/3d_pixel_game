@@ -1451,6 +1451,13 @@ function buildElementPreview(el) {
 function upgradeElementPreview(el) {
   const p = elementPreviews[el];
   p.model = makeRemotePlayerModel(el);
+  // makeRemotePlayerModel bakes rotation.y=Math.PI in expecting a parent
+  // group to represent the game's own facing convention (see its comment).
+  // This preview scene has no such parent — its camera sits on +Z looking
+  // toward -Z, i.e. straight at the model's face if left at rotation 0 — so
+  // cancel that correction here, otherwise every class-select card shows
+  // the model's back to the player.
+  p.model.object.rotation.y += Math.PI;
   p.scene.add(p.model.object);
   p.usingReal = true;
   if (p.loaderEl) p.loaderEl.style.display = 'none';
@@ -1482,11 +1489,44 @@ function ensureElementPreviews() {
   for (const el of ELEMENTS) {
     if (!elementPreviews[el]) buildElementPreview(el);
   }
+  setupElementPreviewDrag();
   resizeElementPreviewCanvas();
   if (!elementPreviewRAF) {
     elementPreviewClock.start();
     elementPreviewLoop();
   }
+}
+const EP_DRAG_SENSITIVITY = 0.012;
+let epDraggingEl = null; // which element's card is currently being dragged, or null
+// Models sit still by default (no auto-spin) and only turn while the player
+// is actively dragging with the mouse — wired once here rather than per
+// reveal() call since ensureElementPreviews() can run multiple times but
+// the listeners must only ever attach once.
+let epDragListenersAttached = false;
+function setupElementPreviewDrag() {
+  if (epDragListenersAttached) return;
+  epDragListenersAttached = true;
+  for (const el of ELEMENTS) {
+    const wrapEl = document.querySelector(`.epCard[data-el="${el}"] .epCanvasWrap`);
+    wrapEl.addEventListener('mousedown', e => {
+      const p = elementPreviews[el];
+      if (!p || !p.model) return;
+      epDraggingEl = el;
+      p.dragStartX = e.clientX;
+      p.dragStartRotY = p.model.object.rotation.y;
+      p.dragMoved = false;
+      e.preventDefault(); // avoid text-selection while dragging
+    });
+  }
+  document.addEventListener('mousemove', e => {
+    if (!epDraggingEl) return;
+    const p = elementPreviews[epDraggingEl];
+    if (!p || !p.model) return;
+    const delta = e.clientX - p.dragStartX;
+    if (Math.abs(delta) > 3) p.dragMoved = true; // small-movement threshold: a real click shouldn't count as a drag
+    p.model.object.rotation.y = p.dragStartRotY + delta * EP_DRAG_SENSITIVITY;
+  });
+  document.addEventListener('mouseup', () => { epDraggingEl = null; });
 }
 function stopElementPreviewLoop() {
   if (elementPreviewRAF) { cancelAnimationFrame(elementPreviewRAF); elementPreviewRAF = null; }
@@ -1516,7 +1556,6 @@ function elementPreviewLoop() {
   for (const el of ELEMENTS) {
     const p = elementPreviews[el];
     if (!p || !p.model) continue; // still loading — nothing to render, spinner covers it
-    p.model.object.rotation.y += dt * 0.6;
     if (p.model.mixer) p.model.mixer.update(dt);
     const r = p.wrapEl.getBoundingClientRect();
     const x = r.left - canvasRect.left, yTop = r.top - canvasRect.top;
@@ -2981,7 +3020,13 @@ function showElementPicker(onChosen) {
     ensureElementPreviews(); // usually a no-op — already ran once mageAssetsReady resolved
     document.querySelectorAll('#elementPanel .epCard').forEach(card => {
       card.onclick = () => {
-        myElement = card.dataset.el;
+        const el = card.dataset.el;
+        // A drag-to-rotate ends with the same mouseup/click sequence as a
+        // real selection click — skip selecting if the mouse actually moved
+        // (see setupElementPreviewDrag's dragMoved threshold).
+        const p = elementPreviews[el];
+        if (p && p.dragMoved) { p.dragMoved = false; return; }
+        myElement = el;
         stopElementPreviewLoop();
         panel.classList.remove('epVisible');
         onChosen();
@@ -3054,6 +3099,7 @@ wireChatBox('waitingChatInput', 'waitingChatSend');
 window.__debug = {
   get mageTemplate() { return mageTemplate; }, get mageTemplateFire() { return mageTemplateFire; },
   get mageTemplateWater() { return mageTemplateWater; },
+  get elementPreviews() { return elementPreviews; },
   get enemies() { return enemies; },
   get playerPos() { return playerPos; },
   get remotePlayers() { return remotePlayers; },
