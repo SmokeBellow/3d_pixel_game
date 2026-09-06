@@ -61,6 +61,10 @@
   .epSpells { font-size: 12px; color: #ddd; border-top: 1px solid #333; padding-top: 8px; }
   .epSpell { display: flex; gap: 6px; align-items: flex-start; margin: 4px 0; }
   .epSpell b { color: var(--el-color); }
+  #assetLoadingScreen { position: fixed; inset: 0; z-index: 6; flex-direction: column; align-items: center; justify-content: center; gap: 18px; background: radial-gradient(circle at center, #171331, #05040a); color: #eee; }
+  #loadProgressText { font-size: 15px; color: #c9b8ff; }
+  #loadProgressBarBg { width: 320px; height: 10px; background: rgba(255,255,255,0.1); border-radius: 6px; overflow: hidden; }
+  #loadProgressBarFill { height: 100%; width: 0%; background: linear-gradient(90deg, #7a5cff, #b98cff); transition: width .2s; }
   .panel { background: rgba(20,18,35,0.97); border: 1px solid #444; border-radius: 12px; padding: 32px 40px; color: #eee; text-align: center; min-width: 340px; max-width: 460px; }
   .panel h1 { margin: 0 0 4px; font-size: 26px; color: #c9b8ff; }
   .panel h2 { margin: 0 0 24px; font-size: 13px; font-weight: normal; color: #888; }
@@ -155,6 +159,19 @@
     </div>
   </div>
 </div>
+<!-- Shown instead of #elementPanel while the ~250MB of character models
+     are still downloading/parsing — previously the class-selection screen
+     itself appeared right away with per-card spinners, but the actual FBX
+     parse (synchronous, blocks the main thread) could still leave the
+     whole page looking frozen/blank with zero feedback if it hadn't
+     finished by the time the player clicked host/join. This full-screen
+     gate is shown BEFORE that panel in that case, so there's at least a
+     legible "still loading" message on screen even during a parse stall. -->
+<div id="assetLoadingScreen" style="display:none">
+  <div class="epSpinner" style="width:48px; height:48px; border-color:rgba(255,255,255,0.15); border-top-color:#c9b8ff;"></div>
+  <div id="loadProgressText">Загрузка моделей…</div>
+  <div id="loadProgressBarBg"><div id="loadProgressBarFill"></div></div>
+</div>
 <div id="hud" style="display:none">
   <div id="vignette"></div>
   <div id="crosshair">+</div>
@@ -224,7 +241,15 @@ const BASE_SENSITIVITY = 0.0022;
 let sensitivity = BASE_SENSITIVITY; // shared camera/mouse sensitivity — TODO: expose as a settings slider
 const LOOK_KEY_SPEED = 2.0; // rad/sec baseline at BASE_SENSITIVITY, scales with `sensitivity`
 const MOVE_SPEED = 6;
-const MOVE_ANIM_TIMESCALE = 0.6; // slows the Running clip so the leg cycle roughly matches MOVE_SPEED — tune by eye
+// Derived, not guessed: the Running clip's own baked root motion covers
+// ~4.014m (401.4cm * the model's 0.01 export scale) over its 0.6333s
+// duration = a natural pace of ~6.34 units/sec at timeScale=1. Scaling by
+// MOVE_SPEED/6.34 makes the leg-cycle's pace match how fast the player is
+// actually moving once the root motion itself is stripped (see
+// stripHorizontalRootMotion) — before that fix, this was a guessed 0.6,
+// compensating for the animation ALSO physically sliding the model forward
+// on top of the code-driven movement rather than an actual pace mismatch.
+const MOVE_ANIM_TIMESCALE = MOVE_SPEED / 6.34;
 const ARENA_HALF = 19; // level 1's half-size — kept as a named constant since it's referenced individually
 const ENEMY_MAX_HP = 100;
 const WET_DURATION_S = 6;
@@ -1087,9 +1112,50 @@ const MODEL_BASE = 'models/mage/';
 let mageTemplate = null; // Water/Lightning's model: { root, idleClip, walkClip, castClip1, castClip2 }
 let mageTemplateFire = null; // Fire's own model, same shape
 let castAnimDurationMs1 = null, castAnimDurationMs2 = null; // real-world duration of each cast clip (scaled) — how long casting locks out any further cast
+// This Mixamo Running clip has real root motion baked into the hips bone's
+// position track (measured: hips Z goes from ~1.4 to ~403 over one cycle —
+// the character physically travels forward via the animation itself). Left
+// alone, that stacks with the game's own code-driven movement
+// (`playerPos.addScaledVector`), so the model visibly slides away faster
+// than the player is actually moving. Flattening the horizontal (X/Z)
+// component of that track to a constant — keeping only the vertical (Y)
+// bob — makes the clip loop in place, matching every other engine's usual
+// "in-place locomotion + code moves the root" convention, with no need to
+// re-export an "In Place" version from Mixamo.
+function stripHorizontalRootMotion(clip) {
+  const track = clip.tracks.find(t => /Hips\.position$/.test(t.name));
+  if (!track) return;
+  const [baseX, , baseZ] = track.values;
+  for (let i = 0; i < track.values.length; i += 3) {
+    track.values[i] = baseX;
+    track.values[i + 2] = baseZ;
+  }
+}
+// Resolved once both mage models + all 3 shared clips are loaded AND
+// parsed. showElementPicker() awaits this (showing #assetLoadingScreen in
+// the meantime) instead of assuming the class-selection screen's own
+// per-card spinners are enough — those cover the *model* not being ready
+// yet, but the FBX parse itself is synchronous and can block the whole
+// page for a few seconds with zero visual feedback if it's still running
+// when the player clicks host/join.
+let mageAssetsReadyResolve;
+const mageAssetsReady = new Promise(res => { mageAssetsReadyResolve = res; });
+const loadProgress = {}; // url -> {loaded, total}, used only for the loading-screen progress bar
+function updateLoadProgressUI() {
+  const entries = Object.values(loadProgress);
+  const loaded = entries.reduce((s, p) => s + p.loaded, 0);
+  const total = entries.reduce((s, p) => s + (p.total || p.loaded), 0);
+  const pct = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+  const bar = document.getElementById('loadProgressBarFill');
+  const text = document.getElementById('loadProgressText');
+  if (bar) bar.style.width = pct + '%';
+  if (text) text.textContent = `Загрузка моделей… ${pct}%`;
+}
 (function loadMageAssets() {
   const loader = new FBXLoader();
-  const loadOne = url => new Promise((resolve, reject) => loader.load(url, resolve, undefined, reject));
+  const loadOne = url => new Promise((resolve, reject) => loader.load(url, resolve,
+    xhr => { loadProgress[url] = { loaded: xhr.loaded, total: xhr.total }; updateLoadProgressUI(); },
+    reject));
   Promise.all([
     loadOne(MODEL_BASE + 'idle.fbx'),
     loadOne(MODEL_BASE + 'idle_fire.fbx'),
@@ -1098,6 +1164,7 @@ let castAnimDurationMs1 = null, castAnimDurationMs2 = null; // real-world durati
     loadOne(MODEL_BASE + 'cast2.fbx'),
   ]).then(([idleObj, fireIdleObj, walkObj, cast1Obj, cast2Obj]) => {
     const walkClip = walkObj.animations[0];
+    stripHorizontalRootMotion(walkClip);
     const castClip1 = cast1Obj.animations[0];
     const castClip2 = cast2Obj.animations[0];
     idleObj.scale.setScalar(0.01); // Mixamo exports in cm
@@ -1107,6 +1174,7 @@ let castAnimDurationMs1 = null, castAnimDurationMs2 = null; // real-world durati
     castAnimDurationMs1 = (castClip1.duration / CAST_ANIM_TIMESCALE) * 1000;
     castAnimDurationMs2 = (castClip2.duration / CAST_ANIM_TIMESCALE) * 1000;
     ensureElementPreviews();
+    mageAssetsReadyResolve();
   }).catch(err => console.error('Failed to load mage assets', err));
 })();
 
@@ -1198,9 +1266,18 @@ function makeRemotePlayer(name, element) {
 // ready yet the first time V is pressed.
 function ensureDebugOwnBody() {
   if (debugOwnBody || !mageTemplate || !myElement) return;
+  // Wrap in an outer group exactly like makeRemotePlayer does — the clone
+  // itself already carries a baked-in `rotation.y = Math.PI` correction
+  // (see makeRemotePlayerModel) so its cast/run animations face the right
+  // way relative to its PARENT's facing. Setting facing directly on the
+  // clone (skipping the wrapper) overwrites that correction instead of
+  // adding to it, which made the debug view face the camera and look
+  // reversed while moving.
+  const group = new THREE.Group();
   const model = makeRemotePlayerModel(myElement);
-  scene.add(model.object);
-  debugOwnBody = { mesh: model.object, mixer: model.mixer, actions: model.actions, current: model.current };
+  group.add(model.object);
+  scene.add(group);
+  debugOwnBody = { mesh: group, mixer: model.mixer, actions: model.actions, current: model.current };
 }
 
 // ============================================================
@@ -2710,22 +2787,33 @@ function readName() {
   myName = v || ('Маг' + Math.floor(Math.random() * 99));
 }
 function showElementPicker(onChosen) {
-  const panel = document.getElementById('elementPanel');
-  panel.classList.add('epVisible');
-  // Usually a no-op by this point — ensureElementPreviews() already ran as
-  // soon as the mage models finished loading (see loadMageAssets), while
-  // this panel was still invisible-but-laid-out. Called again here only as
-  // a safety net for the (rare) case a player reaches this screen before
-  // the models finish loading at all.
-  ensureElementPreviews();
-  document.querySelectorAll('#elementPanel .epCard').forEach(card => {
-    card.onclick = () => {
-      myElement = card.dataset.el;
-      stopElementPreviewLoop();
-      panel.classList.remove('epVisible');
-      onChosen();
-    };
-  });
+  const reveal = () => {
+    document.getElementById('assetLoadingScreen').style.display = 'none';
+    const panel = document.getElementById('elementPanel');
+    panel.classList.add('epVisible');
+    ensureElementPreviews(); // usually a no-op — already ran once mageAssetsReady resolved
+    document.querySelectorAll('#elementPanel .epCard').forEach(card => {
+      card.onclick = () => {
+        myElement = card.dataset.el;
+        stopElementPreviewLoop();
+        panel.classList.remove('epVisible');
+        onChosen();
+      };
+    });
+  };
+  if (mageTemplate && mageTemplateFire) {
+    reveal(); // the common case — the ~250MB of models finished loading while the player was still on the main menu
+  } else {
+    // Rare (slow connection / cold cache): the class-selection screen's own
+    // per-card spinners only cover "model not swapped in yet" — they can't
+    // cover the FBX parse itself still running, which is synchronous and
+    // can leave the whole page looking frozen/blank for a few seconds with
+    // no feedback at all. Show an explicit full-screen loading gate instead
+    // of the class panel until assets are fully ready.
+    document.getElementById('assetLoadingScreen').style.display = 'flex';
+    updateLoadProgressUI();
+    mageAssetsReady.then(reveal);
+  }
 }
 function enterGame() {
   document.getElementById('menu').style.display = 'none';

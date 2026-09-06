@@ -167,11 +167,13 @@ Real multi-client test pending.
   again until its own cast animation finishes, even if that spell's own
   cooldown is shorter.
   Remote players' movement animation is a Running clip, not Walking — a
-  deliberate swap, played at a tuned `MOVE_ANIM_TIMESCALE` (0.6) so the
-  leg-cycle roughly matches actual ground speed instead of sliding; their
-  body also faces whichever direction they're actually moving
-  (forward/backward/strafing) rather than always the forward pose, since
-  there's only one directional run clip
+  deliberate swap. The clip's own baked root motion is stripped on load
+  (see Findings — `stripHorizontalRootMotion`), and its `MOVE_ANIM_TIMESCALE`
+  is *derived* from the clip's natural pace vs. `MOVE_SPEED`, not
+  guessed, so the leg-cycle matches actual ground speed instead of
+  sliding; their body also faces whichever direction they're actually
+  moving (forward/backward/strafing) rather than always the forward pose,
+  since there's only one directional run clip
 - **Multi-zone world**: level 1/2/3 and the hub room are separate, far-apart
   spaces built by one shared `buildArena()` helper and coexisting statically
   in the same Three.js scene; moving between them is a teleport of `playerPos`
@@ -444,12 +446,12 @@ Real multi-client test pending.
   it) and reading `ownBodyGroup.rotation.y`: 0° holding W, 180° holding S,
   -90° holding D, snapping back to 0° (the current yaw) on release.
 - **"Run animation plays faster than the character actually moves"**
-  (foot-sliding) — added a `MOVE_ANIM_TIMESCALE` (0.6) applied to the walk
-  `AnimationAction`, tuned by eye against `MOVE_SPEED`. This is a first-pass
-  estimate, not a derived value — Mixamo's in-place Running clip carries no
-  root-motion data to compute the "correct" scale analytically from, so
-  it's a candidate to revisit if it still reads as sliding during a real
-  playtest.
+  (foot-sliding) — first pass added a `MOVE_ANIM_TIMESCALE` (0.6) applied to
+  the walk `AnimationAction`, tuned by eye against `MOVE_SPEED`, on the
+  (wrong) assumption the clip was in-place. **Superseded** — see the later
+  "model runs away from the camera" finding below, which found the clip
+  actually has real root motion baked in; 0.6 was unknowingly compensating
+  for that, not for an actual pace mismatch.
 - **"Run animation is still faster than the actual movement, and running
   backward/sideways sends the character flying off-screen"** — reported
   against the third-person camera added earlier this session. Rather than
@@ -702,4 +704,64 @@ Real multi-client test pending.
   toggle-off path is the same first-person camera code that existed before
   this change, unmodified, so it wasn't independently re-verified visually
   this session.
+- **Debug third-person view showed the model facing the camera, running
+  backward from itself** — `ensureDebugOwnBody()` set `mesh: model.object`
+  directly (the raw clone returned by `makeRemotePlayerModel`) instead of
+  wrapping it in an outer `THREE.Group` the way `makeRemotePlayer()` does
+  for actual remote players. The clone itself carries a baked-in
+  `rotation.y = Math.PI` correction (documented where it's set — Mixamo's
+  cast animation reaches toward world +Z, but this game's forward
+  convention is -Z), meant to be read as a *child* offset underneath a
+  separate yaw-only wrapper. Setting facing directly on the clone
+  overwrote that correction instead of composing with it, so the body
+  faced backward relative to its actual movement. Fixed by wrapping in a
+  `THREE.Group` exactly like remote players, and setting position/rotation
+  on the wrapper. Verified the fix reuses an already-proven-correct
+  composition (the same wrapper pattern real remote players use, confirmed
+  working over an actual P2P connection earlier this session) rather than
+  re-deriving the rotation math from scratch.
+- **"Running animation is faster than the movement, and the model slides
+  away from the camera"** — measured the Running clip's `mixamorigHips`
+  position track directly: it travels from Z≈1.4 to Z≈403 (in the FBX's cm
+  units) over one loop, i.e. **the clip has real baked root motion**, not
+  the in-place cycle it was assumed to be. That root motion was stacking
+  with the game's own code-driven `playerPos` movement — the character
+  moved twice, once from actual position updates and once from the
+  animation itself physically translating the mesh — which is exactly why
+  it looked like it was "running away." Rather than asking for a
+  re-exported "In Place" version from Mixamo, fixed it in code:
+  `stripHorizontalRootMotion()` flattens the hips track's X/Z values to a
+  constant right after the clip loads (keeping Y so the up/down running
+  bob survives), run once in `loadMageAssets()`. With the root motion
+  gone, `MOVE_ANIM_TIMESCALE` could finally be *derived* instead of
+  guessed: the stripped clip's own natural pace is
+  `(402.81-1.38)cm × 0.01 scale / 0.6333s duration ≈ 6.34 units/sec`, so
+  `MOVE_ANIM_TIMESCALE = MOVE_SPEED / 6.34` makes the leg-cycle match
+  actual ground speed exactly, replacing the old guessed `0.6`. Verified by
+  reading the clip's track values after loading in-browser: X and Z are
+  now bit-identical across every keyframe (only Y still varies).
+- **Class-selection screen showed a black rectangle and never finished
+  loading** — became noticeably worse after Fire got its own ~120MB model
+  (on top of Brady's existing ~116MB): the per-card loading spinners only
+  cover "the model object isn't built yet," but the actual `FBXLoader`
+  parse of a large binary FBX is synchronous and blocks the whole page,
+  same root cause as the earlier shader-compile freeze (see that Finding)
+  but for parsing instead of GPU compilation — with now roughly 2x the
+  combined model data to parse, that block is more likely to still be
+  running exactly when a player clicks host/join, at which point the
+  page can look frozen/blank with zero feedback for its whole duration.
+  Added a full-screen `#assetLoadingScreen` gate: `showElementPicker()`
+  now checks `mageTemplate && mageTemplateFire` and only reveals the real
+  class-selection panel once both are truthy; otherwise it shows the
+  loading screen and waits on a `mageAssetsReady` promise (resolved at the
+  end of `loadMageAssets()`) before revealing it. A progress bar tracks
+  aggregate bytes loaded across all 5 files via each `FBXLoader.load()`
+  call's `onProgress` callback. **Caveat, stated plainly**: this does not
+  eliminate the underlying freeze — a synchronous main-thread parse still
+  can't paint or animate anything (including this very loading screen's
+  own spinner) while it's running — it only guarantees a legible "still
+  loading" message is on screen *before* that block starts, instead of a
+  black rectangle with no explanation. Actually eliminating the pause
+  would need moving FBX parsing off the main thread (a Web Worker), which
+  is a larger change not attempted here.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)
