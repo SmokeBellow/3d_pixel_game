@@ -26,7 +26,10 @@ server, no installation. This is the fastest path to the still-outstanding
    (click to lock; also works unlocked for touchpads, plus arrow keys), LMB
    or Space cast (aimed at the crosshair — see below), wheel/Q/1-2-3 switch
    spell slot, **E to interact with a shop stand**, **L toggles full
-   brightness / no fog**, **K instantly kills every enemy on the map**
+   brightness / no fog**, **K instantly kills every enemy on the map**,
+   **V toggles a debug third-person view of your own character** (see
+   Findings — lets you eyeball your own idle/walk/cast animations solo,
+   without needing a second browser connected as a real remote player)
    (debug cheats). You can't cast again (any spell slot) until your cast
    animation finishes, even if the spell's own cooldown is shorter.
 6. The combo: a Water player soaks an enemy, a Lightning player hits it —
@@ -674,4 +677,29 @@ Real multi-client test pending.
   shown for the handful of frames before a real model finishes loading) —
   neither of those has an "original" appearance to preserve, so tinting
   those still makes sense for at-a-glance element identification.
+- **"Let me see my own animations without opening a second browser"** —
+  added a debug-only third-person toggle (**V**) rather than reworking the
+  main camera again (a real third-person mode was already tried and
+  reverted twice this project — see the earlier FPS-viewmodel/third-person
+  Findings — reintroducing it as the default would repeat that). `V`
+  lazily builds `debugOwnBody` — the *exact* model/animation setup a
+  teammate would actually see for this player (`makeRemotePlayerModel`,
+  same function remote players use) — hides the FP placeholder arms, and
+  pulls the camera back `DEBUG_TP_DISTANCE` (3.2) behind the head pivot
+  using the same yaw/pitch-derived look-direction formula as the earlier
+  (reverted) third-person camera. `tryCast()` additionally calls
+  `triggerCast(debugOwnBody, spell.tier)` when the toggle is on, so the
+  correct cast clip (`cast1`/`cast2`) plays immediately, matching exactly
+  what a remote viewer would see. No wall-collision pull-in like the old
+  third-person camera had — not needed for a debug tool checking
+  animations in the open. Verified via `window.__debug`: toggling sets
+  `debugThirdPerson`, the camera's distance from `playerPos` matches
+  `DEBUG_TP_DISTANCE` exactly, and `tryCast()` correctly drives
+  `debugOwnBody.current` to `'cast1'`/`'cast2'` depending on spell tier —
+  confirmed with a live screenshot showing the Fire model's cast pose in
+  third person before a browser-pane rendering hiccup (session-tooling
+  issue, unrelated to the game) cut the visual verification short; the
+  toggle-off path is the same first-person camera code that existed before
+  this change, unmodified, so it wasn't independently re-verified visually
+  this session.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)

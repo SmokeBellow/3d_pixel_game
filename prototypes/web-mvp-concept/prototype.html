@@ -167,7 +167,7 @@
   <div id="labelContinue" class="worldLabel"></div>
   <div id="interactPrompt"></div>
   <div id="status"></div>
-  <div id="cheatHint">L — вкл/выкл затемнение · K — убить всех врагов (дебаг)</div>
+  <div id="cheatHint">L — вкл/выкл затемнение · K — убить всех врагов · V — вид от 3-го лица (дебаг)</div>
   <div id="combatlog"></div>
   <div id="hpWrap">
     <div id="hpLabel"><span id="hpLabelText">HP</span><span id="goldLabel">💰 0</span></div>
@@ -357,6 +357,12 @@ const orbLight = new THREE.PointLight(0xff6622, 0.6, 2);
 fpOrb.add(orbLight);
 const FP_ARM_BASE_Y = -0.32, FP_ARM_BASE_Z = -0.55;
 let castRecoilT = Infinity, walkBobT = 0;
+// Debug-only: lets the local player see their own body/animations in
+// third person (V key) instead of needing a second browser tab connected
+// as a real remote player just to eyeball idle/walk/cast visuals.
+let debugThirdPerson = false;
+let debugOwnBody = null; // {mesh, mixer, actions, current} — built lazily on first toggle
+const DEBUG_TP_DISTANCE = 3.2;
 
 // Ambient is deliberately dim — visibility comes from torches + the player's
 // own glow, not flat scene-wide lighting (needed for the vignette to read).
@@ -1183,6 +1189,18 @@ function makeRemotePlayer(name, element) {
            mixer: model.mixer, actions: model.actions, current: model.current, lastPos: new THREE.Vector3(),
            placed: false }; // placed=false: snap to the first real position instead of lerping from world origin
   return rp;
+}
+
+// Debug-only third-person view (V key, see the keydown handler) — builds
+// the exact same model a remote teammate would see for this player, so
+// animation testing doesn't need a second browser tab connected as a real
+// remote player. Built lazily since myElement/mageTemplate may not be
+// ready yet the first time V is pressed.
+function ensureDebugOwnBody() {
+  if (debugOwnBody || !mageTemplate || !myElement) return;
+  const model = makeRemotePlayerModel(myElement);
+  scene.add(model.object);
+  debugOwnBody = { mesh: model.object, mixer: model.mixer, actions: model.actions, current: model.current };
 }
 
 // ============================================================
@@ -2271,6 +2289,13 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyQ') switchSlot(activeSlot + mySpells.length - 1); // backward cycle
   if (e.code === 'KeyE') tryInteract(); // physical shop stands in the hub room
   if (e.code === 'KeyK') cheatKillAllEnemies(); // debug cheat
+  if (e.code === 'KeyV') { // debug: third-person self-view, to eyeball animations without a 2nd browser
+    debugThirdPerson = !debugThirdPerson;
+    ensureDebugOwnBody();
+    fpArmL.visible = !debugThirdPerson;
+    fpArmR.visible = !debugThirdPerson;
+    if (debugOwnBody) debugOwnBody.mesh.visible = debugThirdPerson;
+  }
   if (e.code === 'Digit1') switchSlot(0);
   if (e.code === 'Digit2') switchSlot(1);
   if (e.code === 'Digit3') switchSlot(2);
@@ -2387,6 +2412,7 @@ function tryCast() {
   castLockedUntil = performance.now() + (castAnimDurationMs || spell.cooldown * 1000);
   fovKickT = 0; // fov_kick_response trigger (re-trigger resets, no stacking)
   castRecoilT = 0; // local first-person arm recoil
+  if (debugThirdPerson && debugOwnBody) triggerCast(debugOwnBody, spell.tier); // debug self-view
 
   // Let everyone see the cast gesture start right away; the actual shot
   // (projectile/hitscan/nova) is deliberately delayed to castFireDelayMs
@@ -2522,10 +2548,30 @@ function animate() {
     fpArmR.position.y = FP_ARM_BASE_Y - bobY;
     fpArmR.position.z = FP_ARM_BASE_Z + recoilZ;
 
-    camera.position.set(playerPos.x, EYE_HEIGHT, playerPos.z);
-    camera.rotation.set(0, 0, 0);
-    camera.rotateY(yaw);
-    camera.rotateX(pitch);
+    if (debugThirdPerson && debugOwnBody) {
+      // Debug third-person view (V key): same facing rule as remote
+      // players — face actual movement direction while moving (only one
+      // directional Running clip), otherwise face the camera/aim yaw.
+      debugOwnBody.mesh.position.set(playerPos.x, 0, playerPos.z);
+      debugOwnBody.mesh.rotation.y = isMoving ? Math.atan2(-move.x, -move.z) : yaw;
+      advanceCharacterAnimation(debugOwnBody, isMoving ? 'walk' : 'idle', dt);
+
+      camera.rotation.set(0, 0, 0);
+      camera.rotateY(yaw);
+      camera.rotateX(pitch);
+      const lookDir = new THREE.Vector3(
+        -Math.sin(yaw) * Math.cos(pitch),
+        Math.sin(pitch),
+        -Math.cos(yaw) * Math.cos(pitch)
+      );
+      const headPivot = new THREE.Vector3(playerPos.x, EYE_HEIGHT, playerPos.z);
+      camera.position.copy(headPivot).addScaledVector(lookDir, -DEBUG_TP_DISTANCE);
+    } else {
+      camera.position.set(playerPos.x, EYE_HEIGHT, playerPos.z);
+      camera.rotation.set(0, 0, 0);
+      camera.rotateY(yaw);
+      camera.rotateX(pitch);
+    }
 
     fovKickT += dt;
     camera.fov = BASE_FOV + fovKickOffset(fovKickT);
@@ -2750,6 +2796,8 @@ window.__debug = {
   get projectiles() { return projectiles; }, CAST_FIRE_DELAY_MS_T1, CAST_FIRE_DELAY_MS_T2,
   get castAnimDurationMs1() { return castAnimDurationMs1; }, get castAnimDurationMs2() { return castAnimDurationMs2; },
   get castLockedUntil() { return castLockedUntil; }, camera,
+  get debugThirdPerson() { return debugThirdPerson; }, get debugOwnBody() { return debugOwnBody; },
+  ensureDebugOwnBody,
   getPlayerPositions, get fx() { return fx; },
   get zoneLights() { return zoneLights; }, setZoneLightsVisible, get flashLightPool() { return flashLightPool; },
   get ZONE_MAZE() { return ZONE_MAZE; }, mazeCellAt, mazeBFSPath, mazeCellCenter,
