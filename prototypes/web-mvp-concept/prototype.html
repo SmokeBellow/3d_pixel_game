@@ -1109,8 +1109,9 @@ function makeNameSprite(text, colorHex) {
 // idle files are heavy (~116-120MB — a known, accepted tradeoff, see the
 // README's Findings).
 const MODEL_BASE = 'models/mage/';
-let mageTemplate = null; // Water/Lightning's model: { root, idleClip, walkClip, castClip1, castClip2 }
+let mageTemplate = null; // Lightning's model (and the Water/Fire fallback while their own loads): { root, idleClip, walkClip, castClip1, castClip2 }
 let mageTemplateFire = null; // Fire's own model, same shape
+let mageTemplateWater = null; // Water's own model, same shape (walk/cast clips are the shared ones, remapped — see remapClipToSkeleton)
 let castAnimDurationMs1 = null, castAnimDurationMs2 = null; // real-world duration of each cast clip (scaled) — how long casting locks out any further cast
 // This Mixamo Running clip has real root motion baked into the hips bone's
 // position track (measured: hips Z goes from ~1.4 to ~403 over one cycle —
@@ -1130,6 +1131,21 @@ function stripHorizontalRootMotion(clip) {
     track.values[i] = baseX;
     track.values[i + 2] = baseZ;
   }
+}
+// Water's own model (water_mesh.fbx/water_idle.fbx) was auto-rigged in a
+// separate Mixamo session, which named every bone with a `mixamorig10`
+// prefix instead of the plain `mixamorig` the other rigs use (verified:
+// otherwise bit-identical hierarchy, same 65 bones in the same order) —
+// Mixamo does this to avoid name collisions when multiple characters are
+// rigged under one account. AnimationMixer binds a clip's tracks to a
+// skeleton purely by matching bone name strings, so the shared
+// walk/cast1/cast2 clips need their track names rewritten to match before
+// they'll animate this skeleton at all; cloning first keeps the original
+// clip (used by every other model) untouched.
+function remapClipToSkeleton(clip, newPrefix) {
+  const remapped = clip.clone();
+  for (const track of remapped.tracks) track.name = track.name.replace('mixamorig', newPrefix);
+  return remapped;
 }
 // Resolved once both mage models + all 3 shared clips are loaded AND
 // parsed. showElementPicker() awaits this (showing #assetLoadingScreen in
@@ -1159,18 +1175,32 @@ function updateLoadProgressUI() {
   Promise.all([
     loadOne(MODEL_BASE + 'idle.fbx'),
     loadOne(MODEL_BASE + 'idle_fire.fbx'),
+    loadOne(MODEL_BASE + 'water_mesh.fbx'),
+    loadOne(MODEL_BASE + 'water_idle.fbx'),
     loadOne(MODEL_BASE + 'walk.fbx'),
     loadOne(MODEL_BASE + 'cast1.fbx'),
     loadOne(MODEL_BASE + 'cast2.fbx'),
-  ]).then(([idleObj, fireIdleObj, walkObj, cast1Obj, cast2Obj]) => {
+  ]).then(([idleObj, fireIdleObj, waterMeshObj, waterIdleObj, walkObj, cast1Obj, cast2Obj]) => {
     const walkClip = walkObj.animations[0];
     stripHorizontalRootMotion(walkClip);
     const castClip1 = cast1Obj.animations[0];
     const castClip2 = cast2Obj.animations[0];
     idleObj.scale.setScalar(0.01); // Mixamo exports in cm
     fireIdleObj.scale.setScalar(0.01);
+    waterMeshObj.scale.setScalar(0.01);
     mageTemplate = { root: idleObj, idleClip: idleObj.animations[0], walkClip, castClip1, castClip2 };
     mageTemplateFire = { root: fireIdleObj, idleClip: fireIdleObj.animations[0], walkClip, castClip1, castClip2 };
+    // water_idle.fbx shares water_mesh.fbx's own `mixamorig10*` skeleton
+    // directly (same Mixamo session) — no remap needed for the idle clip,
+    // only for the shared walk/cast clips authored against the plain
+    // `mixamorig` rig.
+    mageTemplateWater = {
+      root: waterMeshObj,
+      idleClip: waterIdleObj.animations[0],
+      walkClip: remapClipToSkeleton(walkClip, 'mixamorig10'),
+      castClip1: remapClipToSkeleton(castClip1, 'mixamorig10'),
+      castClip2: remapClipToSkeleton(castClip2, 'mixamorig10'),
+    };
     castAnimDurationMs1 = (castClip1.duration / CAST_ANIM_TIMESCALE) * 1000;
     castAnimDurationMs2 = (castClip2.duration / CAST_ANIM_TIMESCALE) * 1000;
     ensureElementPreviews();
@@ -1178,8 +1208,15 @@ function updateLoadProgressUI() {
   }).catch(err => console.error('Failed to load mage assets', err));
 })();
 
+// Lightning has no dedicated model yet, so it (and any element whose own
+// model hasn't finished loading) falls back to the shared `mageTemplate`.
+function templateFor(element) {
+  if (element === 'Fire' && mageTemplateFire) return mageTemplateFire;
+  if (element === 'Water' && mageTemplateWater) return mageTemplateWater;
+  return mageTemplate;
+}
 function makeRemotePlayerModel(element) {
-  const tmpl = (element === 'Fire' && mageTemplateFire) ? mageTemplateFire : mageTemplate;
+  const tmpl = templateFor(element);
   const clone = skeletonClone(tmpl.root);
   // Measured geometrically: at rotation.y=0 this Mixamo rig's cast animation
   // reaches toward world +Z, but this game's forward convention (see the
@@ -1370,11 +1407,15 @@ function stopElementPreviewLoop() {
 function elementPreviewLoop() {
   elementPreviewRAF = requestAnimationFrame(elementPreviewLoop);
   const dt = Math.min(elementPreviewClock.getDelta(), 0.05);
-  // idle.fbx is ~116MB — mageTemplate often isn't loaded yet the first time
-  // this screen shows, so cards show a loading spinner (.epLoader) until
-  // it's ready. Upgrading is itself real work (full skeleton+material
-  // clone) — at most ONE card upgrades per frame so the 3 cards' costs
-  // land on separate frames instead of stalling one frame 3x.
+  // The mage models are large (Fire/Lightning's shared rig and Water's own
+  // rig are each 100MB+) and all load together in one Promise.all (see
+  // loadMageAssets), so `mageTemplate` only ever becomes truthy at the
+  // exact same moment mageTemplateFire/mageTemplateWater do — checking it
+  // alone is a safe stand-in for "are all the per-element templates ready"
+  // rather than needing a per-card readiness check. Until then, cards show
+  // a loading spinner (.epLoader). Upgrading is itself real work (full
+  // skeleton+material clone) — at most ONE card upgrades per frame so the
+  // 3 cards' costs land on separate frames instead of stalling one frame 3x.
   if (mageTemplate) {
     const pending = ELEMENTS.find(el => elementPreviews[el] && !elementPreviews[el].usingReal);
     if (pending) upgradeElementPreview(pending);
@@ -2514,7 +2555,13 @@ function tryCast() {
     }
 
     raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-    const handWorld = camera.localToWorld(new THREE.Vector3(0.32, -0.25, -0.6));
+    // Spawn exactly where the FP arm's orb actually is right now (rather
+    // than a hand-guessed fixed offset from the camera that didn't quite
+    // line up with the visible hand) — fpOrb is the same object animated
+    // by the walk-bob/cast-recoil code in the main loop, so this always
+    // matches whatever pose the arm is actually in at fire time.
+    fpOrb.updateWorldMatrix(true, false); // this fires from a setTimeout, not the render loop — force a fresh matrix
+    const handWorld = fpOrb.getWorldPosition(new THREE.Vector3());
 
     if (spell.speed > 0) {
       // Fire/Water: flying projectile — shooter owns hit detection on impact
@@ -2586,11 +2633,15 @@ function animate() {
     }
     updateShopStands();
 
-    // Movement relative to yaw (locked while downed)
+    // Movement relative to yaw (locked while downed or mid-cast — a spell's
+    // own cast animation already locks out re-casting via castLockedUntil;
+    // reusing that same timestamp for movement means a player must plant
+    // their feet for the cast's real duration, not just its cooldown).
     const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
     const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
     const move = new THREE.Vector3();
-    if (!myDowned) {
+    const isCasting = performance.now() < castLockedUntil;
+    if (!myDowned && !isCasting) {
       if (keys['KeyW']) move.add(fwd);
       if (keys['KeyS']) move.sub(fwd);
       if (keys['KeyD']) move.add(right);
@@ -2801,7 +2852,7 @@ function showElementPicker(onChosen) {
       };
     });
   };
-  if (mageTemplate && mageTemplateFire) {
+  if (mageTemplate && mageTemplateFire && mageTemplateWater) {
     reveal(); // the common case — the ~250MB of models finished loading while the player was still on the main menu
   } else {
     // Rare (slow connection / cold cache): the class-selection screen's own
@@ -2865,6 +2916,7 @@ wireChatBox('waitingChatInput', 'waitingChatSend');
 // QA) can inspect live state. Harmless for players; not used by the game.
 window.__debug = {
   get mageTemplate() { return mageTemplate; }, get mageTemplateFire() { return mageTemplateFire; },
+  get mageTemplateWater() { return mageTemplateWater; },
   get enemies() { return enemies; },
   get playerPos() { return playerPos; },
   get remotePlayers() { return remotePlayers; },

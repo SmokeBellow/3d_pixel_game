@@ -30,8 +30,9 @@ server, no installation. This is the fastest path to the still-outstanding
    **V toggles a debug third-person view of your own character** (see
    Findings — lets you eyeball your own idle/walk/cast animations solo,
    without needing a second browser connected as a real remote player)
-   (debug cheats). You can't cast again (any spell slot) until your cast
-   animation finishes, even if the spell's own cooldown is shorter.
+   (debug cheats). You can't cast again (any spell slot), **or move**,
+   until your cast animation finishes, even if the spell's own cooldown is
+   shorter — casting plants your feet.
 6. The combo: a Water player soaks an enemy, a Lightning player hits it —
    3x damage + zigzag chain to nearby enemies (Lightning renders as a jagged
    bolt, not a straight line, but still lands exactly on the cursor).
@@ -143,14 +144,17 @@ Real multi-client test pending.
 - **Lobby with chat**: joining players see a waiting room (with player list
   + chat, shared with the host's lobby chat) until the host starts; late
   joiners after the game has started also get chat/lobby state correctly
-- **Player visuals**: **Fire has its own distinct Mixamo model**; Water and
-  Lightning still share "Brady" — the first step toward every school
-  eventually having its own look, per user request (see Findings). Models
-  render in their **original, untinted colors** (per-element recoloring
-  was removed by request — see Findings); only the name tag above a
-  player's head still uses their element's color. Both idle rigs share the
-  same standard Mixamo skeleton,
-  so the same walk/cast clips retarget onto either with no extra work.
+- **Player visuals**: **Fire and Water each have their own distinct Mixamo
+  model now**; only Lightning still uses the shared "Brady" model — one
+  school closer to every school eventually having its own look, per user
+  request (see Findings). Models render in their **original, untinted
+  colors** (per-element recoloring was removed by request — see
+  Findings); only the name tag above a player's head still uses their
+  element's color. All three rigs share the same standard Mixamo skeleton
+  shape (Water's own rig happens to name every bone with a `mixamorig10`
+  prefix instead of plain `mixamorig` — see Findings for the track-name
+  remap that makes the shared clips work on it anyway), so the same
+  walk/cast clips retarget onto any of them with no re-export needed.
   Rendered for every **remote** player as seen by their teammates — your
   own view is first-person with simple placeholder box/sphere arms (see
   Findings — the real-viewmodel and third-person experiments were both
@@ -764,4 +768,47 @@ Real multi-client test pending.
   black rectangle with no explanation. Actually eliminating the pause
   would need moving FBX parsing off the main thread (a Web Worker), which
   is a larger change not attempted here.
+- **Gave Water its own model** (`water_mesh.fbx` + `water_idle.fbx`), same
+  pattern as Fire, but with a wrinkle: this rig was auto-rigged in a
+  separate Mixamo session, so every bone is named `mixamorig10Whatever`
+  instead of the plain `mixamorigWhatever` every other rig (and the shared
+  walk/cast1/cast2 clips) uses — otherwise bit-identical, same 65 bones in
+  the same hierarchy order (verified by stripping the numeric infix from
+  both bone lists and diffing). `AnimationMixer` binds a clip to a
+  skeleton purely by matching track name strings against bone names, so
+  the shared clips would have silently done nothing on this skeleton
+  (bones just sitting at bind pose while internal state said "walking").
+  Added `remapClipToSkeleton(clip, newPrefix)` — clones the clip (so the
+  original, used unmodified by every other model, is untouched) and
+  rewrites each track's `.name` to swap the prefix. `templateFor(element)`
+  now picks between the shared template, Fire's, or Water's, falling back
+  to shared for any element whose own model isn't ready yet (in practice
+  never observed, since all templates load in one `Promise.all` and
+  become truthy at the same instant). Verified in-browser by manually
+  advancing a real `AnimationMixer` (`mixer.update(0.3)`, no render loop
+  needed) and reading the `mixamorig10Hips` bone's quaternion before/after
+  — confirmed it actually changes for both the remapped walk clip and
+  cast1, i.e. the remap genuinely drives the skeleton rather than silently
+  no-op'ing.
+- **"Lock movement during cast"** — reused the existing `castLockedUntil`
+  timestamp (already used to block re-casting until the current cast
+  animation finishes) as the movement gate too:
+  `if (!myDowned && !isCasting) { ...read WASD... }` in the main loop,
+  where `isCasting = performance.now() < castLockedUntil`. Since that
+  timestamp is set once per cast to the real animation duration (not the
+  spell's possibly-shorter cooldown), a player now has to stand still for
+  the whole visible gesture, matching what a teammate watching them cast
+  actually sees, rather than being able to strafe away mid-swing.
+- **"Projectile spawns from the wrong place"** — the spawn point used to
+  be a hand-guessed fixed offset from the camera
+  (`camera.localToWorld(new THREE.Vector3(0.32, -0.25, -0.6))`) that
+  didn't quite line up with the visible FP arm/orb, especially once the
+  cast-recoil animation moved the arm forward. Replaced with the *actual*
+  live world position of `fpOrb` (`fpOrb.getWorldPosition(...)`) — the
+  same object the walk-bob/cast-recoil code already animates every frame
+  — so the shot now always leaves from exactly where the glowing orb on
+  the hand visually is, however the arm happens to be posed at fire time.
+  Since this fires from a `setTimeout` rather than the render loop, called
+  `fpOrb.updateWorldMatrix(true, false)` first to guarantee a fresh
+  matrix rather than trusting whatever was last computed during a render.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)
