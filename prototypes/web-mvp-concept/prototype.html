@@ -347,16 +347,16 @@ addEventListener('resize', () => {
 });
 
 // First-person arms — parented to the camera so they follow the view.
-// Back to this after the third-person experiment: two real-viewmodel
-// attempts (Ganfaul, then Brady) were tried and reverted before, for two
-// different specific reasons that both trace to the same root cause — a
-// full-body third-person asset glued to the camera doesn't work as a
-// viewmodel without a dedicated FPS rig/IK (Ganfaul's shoulder pauldrons
-// dominated the frame; Brady's extended cast arm foreshortened into
-// near-invisibility along the view axis). Simple placeholder box/sphere
-// arms sidestep both problems entirely. (The third-person-behind-the-head
-// camera this replaces still lives on the `third-person-camera-aoe` branch
-// if it's worth revisiting later — e.g. with a dedicated FPS arm rig.)
+// Two earlier real-viewmodel attempts (Ganfaul, then Brady) were reverted
+// for two different specific reasons that both trace to the same root
+// cause — a full-body third-person asset glued to the camera doesn't work
+// as a viewmodel without a dedicated FPS rig/IK (Ganfaul's shoulder
+// pauldrons dominated the frame; Brady's extended cast arm foreshortened
+// into near-invisibility along the view axis). Placeholder box/sphere arms
+// are kept here as the automatic fallback (used until mageTemplate/
+// myElement are ready, or if ensureMyViewmodel() is never called) — see
+// ensureMyViewmodel() below for the third attempt, now using each
+// element's own real model.
 scene.add(camera);
 const armMat = new THREE.MeshLambertMaterial({ color: 0x2a2347 });
 const handMat = new THREE.MeshLambertMaterial({ color: 0xc9a07a });
@@ -382,12 +382,25 @@ const orbLight = new THREE.PointLight(0xff6622, 0.6, 2);
 fpOrb.add(orbLight);
 const FP_ARM_BASE_Y = -0.32, FP_ARM_BASE_Z = -0.55;
 let castRecoilT = Infinity, walkBobT = 0;
+// Real-model FP viewmodel (third attempt at this — see ensureMyViewmodel()
+// below, defined after makeRemotePlayerModel exists). Falls back to the
+// placeholder arms above until this is built/ready.
+let myViewmodel = null; // {object, mixer, actions, current}
+let myViewmodelHandBone = null; // mixamorigRightHand — used for the projectile spawn point
+let myViewmodelHandGlow = null; // tinted to the active spell's color, mirroring the old placeholder orb
 // Debug-only: lets the local player see their own body/animations in
 // third person (V key) instead of needing a second browser tab connected
 // as a real remote player just to eyeball idle/walk/cast visuals.
 let debugThirdPerson = false;
 let debugOwnBody = null; // {mesh, mixer, actions, current} — built lazily on first toggle
 const DEBUG_TP_DISTANCE = 3.2;
+// Marks exactly where the FP camera sits (playerPos + EYE_HEIGHT) while in
+// the debug third-person view, so the real FP eye position can be judged
+// and FP_VIEWMODEL_OFFSET tuned by eye against the visible third-person
+// body, without needing to actually switch views back and forth.
+const debugEyeMarker = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 8), new THREE.MeshBasicMaterial({ color: 0x00ffcc }));
+debugEyeMarker.visible = false;
+scene.add(debugEyeMarker);
 
 // Ambient is deliberately dim — visibility comes from torches + the player's
 // own glow, not flat scene-wide lighting (needed for the vignette to read).
@@ -1157,15 +1170,22 @@ function remapClipToSkeleton(clip, newPrefix) {
 let mageAssetsReadyResolve;
 const mageAssetsReady = new Promise(res => { mageAssetsReadyResolve = res; });
 const loadProgress = {}; // url -> {loaded, total}, used only for the loading-screen progress bar
+// Byte progress only covers the download — capped at 90% so the bar/text
+// can never claim "100%" while the (synchronous, can take real time) FBX
+// parse and shader-compile warmup are still running afterward. Those get
+// their own explicit phase below instead of being folded into this math.
 function updateLoadProgressUI() {
   const entries = Object.values(loadProgress);
   const loaded = entries.reduce((s, p) => s + p.loaded, 0);
   const total = entries.reduce((s, p) => s + (p.total || p.loaded), 0);
-  const pct = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+  const pct = total > 0 ? Math.min(90, Math.round((loaded / total) * 90)) : 0;
+  setLoadProgressUI(pct, `Загрузка моделей… ${pct}%`);
+}
+function setLoadProgressUI(pct, text) {
   const bar = document.getElementById('loadProgressBarFill');
-  const text = document.getElementById('loadProgressText');
+  const textEl = document.getElementById('loadProgressText');
   if (bar) bar.style.width = pct + '%';
-  if (text) text.textContent = `Загрузка моделей… ${pct}%`;
+  if (textEl) textEl.textContent = text;
 }
 (function loadMageAssets() {
   const loader = new FBXLoader();
@@ -1180,7 +1200,7 @@ function updateLoadProgressUI() {
     loadOne(MODEL_BASE + 'walk.fbx'),
     loadOne(MODEL_BASE + 'cast1.fbx'),
     loadOne(MODEL_BASE + 'cast2.fbx'),
-  ]).then(([idleObj, fireIdleObj, waterMeshObj, waterIdleObj, walkObj, cast1Obj, cast2Obj]) => {
+  ]).then(async ([idleObj, fireIdleObj, waterMeshObj, waterIdleObj, walkObj, cast1Obj, cast2Obj]) => {
     const walkClip = walkObj.animations[0];
     stripHorizontalRootMotion(walkClip);
     const castClip1 = cast1Obj.animations[0];
@@ -1203,10 +1223,32 @@ function updateLoadProgressUI() {
     };
     castAnimDurationMs1 = (castClip1.duration / CAST_ANIM_TIMESCALE) * 1000;
     castAnimDurationMs2 = (castClip2.duration / CAST_ANIM_TIMESCALE) * 1000;
-    ensureElementPreviews();
+    // The files are downloaded and parsed at this point, but each distinct
+    // model/material still needs its own one-time WebGL shader compile the
+    // first time it's actually rendered (see the long comment on
+    // ensureElementPreviews for why an earlier separate-throwaway-scene
+    // warmup didn't work — rendering the real per-card preview is the only
+    // thing that reliably pays this cost). Doing that here, before
+    // resolving mageAssetsReady, means the class-selection screen only
+    // reveals once every card is already fully built and its shader
+    // already compiled — previously this happened lazily one-card-per-frame
+    // *after* the panel was already visible, so whichever card upgraded
+    // last (Lightning, being last in ELEMENTS) could freeze the page right
+    // while the player was looking at the now-visible screen.
+    await warmupAllElementPreviews();
     mageAssetsReadyResolve();
   }).catch(err => console.error('Failed to load mage assets', err));
 })();
+async function warmupAllElementPreviews() {
+  ensureElementPreviews(); // builds each card's scene/camera + the shared renderer if not already
+  for (const el of ELEMENTS) {
+    if (elementPreviews[el] && elementPreviews[el].usingReal) continue;
+    setLoadProgressUI(95, `Подготовка моделей…`);
+    upgradeElementPreview(el);
+    await new Promise(r => setTimeout(r, 0)); // yield one tick so the progress text can actually paint between compiles
+  }
+  setLoadProgressUI(100, 'Готово!');
+}
 
 // Lightning has no dedicated model yet, so it (and any element whose own
 // model hasn't finished loading) falls back to the shared `mageTemplate`.
@@ -1262,6 +1304,13 @@ function makeRemotePlayerModel(element) {
     actions[key].timeScale = CAST_ANIM_TIMESCALE;
   }
   actions.idle.play();
+  // Force the idle pose onto the skeleton immediately instead of waiting
+  // for the caller's next mixer.update(dt) — without this, the very first
+  // rendered frame shows the raw FBX bind pose (whatever pose Mixamo
+  // happened to bake as the skeleton's rest transform), which can look
+  // like a completely different stance (e.g. mid-gesture) for a model
+  // exported while a non-idle animation was active in the Mixamo preview.
+  mixer.update(0);
   return { object: clone, mixer, actions, current: 'idle' };
 }
 // Cheap primitive placeholder — used only if a player joins before the ~22MB
@@ -1315,6 +1364,30 @@ function ensureDebugOwnBody() {
   group.add(model.object);
   scene.add(group);
   debugOwnBody = { mesh: group, mixer: model.mixer, actions: model.actions, current: model.current };
+}
+
+// Third attempt at a real-model FP viewmodel (see the long comment where
+// the placeholder arms are built for why the first two were reverted).
+// Parented to the camera exactly like the placeholder arms, at an offset
+// tuned so the head sits at/behind the camera (invisible, as it should be)
+// — same idea as the earlier attempts' tuning, just against this
+// project's current models instead of Ganfaul/Brady. This is a starting
+// guess, not re-verified visually this session (see README Findings) —
+// expect to retune `FP_VIEWMODEL_OFFSET` by eye.
+const FP_VIEWMODEL_OFFSET = new THREE.Vector3(0, -EYE_HEIGHT, 0.15);
+function ensureMyViewmodel() {
+  if (myViewmodel || !mageTemplate || !myElement) return;
+  const model = makeRemotePlayerModel(myElement);
+  model.object.position.copy(FP_VIEWMODEL_OFFSET);
+  camera.add(model.object);
+  myViewmodel = model;
+  model.object.traverse(o => { if (o.isBone && /RightHand$/i.test(o.name)) myViewmodelHandBone = o; });
+  if (myViewmodelHandBone) {
+    myViewmodelHandGlow = new THREE.PointLight(0xff6622, 0.6, 2);
+    myViewmodelHandBone.add(myViewmodelHandGlow);
+  }
+  fpArmL.visible = false;
+  fpArmR.visible = false;
 }
 
 // ============================================================
@@ -2410,9 +2483,16 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyV') { // debug: third-person self-view, to eyeball animations without a 2nd browser
     debugThirdPerson = !debugThirdPerson;
     ensureDebugOwnBody();
-    fpArmL.visible = !debugThirdPerson;
-    fpArmR.visible = !debugThirdPerson;
+    // Only re-show the placeholder arms on toggling back to FP if there's
+    // no real viewmodel — otherwise they'd reappear on top of it (see
+    // ensureMyViewmodel, which hides them permanently once it builds).
+    if (!myViewmodel) {
+      fpArmL.visible = !debugThirdPerson;
+      fpArmR.visible = !debugThirdPerson;
+    }
+    if (myViewmodel) myViewmodel.object.visible = !debugThirdPerson;
     if (debugOwnBody) debugOwnBody.mesh.visible = debugThirdPerson;
+    debugEyeMarker.visible = debugThirdPerson;
   }
   if (e.code === 'Digit1') switchSlot(0);
   if (e.code === 'Digit2') switchSlot(1);
@@ -2440,6 +2520,7 @@ function updateSlotUI() {
   if (mySpells[activeSlot]) {
     orbMat.color.setHex(mySpells[activeSlot].color);
     orbLight.color.setHex(mySpells[activeSlot].color);
+    if (myViewmodelHandGlow) myViewmodelHandGlow.color.setHex(mySpells[activeSlot].color);
   }
 }
 
@@ -2529,7 +2610,8 @@ function tryCast() {
   const castFireDelayMs = big ? CAST_FIRE_DELAY_MS_T2 : CAST_FIRE_DELAY_MS_T1;
   castLockedUntil = performance.now() + (castAnimDurationMs || spell.cooldown * 1000);
   fovKickT = 0; // fov_kick_response trigger (re-trigger resets, no stacking)
-  castRecoilT = 0; // local first-person arm recoil
+  castRecoilT = 0; // local first-person arm recoil (placeholder-arms fallback only)
+  if (myViewmodel) triggerCast(myViewmodel, spell.tier); // real FP viewmodel's own cast gesture
   if (debugThirdPerson && debugOwnBody) triggerCast(debugOwnBody, spell.tier); // debug self-view
 
   // Let everyone see the cast gesture start right away; the actual shot
@@ -2555,13 +2637,16 @@ function tryCast() {
     }
 
     raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-    // Spawn exactly where the FP arm's orb actually is right now (rather
-    // than a hand-guessed fixed offset from the camera that didn't quite
-    // line up with the visible hand) — fpOrb is the same object animated
-    // by the walk-bob/cast-recoil code in the main loop, so this always
-    // matches whatever pose the arm is actually in at fire time.
-    fpOrb.updateWorldMatrix(true, false); // this fires from a setTimeout, not the render loop — force a fresh matrix
-    const handWorld = fpOrb.getWorldPosition(new THREE.Vector3());
+    // Spawn exactly where the caster's own hand actually is right now
+    // (rather than a hand-guessed fixed offset from the camera that didn't
+    // quite line up with the visible hand): the real viewmodel's own right
+    // hand bone if it's built, else the placeholder arm's orb — both are
+    // animated every frame by the code below, so either one matches
+    // whatever pose the arm is actually in at fire time. This fires from a
+    // setTimeout, not the render loop, so force a fresh matrix first.
+    const handSource = myViewmodelHandBone || fpOrb;
+    handSource.updateWorldMatrix(true, false);
+    const handWorld = handSource.getWorldPosition(new THREE.Vector3());
 
     if (spell.speed > 0) {
       // Fire/Water: flying projectile — shooter owns hit detection on impact
@@ -2675,6 +2760,11 @@ function animate() {
     fpArmL.position.y = FP_ARM_BASE_Y + bobY;
     fpArmR.position.y = FP_ARM_BASE_Y - bobY;
     fpArmR.position.z = FP_ARM_BASE_Z + recoilZ;
+    // Real FP viewmodel: same idle/walk state machine as remote players and
+    // the debug third-person body, just parented to the camera so it has
+    // no world position of its own to update.
+    if (myViewmodel) advanceCharacterAnimation(myViewmodel, isMoving ? 'walk' : 'idle', dt);
+    if (debugThirdPerson) debugEyeMarker.position.set(playerPos.x, EYE_HEIGHT, playerPos.z);
 
     if (debugThirdPerson && debugOwnBody) {
       // Debug third-person view (V key): same facing rule as remote
@@ -2872,6 +2962,7 @@ function enterGame() {
   inGame = true;
   applyLightingMode();
   switchSlot(0);
+  ensureMyViewmodel();
   combatLog('Кликни по экрану, чтобы захватить мышь');
 }
 document.getElementById('btnHost').onclick = () => { readName(); startHost(); };
@@ -2937,7 +3028,7 @@ window.__debug = {
   get castAnimDurationMs1() { return castAnimDurationMs1; }, get castAnimDurationMs2() { return castAnimDurationMs2; },
   get castLockedUntil() { return castLockedUntil; }, camera,
   get debugThirdPerson() { return debugThirdPerson; }, get debugOwnBody() { return debugOwnBody; },
-  ensureDebugOwnBody,
+  ensureDebugOwnBody, get myViewmodel() { return myViewmodel; }, ensureMyViewmodel, FP_VIEWMODEL_OFFSET,
   getPlayerPositions, get fx() { return fx; },
   get zoneLights() { return zoneLights; }, setZoneLightsVisible, get flashLightPool() { return flashLightPool; },
   get ZONE_MAZE() { return ZONE_MAZE; }, mazeCellAt, mazeBFSPath, mazeCellCenter,

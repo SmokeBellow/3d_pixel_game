@@ -19,20 +19,24 @@ server, no installation. This is the fastest path to the still-outstanding
    You only see your own school's spells; combos require teammates on other
    elements. **Joining friends wait in a lobby (with chat) until the host
    clicks Начать** — nobody enters the arena early.
-5. **First-person view** with simple placeholder box/sphere arms (see
-   Findings — a third-person-behind-the-head camera was tried in between and
-   is preserved on the `third-person-camera-aoe` branch, but was reverted
-   back to first-person per user request). Controls: WASD move, mouse look
+5. **First-person view**, arms now using your own element's real model
+   (third attempt at this — see Findings; falls back to placeholder
+   box/sphere arms automatically if the real model isn't ready yet). A
+   third-person-behind-the-head camera was tried in between and is
+   preserved on the `third-person-camera-aoe` branch, but was reverted back
+   to first-person per user request. Controls: WASD move, mouse look
    (click to lock; also works unlocked for touchpads, plus arrow keys), LMB
    or Space cast (aimed at the crosshair — see below), wheel/Q/1-2-3 switch
    spell slot, **E to interact with a shop stand**, **L toggles full
    brightness / no fog**, **K instantly kills every enemy on the map**,
    **V toggles a debug third-person view of your own character** (see
    Findings — lets you eyeball your own idle/walk/cast animations solo,
-   without needing a second browser connected as a real remote player)
-   (debug cheats). You can't cast again (any spell slot), **or move**,
-   until your cast animation finishes, even if the spell's own cooldown is
-   shorter — casting plants your feet.
+   without needing a second browser connected as a real remote player; also
+   marks a small cyan dot at exactly where the FP camera sits, to help
+   judge/tune the FP viewmodel offset from outside it) (debug cheats). You
+   can't cast again (any spell slot), **or move**, until your cast
+   animation finishes, even if the spell's own cooldown is shorter —
+   casting plants your feet.
 6. The combo: a Water player soaks an enemy, a Lightning player hits it —
    3x damage + zigzag chain to nearby enemies (Lightning renders as a jagged
    bolt, not a straight line, but still lands exactly on the cursor).
@@ -155,10 +159,9 @@ Real multi-client test pending.
   prefix instead of plain `mixamorig` — see Findings for the track-name
   remap that makes the shared clips work on it anyway), so the same
   walk/cast clips retarget onto any of them with no re-export needed.
-  Rendered for every **remote** player as seen by their teammates — your
-  own view is first-person with simple placeholder box/sphere arms (see
-  Findings — the real-viewmodel and third-person experiments were both
-  tried and reverted). **Tier-1 spells
+  Rendered for every **remote** player as seen by their teammates, and
+  (third attempt — see Findings) also as your own first-person arms,
+  parented to the camera. **Tier-1 spells
   play `cast1.fbx` ("Standing 1H Magic Attack 01"), tier-2 spells play
   `cast2.fbx`** (the original "Magic Spell Casting") — each has its own
   timing calibration for when its swing actually releases, so the shot
@@ -811,4 +814,85 @@ Real multi-client test pending.
   Since this fires from a `setTimeout` rather than the render loop, called
   `fpOrb.updateWorldMatrix(true, false)` first to guarantee a fresh
   matrix rather than trusting whatever was last computed during a render.
+- **"Loading screen shows 100% while still loading, and the bar isn't
+  full at 100%"** — the progress bar tracked raw download bytes across all
+  7 model/animation files, but each file's promise only resolves after
+  the FBX is *parsed* too (synchronous, can take real time for the ~50MB+
+  files) — so 100% downloaded routinely showed before the objects were
+  actually usable, and the last file's parse-time gap between "100% bytes"
+  and "actually done" is exactly what made the bar look stuck/wrong.
+  Capped the byte-based percentage at 90% (`Math.min(90, ...)`) so it can
+  never claim done while a file might still be parsing, and added an
+  explicit second phase after `Promise.all` resolves — see the next
+  Finding — that owns the 90-100% range and only reports "Готово!" once
+  everything, including shader warmup, is truly finished.
+- **"Class-selection screen still freezes — now it's Lightning's model
+  that's loading"** — `ensureElementPreviews()`'s comment already explains
+  *why* each distinct model/material needs its own real WebGL shader
+  compile the first time it's rendered (a proper throwaway warmup pass
+  doesn't trigger the same compile Three.js ends up needing for the real
+  per-card scissored-viewport render path). The gap was *when* that
+  compile happened: lazily, one card per animation frame, inside
+  `elementPreviewLoop` — which only starts trying once the class-selection
+  panel might already be visible. With three now-distinct models (Fire,
+  Water, and the shared Lightning/Brady material), whichever one happened
+  to compile last could freeze the page while the player was already
+  looking at the (seemingly ready) screen. Added `warmupAllElementPreviews()`,
+  called from inside `loadMageAssets()` *before* `mageAssetsReadyResolve()`
+  fires — it upgrades all 3 cards to their real models (paying every
+  shader compile) while `#assetLoadingScreen` is still up, showing
+  "Подготовка моделей…" at 90-100%, yielding one tick between each card so
+  the text can actually repaint between compiles. `showElementPicker()`'s
+  gate now only reveals the panel once this entire phase is done, so by
+  the time it's visible every card is already fully built. Verified with a
+  cache-busted reload (`?v=2` — a plain `navigate()` to the same URL can
+  silently keep running a previously-loaded ES module instance, which cost
+  some confusion mid-debugging): all three `.epLoader` spinners read
+  `display:none` and the loading screen reads `Готово!` at `100%` by the
+  time the DOM is first inspected after reveal — i.e. no card is left to
+  freeze the now-visible screen.
+- **"Water's idle pose looks like the cast animation"** — `makeRemotePlayerModel()`
+  called `actions.idle.play()` but the pose wasn't actually *applied* to
+  the skeleton until the caller's next `mixer.update(dt)`, which for a
+  freshly-built model could be a frame or more away. Until then, the
+  skinned mesh shows whatever pose Mixamo baked as the raw FBX bind
+  pose — for a model exported while a non-idle animation was selected in
+  Mixamo's own preview (plausible for `water_mesh.fbx`, whose *own*
+  embedded animation is a 6-second spell-cast gesture, per its filename),
+  that raw bind pose is not a neutral T-pose. Fixed by calling
+  `mixer.update(0)` immediately after `actions.idle.play()` inside
+  `makeRemotePlayerModel()`, forcing the idle pose onto every model the
+  instant it's built rather than trusting the next render. (Numeric check
+  during investigation: the right hand's world position from a clean idle
+  clip evaluation matched exactly, `[0.4827, ...]` twice independently
+  measured, confirming the *clip itself* was always correct — the bug was
+  specifically the one-frame gap before it got applied.)
+- **Gave the FP viewmodel a real model — third attempt** — the previous two
+  (Ganfaul, then Brady) were reverted for two different specific
+  geometric reasons (shoulder pauldrons dominating the frame; the cast
+  arm's reach foreshortening to invisibility along the view axis), both
+  tracing to "a full-body third-person asset glued to the camera isn't a
+  dedicated FPS rig." Tried again per user request, now against the
+  current models, via `ensureMyViewmodel()` — same
+  parented-to-camera approach as the placeholder arms, offset by
+  `FP_VIEWMODEL_OFFSET = (0, -EYE_HEIGHT, 0.15)` (head at/behind the
+  camera, per the same tuning logic the earlier attempts used). Falls back
+  to the placeholder arms automatically if `mageTemplate`/`myElement`
+  aren't ready. The projectile/hitscan spawn point now prefers the real
+  viewmodel's own right-hand bone over the placeholder orb when available.
+  Added a debug aid alongside this, per user request: while in the debug
+  third-person view (V), a small cyan dot (`debugEyeMarker`) marks exactly
+  `(playerPos.x, EYE_HEIGHT, playerPos.z)` — the real FP camera's eye
+  position — so the offset can be judged and retuned by eye from outside
+  the FP view itself, without needing to flip back and forth blind.
+  **Stated plainly**: `FP_VIEWMODEL_OFFSET` is a first-pass guess carried
+  over from the previous attempts' tuning logic, not re-verified visually
+  this session (the browser preview pane's render loop was suspended for
+  this entire session — confirmed via a `requestAnimationFrame` counter
+  staying at 0 after 2 real seconds — so nothing depending on live
+  rendering, camera movement, or animation playback could be visually
+  checked; only state reachable via direct `mixer.update()`/property
+  inspection was verified). Given this exact technique failed twice
+  before for framing reasons a screenshot would have caught immediately,
+  the offset should be treated as unverified until checked visually.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)
