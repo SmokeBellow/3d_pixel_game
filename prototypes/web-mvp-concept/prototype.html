@@ -220,6 +220,8 @@ import { clone as skeletonClone } from 'three/addons/utils/SkeletonUtils.js';
 // Tuning (sourced from GDDs where they exist)
 // ============================================================
 const EYE_HEIGHT = 1.65;          // camera-system.md eye_height_offset
+const FP_CAMERA_HEIGHT_OFFSET = -0.15; // lowers the FP eye point slightly below EYE_HEIGHT (user report: felt too high)
+const FP_CAMERA_FORWARD_OFFSET = 0.12; // nudges the FP eye point forward along facing (user report: felt too far back)
 const PITCH_CLAMP = 89 * Math.PI / 180; // camera-system.md pitch clamp
 const BASE_FOV = 80;              // vertical FOV (three.js), ~90 horizontal
 const KICK_PEAK = 5, KICK_ATTACK = 0.05, KICK_DECAY = 0.20; // fov_kick_response
@@ -393,7 +395,14 @@ let myViewmodelHandGlow = null; // tinted to the active spell's color, mirroring
 // as a real remote player just to eyeball idle/walk/cast visuals.
 let debugThirdPerson = false;
 let debugOwnBody = null; // {mesh, mixer, actions, current} — built lazily on first toggle
+let debugOwnBodyHandBone = null; // mixamorigRightHand on the VISIBLE debug body — used so the debug view's own casts spawn from the body actually on screen, not from the hidden FP viewmodel sitting back at the orbit camera
 const DEBUG_TP_DISTANCE = 3.2;
+// While in the debug third-person view, mouse-look drives a free orbit
+// around the player instead of the gameplay yaw/pitch (which stay fixed —
+// they still drive movement direction and the idle facing). This is what
+// lets the debug view actually look at the character "from all sides"
+// instead of just following behind wherever gameplay aim is pointed.
+let debugOrbitYaw = 0, debugOrbitPitch = 0.3;
 // Marks exactly where the FP camera sits (playerPos + EYE_HEIGHT) while in
 // the debug third-person view, so the real FP eye position can be judged
 // and FP_VIEWMODEL_OFFSET tuned by eye against the visible third-person
@@ -1196,11 +1205,10 @@ function setLoadProgressUI(pct, text) {
     loadOne(MODEL_BASE + 'idle.fbx'),
     loadOne(MODEL_BASE + 'idle_fire.fbx'),
     loadOne(MODEL_BASE + 'water_mesh.fbx'),
-    loadOne(MODEL_BASE + 'water_idle.fbx'),
     loadOne(MODEL_BASE + 'walk.fbx'),
     loadOne(MODEL_BASE + 'cast1.fbx'),
     loadOne(MODEL_BASE + 'cast2.fbx'),
-  ]).then(async ([idleObj, fireIdleObj, waterMeshObj, waterIdleObj, walkObj, cast1Obj, cast2Obj]) => {
+  ]).then(async ([idleObj, fireIdleObj, waterMeshObj, walkObj, cast1Obj, cast2Obj]) => {
     const walkClip = walkObj.animations[0];
     stripHorizontalRootMotion(walkClip);
     const castClip1 = cast1Obj.animations[0];
@@ -1210,13 +1218,18 @@ function setLoadProgressUI(pct, text) {
     waterMeshObj.scale.setScalar(0.01);
     mageTemplate = { root: idleObj, idleClip: idleObj.animations[0], walkClip, castClip1, castClip2 };
     mageTemplateFire = { root: fireIdleObj, idleClip: fireIdleObj.animations[0], walkClip, castClip1, castClip2 };
-    // water_idle.fbx shares water_mesh.fbx's own `mixamorig10*` skeleton
-    // directly (same Mixamo session) — no remap needed for the idle clip,
-    // only for the shared walk/cast clips authored against the plain
-    // `mixamorig` rig.
+    // water_idle.fbx's own clip data turned out to be a crouched,
+    // claws-out aggressive stance, not a neutral standing idle — confirmed
+    // by rendering it directly, not a binding/timing bug (the pose is
+    // baked into the source file itself, sourced from the user's
+    // "water_standing.fbx", which apparently isn't the plain standing
+    // animation its name implies). Rather than ship a bad idle pose, reuse
+    // Fire's known-good relaxed idle clip retargeted onto Water's
+    // `mixamorig10*` skeleton — the same remap already proven to work for
+    // the shared walk/cast clips below.
     mageTemplateWater = {
       root: waterMeshObj,
-      idleClip: waterIdleObj.animations[0],
+      idleClip: remapClipToSkeleton(fireIdleObj.animations[0], 'mixamorig10'),
       walkClip: remapClipToSkeleton(walkClip, 'mixamorig10'),
       castClip1: remapClipToSkeleton(castClip1, 'mixamorig10'),
       castClip2: remapClipToSkeleton(castClip2, 'mixamorig10'),
@@ -1363,6 +1376,7 @@ function ensureDebugOwnBody() {
   const model = makeRemotePlayerModel(myElement);
   group.add(model.object);
   scene.add(group);
+  model.object.traverse(o => { if (o.isBone && /RightHand$/i.test(o.name)) debugOwnBodyHandBone = o; });
   debugOwnBody = { mesh: group, mixer: model.mixer, actions: model.actions, current: model.current };
 }
 
@@ -2493,6 +2507,15 @@ addEventListener('keydown', e => {
     if (myViewmodel) myViewmodel.object.visible = !debugThirdPerson;
     if (debugOwnBody) debugOwnBody.mesh.visible = debugThirdPerson;
     debugEyeMarker.visible = debugThirdPerson;
+    if (debugThirdPerson) {
+      // Start the free orbit facing the same way the gameplay camera was
+      // already looking, then hand control over to the dedicated orbit
+      // state (see mousemove handler) so looking around no longer touches
+      // the real aim/movement yaw.
+      debugOrbitYaw = yaw;
+      debugOrbitPitch = pitch;
+      if (document.pointerLockElement !== renderer.domElement) renderer.domElement.requestPointerLock();
+    }
   }
   if (e.code === 'Digit1') switchSlot(0);
   if (e.code === 'Digit2') switchSlot(1);
@@ -2533,6 +2556,14 @@ function updateSlotUI() {
 // lock support fall back to the Arrow-key look handled in the main loop.
 document.addEventListener('mousemove', e => {
   if (!inGame || document.pointerLockElement !== renderer.domElement) return;
+  if (debugThirdPerson) {
+    // Orbit only — leaves the real aim/movement yaw untouched so the debug
+    // body keeps its own facing while the camera swings freely around it.
+    debugOrbitYaw -= e.movementX * sensitivity;
+    debugOrbitPitch -= e.movementY * sensitivity;
+    debugOrbitPitch = Math.max(-1.5, Math.min(1.5, debugOrbitPitch));
+    return;
+  }
   yaw -= e.movementX * sensitivity;
   pitch -= e.movementY * sensitivity;
   pitch = Math.max(-PITCH_CLAMP, Math.min(PITCH_CLAMP, pitch)); // pitch_accumulation clamp
@@ -2644,7 +2675,12 @@ function tryCast() {
     // animated every frame by the code below, so either one matches
     // whatever pose the arm is actually in at fire time. This fires from a
     // setTimeout, not the render loop, so force a fresh matrix first.
-    const handSource = myViewmodelHandBone || fpOrb;
+    // In the debug third-person view the camera orbits freely away from the
+    // player (see the free-orbit camera above), so the FP viewmodel's hand
+    // bone — parented to that camera — is no longer anywhere near the
+    // visible body and produced sparks spawning far behind/away from it.
+    // Use the visible debug body's own hand bone there instead.
+    const handSource = (debugThirdPerson && debugOwnBodyHandBone) ? debugOwnBodyHandBone : (myViewmodelHandBone || fpOrb);
     handSource.updateWorldMatrix(true, false);
     const handWorld = handSource.getWorldPosition(new THREE.Vector3());
 
@@ -2774,18 +2810,28 @@ function animate() {
       debugOwnBody.mesh.rotation.y = isMoving ? Math.atan2(-move.x, -move.z) : yaw;
       advanceCharacterAnimation(debugOwnBody, isMoving ? 'walk' : 'idle', dt);
 
-      camera.rotation.set(0, 0, 0);
-      camera.rotateY(yaw);
-      camera.rotateX(pitch);
-      const lookDir = new THREE.Vector3(
-        -Math.sin(yaw) * Math.cos(pitch),
-        Math.sin(pitch),
-        -Math.cos(yaw) * Math.cos(pitch)
+      // Free orbit around the character (decoupled from gameplay yaw/pitch
+      // — see the mousemove handler) so the debug view can actually look at
+      // the character from all sides instead of just trailing behind
+      // wherever the real aim direction points.
+      const orbitDir = new THREE.Vector3(
+        -Math.sin(debugOrbitYaw) * Math.cos(debugOrbitPitch),
+        Math.sin(debugOrbitPitch),
+        -Math.cos(debugOrbitYaw) * Math.cos(debugOrbitPitch)
       );
       const headPivot = new THREE.Vector3(playerPos.x, EYE_HEIGHT, playerPos.z);
-      camera.position.copy(headPivot).addScaledVector(lookDir, -DEBUG_TP_DISTANCE);
+      camera.position.copy(headPivot).addScaledVector(orbitDir, -DEBUG_TP_DISTANCE);
+      camera.lookAt(headPivot);
     } else {
-      camera.position.set(playerPos.x, EYE_HEIGHT, playerPos.z);
+      // Lowered and nudged slightly forward from the raw eye point — the
+      // bare EYE_HEIGHT point read as too high/too far back once compared
+      // against the visible debug third-person body.
+      const camFwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+      camera.position.set(
+        playerPos.x + camFwd.x * FP_CAMERA_FORWARD_OFFSET,
+        EYE_HEIGHT + FP_CAMERA_HEIGHT_OFFSET,
+        playerPos.z + camFwd.z * FP_CAMERA_FORWARD_OFFSET
+      );
       camera.rotation.set(0, 0, 0);
       camera.rotateY(yaw);
       camera.rotateX(pitch);

@@ -895,4 +895,45 @@ Real multi-client test pending.
   inspection was verified). Given this exact technique failed twice
   before for framing reasons a screenshot would have caught immediately,
   the offset should be treated as unverified until checked visually.
+- **Water idle pose confirmed a source-asset bug, not code** — rendered
+  `water_idle.fbx`'s clip directly (off-screen canvas + `toDataURL()`
+  screenshot technique, since the render loop was stalled all session) and
+  visually confirmed its actual pose data is a crouched, claws-out
+  aggressive stance, not a neutral standing idle, despite being sourced
+  from a file the user got from something named "Standing Idle" on Mixamo.
+  Fixed by dropping `water_idle.fbx` entirely and retargeting Fire's
+  already-confirmed-good idle clip onto Water's `mixamorig10*` skeleton via
+  the same `remapClipToSkeleton()` used for the shared walk/cast clips.
+- **Fire's spark spawning far from the model — root cause found by reading
+  the code, not by screenshot** (the base64 screenshot round-trip kept
+  corrupting on write — `binascii.Error` on a string whose length was off
+  by ~21 chars each time — so this one was diagnosed from the camera/hand
+  math directly instead of chasing that further): `myViewmodelHandBone`
+  (the projectile's spawn source) is parented to `camera`, and the debug
+  third-person view pulls `camera.position` back by `DEBUG_TP_DISTANCE`
+  (3.2 units) from the body's actual head pivot. So while the *visible*
+  debug body sat at the real player position, the hand bone used for the
+  spawn point was still riding along with the camera — now 3.2 units away.
+  Fixed by giving `debugOwnBody` its own hand-bone reference
+  (`debugOwnBodyHandBone`, found the same way `myViewmodelHandBone` is) and
+  having `tryCast()` prefer it whenever `debugThirdPerson` is active.
+  Real gameplay (non-debug) was never affected — there the camera always
+  sits at the true eye position.
+- **Debug third-person view now free-orbits** instead of trailing behind
+  wherever the real aim direction points. Added `debugOrbitYaw`/
+  `debugOrbitPitch`, a second yaw/pitch pair that mousemove drives only
+  while `debugThirdPerson` is on (the real `yaw`/`pitch` — movement facing
+  and aim — are left untouched). The camera now sits on a sphere of radius
+  `DEBUG_TP_DISTANCE` around the head pivot and `camera.lookAt(headPivot)`
+  every frame, so mouse-look genuinely orbits around the character instead
+  of just re-aiming a chase cam. Pointer lock is requested automatically on
+  entering the debug view (previously required an extra click).
+- **FP camera retuned** per user feedback that the raw eye point felt too
+  high and too far back: added `FP_CAMERA_HEIGHT_OFFSET = -0.15` and
+  `FP_CAMERA_FORWARD_OFFSET = 0.12`, applied only to the real (non-debug)
+  camera position, not `EYE_HEIGHT` itself (which other things, like
+  `debugEyeMarker` and the debug view's head pivot, still reference as the
+  "true" eye height for comparison). First-pass numbers — not yet
+  re-verified visually for the same render-loop-stall reason as above;
+  retune by feel if still off.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)
