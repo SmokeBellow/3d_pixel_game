@@ -220,8 +220,8 @@ import { clone as skeletonClone } from 'three/addons/utils/SkeletonUtils.js';
 // Tuning (sourced from GDDs where they exist)
 // ============================================================
 const EYE_HEIGHT = 1.65;          // camera-system.md eye_height_offset
-const FP_CAMERA_HEIGHT_OFFSET = -0.15; // lowers the FP eye point slightly below EYE_HEIGHT (user report: felt too high)
-const FP_CAMERA_FORWARD_OFFSET = 0.12; // nudges the FP eye point forward along facing (user report: felt too far back)
+const FP_CAMERA_HEIGHT_OFFSET = -0.35; // lowers the FP eye point below EYE_HEIGHT (user: still too high after the first -0.15 pass)
+const FP_CAMERA_FORWARD_OFFSET = 0.3; // nudges the FP eye point forward along facing (user: still too far back after the first 0.12 pass)
 const PITCH_CLAMP = 89 * Math.PI / 180; // camera-system.md pitch clamp
 const BASE_FOV = 80;              // vertical FOV (three.js), ~90 horizontal
 const KICK_PEAK = 5, KICK_ATTACK = 0.05, KICK_DECAY = 0.20; // fov_kick_response
@@ -265,6 +265,18 @@ const ATTACK_RANGE = 2.6;        // can still land a hit slightly beyond STOP_RA
 const ATTACK_ANIM_DURATION = 0.35;
 const MELEE_DAMAGE = 8;
 const MELEE_COOLDOWN = 1.1;
+// Goblin model tuning — measured, not guessed (see README Findings):
+// bounding box at raw import scale is ~210cm tall, matching the mage
+// rigs' same Mixamo cm-export convention (0.01 scale -> ~2.1m, almost
+// exactly the old procedural box enemy's own ~2.07 height, so the hp bar
+// keeps using the same y=2.4 constant as before for both). The attack
+// clip's Hips.position track shows a clear windup-then-lunge pattern
+// along local Z, lunging toward +Z — the same "+Z is forward at
+// rotation.y=0" convention as the mage rigs — so the same Math.PI
+// correction applies for the same reason (see makeRemotePlayerModel).
+const GOBLIN_SCALE = 0.01;
+const GOBLIN_ROTATION_OFFSET = Math.PI;
+const GOBLIN_WET_TINT = new THREE.Color(0x3a5fb0);
 const BOSS_HP = 900;
 const BOSS_SCALE = 2.1;
 const BOSS_SLAM_RADIUS = 4.5;
@@ -1016,28 +1028,48 @@ const SKIN_WET = 0x4d79c9, CLOTH_WET = 0x33507a;
 let enemies = [];
 function makeEnemy(id, x, z, maxHp, isBoss) {
   const group = new THREE.Group();
-  const skinMat = new THREE.MeshLambertMaterial({ color: isBoss ? 0x6a1010 : SKIN_COLOR });
-  const clothMat = new THREE.MeshLambertMaterial({ color: isBoss ? 0x2a0a0a : CLOTH_COLOR });
-  const parts = [];
-  function part(geo, material, px, py, pz) {
-    const m = new THREE.Mesh(geo, material);
-    m.position.set(px, py, pz);
-    m.userData.enemyId = id;
-    group.add(m); parts.push(m);
-    return m;
+  let parts = [], skinMat = null, clothMat = null, materials = null, limbs = null, mixer = null, actions = null, current = null;
+  const isGoblin = !isBoss && !!goblinTemplate;
+  if (isGoblin) {
+    const model = makeGoblinModel();
+    group.add(model.object);
+    mixer = model.mixer; actions = model.actions; current = model.current;
+    materials = [];
+    model.object.traverse(o => {
+      if (!o.isMesh) return;
+      o.userData.enemyId = id;
+      parts.push(o);
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) if (m.color) materials.push({ mat: m, orig: m.color.clone() });
+    });
+  } else {
+    // Old procedural box body — still used for the boss (untouched by this
+    // change) and as a fallback for regular enemies if goblinTemplate
+    // hasn't finished loading yet (a level shouldn't block starting on a
+    // ~19MB download — see loadGoblinAssets).
+    skinMat = new THREE.MeshLambertMaterial({ color: isBoss ? 0x6a1010 : SKIN_COLOR });
+    clothMat = new THREE.MeshLambertMaterial({ color: isBoss ? 0x2a0a0a : CLOTH_COLOR });
+    function part(geo, material, px, py, pz) {
+      const m = new THREE.Mesh(geo, material);
+      m.position.set(px, py, pz);
+      m.userData.enemyId = id;
+      group.add(m); parts.push(m);
+      return m;
+    }
+    part(new THREE.BoxGeometry(0.6, 0.7, 0.3), clothMat, 0, 1.25, 0);            // torso
+    part(new THREE.SphereGeometry(0.22, 8, 8), skinMat, 0, 1.85, 0);             // head
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xff3333 });
+    const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 6), eyeMat);
+    eyeL.position.set(-0.08, 1.88, 0.19); group.add(eyeL);
+    const eyeR = eyeL.clone(); eyeR.position.x = 0.08; group.add(eyeR);
+    const armGeo = new THREE.BoxGeometry(0.15, 0.6, 0.15); armGeo.translate(0, -0.3, 0);
+    const legGeo = new THREE.BoxGeometry(0.18, 0.9, 0.18); legGeo.translate(0, -0.45, 0);
+    const armL = part(armGeo, skinMat, -0.42, 1.55, 0);
+    const armR = part(armGeo.clone(), skinMat, 0.42, 1.55, 0);
+    const legL = part(legGeo, clothMat, -0.16, 0.9, 0);
+    const legR = part(legGeo.clone(), clothMat, 0.16, 0.9, 0);
+    limbs = { armL, armR, legL, legR };
   }
-  part(new THREE.BoxGeometry(0.6, 0.7, 0.3), clothMat, 0, 1.25, 0);            // torso
-  part(new THREE.SphereGeometry(0.22, 8, 8), skinMat, 0, 1.85, 0);             // head
-  const eyeMat = new THREE.MeshBasicMaterial({ color: 0xff3333 });
-  const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 6), eyeMat);
-  eyeL.position.set(-0.08, 1.88, 0.19); group.add(eyeL);
-  const eyeR = eyeL.clone(); eyeR.position.x = 0.08; group.add(eyeR);
-  const armGeo = new THREE.BoxGeometry(0.15, 0.6, 0.15); armGeo.translate(0, -0.3, 0);
-  const legGeo = new THREE.BoxGeometry(0.18, 0.9, 0.18); legGeo.translate(0, -0.45, 0);
-  const armL = part(armGeo, skinMat, -0.42, 1.55, 0);
-  const armR = part(armGeo.clone(), skinMat, 0.42, 1.55, 0);
-  const legL = part(legGeo, clothMat, -0.16, 0.9, 0);
-  const legR = part(legGeo.clone(), clothMat, 0.16, 0.9, 0);
   const barBg = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.12, 0.05), new THREE.MeshBasicMaterial({ color: 0x441111 }));
   barBg.position.y = 2.4;
   group.add(barBg);
@@ -1047,9 +1079,10 @@ function makeEnemy(id, x, z, maxHp, isBoss) {
   group.position.set(x, 0, z);
   if (isBoss) group.scale.setScalar(BOSS_SCALE);
   scene.add(group);
-  return { id, mesh: group, parts, skinMat, clothMat, hpBar: bar, hp: maxHp, maxHp, wet: 0, alive: true,
+  return { id, mesh: group, parts, skinMat, clothMat, materials, mixer, actions, current, isGoblin,
+           hpBar: bar, hp: maxHp, maxHp, wet: 0, alive: true,
            home: new THREE.Vector3(x, 0, z), wanderTarget: new THREE.Vector3(x, 0, z),
-           limbs: { armL, armR, legL, legR }, walkPhase: Math.random() * 6.28,
+           limbs, walkPhase: Math.random() * 6.28,
            lastPos: new THREE.Vector3(x, 0, z),
            aiState: 'patrol', targetPeerId: null, attackCooldown: 0,
            attackAnimT: Infinity, justAttacked: false,
@@ -1099,8 +1132,15 @@ function buildLevelEnemies(level) {
 function updateEnemyVisual(e) {
   e.mesh.visible = e.alive;
   e.hpBar.scale.x = Math.max(0.001, e.hp / e.maxHp);
-  e.skinMat.color.setHex(e.wet > 0 ? SKIN_WET : SKIN_COLOR);
-  e.clothMat.color.setHex(e.wet > 0 ? CLOTH_WET : CLOTH_COLOR);
+  if (e.isGoblin) {
+    for (const { mat, orig } of e.materials) {
+      if (e.wet > 0) mat.color.copy(orig).lerp(GOBLIN_WET_TINT, 0.55);
+      else mat.color.copy(orig);
+    }
+  } else {
+    e.skinMat.color.setHex(e.wet > 0 ? SKIN_WET : SKIN_COLOR);
+    e.clothMat.color.setHex(e.wet > 0 ? CLOTH_WET : CLOTH_COLOR);
+  }
 }
 
 // ============================================================
@@ -1252,6 +1292,30 @@ function setLoadProgressUI(pct, text) {
     mageAssetsReadyResolve();
   }).catch(err => console.error('Failed to load mage assets', err));
 })();
+// Regular (non-boss) enemy model, replacing the earlier procedural
+// box/sphere goblin. goblin_run.fbx carries the mesh+skeleton+run
+// animation ("With Skin"); goblin_attack.fbx is motion-only ("Without
+// Skin", ~500KB) authored against the same skeleton, same idea as the
+// mage's walk/cast clips retargeting onto the idle rigs. No dedicated
+// idle animation was provided — makeGoblinModel() below freezes the run
+// clip at frame 0 as a static idle pose instead (see its comment).
+// Loaded in parallel with the mage assets but on its own readiness gate
+// (enemies aren't needed until a level actually starts, and shouldn't
+// block the class-select screen on an unrelated ~19MB download).
+const MODEL_BASE_GOBLIN = 'models/goblin/';
+let goblinTemplate = null; // { root, runClip, attackClip }
+(function loadGoblinAssets() {
+  const loader = new FBXLoader();
+  const loadOne = url => new Promise((resolve, reject) => loader.load(url, resolve, undefined, reject));
+  Promise.all([
+    loadOne(MODEL_BASE_GOBLIN + 'goblin_run.fbx'),
+    loadOne(MODEL_BASE_GOBLIN + 'goblin_attack.fbx'),
+  ]).then(([runObj, attackObj]) => {
+    const runClip = runObj.animations[0];
+    stripHorizontalRootMotion(runClip);
+    goblinTemplate = { root: runObj, runClip, attackClip: attackObj.animations[0] };
+  }).catch(err => console.error('Failed to load goblin assets', err));
+})();
 async function warmupAllElementPreviews() {
   ensureElementPreviews(); // builds each card's scene/camera + the shared renderer if not already
   for (const el of ELEMENTS) {
@@ -1323,6 +1387,55 @@ function makeRemotePlayerModel(element) {
   // happened to bake as the skeleton's rest transform), which can look
   // like a completely different stance (e.g. mid-gesture) for a model
   // exported while a non-idle animation was active in the Mixamo preview.
+  mixer.update(0);
+  return { object: clone, mixer, actions, current: 'idle' };
+}
+// Regular enemy model — same skeleton-clone/mixer/actions shape as
+// makeRemotePlayerModel, but its own template (goblinTemplate) and its own
+// idle/run/attack action set instead of idle/walk/cast1/cast2.
+function makeGoblinModel() {
+  const tmpl = goblinTemplate;
+  const clone = skeletonClone(tmpl.root);
+  clone.scale.setScalar(GOBLIN_SCALE);
+  clone.rotation.y = GOBLIN_ROTATION_OFFSET;
+  clone.traverse(o => {
+    if (o.isMesh) {
+      const cloneMat = m => {
+        const c = m.clone();
+        // The model's own texture reads very dark, and this dungeon's
+        // ambient light is deliberately dim away from torches — the old
+        // procedural placeholder used flat light-gray colors that stayed
+        // visible in the dark, but this real texture goes near-black in
+        // the same spots (confirmed by rendering it in-place: visible
+        // right next to a torch, essentially invisible a few meters away).
+        // A small baseline emissive keeps it readable everywhere without
+        // washing out the texture detail near light sources.
+        if (c.emissive) c.emissive.setHex(0x554128);
+        return c;
+      };
+      if (Array.isArray(o.material)) o.material = o.material.map(cloneMat);
+      else o.material = cloneMat(o.material);
+    }
+  });
+  const mixer = new THREE.AnimationMixer(clone);
+  // No dedicated idle animation was provided for this model — freeze the
+  // run clip's own first frame as a static "idle" pose instead (same fix
+  // pattern as Water's missing idle, minus the retargeting since this is
+  // one skeleton, not two).
+  const idleClip = tmpl.runClip.clone();
+  const actions = {
+    idle: mixer.clipAction(idleClip),
+    run: mixer.clipAction(tmpl.runClip),
+    attack: mixer.clipAction(tmpl.attackClip),
+  };
+  actions.attack.setLoop(THREE.LoopOnce, 1);
+  actions.attack.clampWhenFinished = true;
+  // Matches ATTACK_ANIM_DURATION exactly regardless of the source clip's
+  // native length, so the visual stays in sync with the melee gameplay
+  // timing that constant already governs.
+  actions.attack.setDuration(ATTACK_ANIM_DURATION);
+  actions.idle.play();
+  actions.idle.paused = true; // frozen at time 0 — see the idleClip comment above
   mixer.update(0);
   return { object: clone, mixer, actions, current: 'idle' };
 }
@@ -1609,6 +1722,33 @@ function triggerCast(entity, tier) {
   }
 }
 function triggerRemoteCast(pid, tier) { triggerCast(remotePlayers[pid], tier); }
+
+// Goblin equivalent of triggerCast/advanceCharacterAnimation above — kept
+// as its own small pair rather than generalizing the mage versions, since
+// those hardcode the 'cast1'/'cast2' state names; a goblin only has one
+// one-shot state ('attack') to special-case the same way.
+function triggerGoblinAttack(entity) {
+  if (!entity || !entity.actions) return;
+  entity.actions.attack.reset();
+  entity.actions[entity.current].crossFadeTo(entity.actions.attack, 0.05, false);
+  entity.actions.attack.play();
+  entity.current = 'attack';
+}
+function advanceGoblinAnimation(entity, wantState, dt) {
+  if (!entity.mixer) return;
+  const isAttacking = entity.current === 'attack';
+  const attackDone = isAttacking && entity.actions.attack.time >= entity.actions.attack.getClip().duration - 0.02;
+  if (attackDone) {
+    entity.actions[wantState].reset().play();
+    entity.actions.attack.crossFadeTo(entity.actions[wantState], 0.1, false);
+    entity.current = wantState;
+  } else if (wantState !== entity.current && !isAttacking) {
+    entity.actions[wantState].reset().play();
+    entity.actions[entity.current].crossFadeTo(entity.actions[wantState], 0.15, false);
+    entity.current = wantState;
+  }
+  entity.mixer.update(dt);
+}
 
 function advanceCharacterAnimation(entity, wantState, dt) {
   if (!entity.mixer) return;
@@ -2888,7 +3028,22 @@ function animate() {
     // Enemy animation: attack lunge takes priority over walk cycle
     for (const e of enemies) {
       if (!e.alive) continue;
-      if (e.attackAnimT < ATTACK_ANIM_DURATION) {
+      if (e.isGoblin) {
+        // Real skeletal model: face actual movement direction while moving
+        // (same -Z-forward convention as remote players/debug body — see
+        // makeGoblinModel's rotation comment), and drive idle/run/attack via
+        // the shared crossfade helper instead of hand-rotating limbs. There's
+        // no network field for facing — recomputing it from the position
+        // delta every frame works identically on host and clients and needs
+        // no extra sync data, same trick already used for remote players.
+        const moveDelta = new THREE.Vector3().subVectors(e.mesh.position, e.lastPos);
+        const speed = moveDelta.length() / Math.max(dt, 0.001);
+        if (speed > 0.1) e.mesh.rotation.y = Math.atan2(-moveDelta.x, -moveDelta.z);
+        if (e.attackAnimT === 0 && e.current !== 'attack') triggerGoblinAttack(e);
+        const attackBusy = e.current === 'attack' && e.actions.attack.time < e.actions.attack.getClip().duration - 0.02;
+        advanceGoblinAnimation(e, attackBusy ? 'attack' : (speed > 0.1 ? 'run' : 'idle'), dt);
+        e.attackAnimT += dt;
+      } else if (e.attackAnimT < ATTACK_ANIM_DURATION) {
         e.attackAnimT += dt;
         const t = Math.min(e.attackAnimT / ATTACK_ANIM_DURATION, 1);
         const swing = Math.sin(t * Math.PI) * 1.3;
@@ -3100,6 +3255,8 @@ window.__debug = {
   get mageTemplate() { return mageTemplate; }, get mageTemplateFire() { return mageTemplateFire; },
   get mageTemplateWater() { return mageTemplateWater; },
   get elementPreviews() { return elementPreviews; },
+  get goblinTemplate() { return goblinTemplate; },
+  makeGoblinModel, buildLevelEnemies, triggerGoblinAttack, advanceGoblinAnimation,
   get enemies() { return enemies; },
   get playerPos() { return playerPos; },
   get remotePlayers() { return remotePlayers; },

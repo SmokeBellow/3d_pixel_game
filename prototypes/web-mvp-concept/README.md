@@ -936,4 +936,69 @@ Real multi-client test pending.
   "true" eye height for comparison). First-pass numbers — not yet
   re-verified visually for the same render-loop-stall reason as above;
   retune by feel if still off.
+- **Replaced regular (non-boss) enemies' procedural box/sphere model with a
+  real Goblin FBX** (`goblin_run.fbx` — mesh+skeleton+run animation "With
+  Skin", ~19MB; `goblin_attack.fbx` — motion-only "Without Skin", ~500KB).
+  Same standard `mixamorig*` bone naming as the mage rigs, so the attack
+  clip binds directly onto the run file's skeleton with no remap. No
+  dedicated idle animation was provided — `makeGoblinModel()` freezes the
+  run clip's own frame 0 (`actions.idle.paused = true`) as a static idle
+  pose instead, the same fix pattern used for Water's missing idle. Scale
+  (`GOBLIN_SCALE = 0.01`) and facing (`GOBLIN_ROTATION_OFFSET = Math.PI`)
+  were both derived from measurement, not guessed: the raw import bounding
+  box is ~210cm tall (matches the mage rigs' cm-export convention, and at
+  0.01 scale lands almost exactly on the old procedural enemy's ~2.07m
+  height, so the hp bar keeps the same y=2.4 constant for both); the attack
+  clip's `Hips.position` track shows a clear windup-then-lunge pattern
+  along local Z (range ~107cm vs ~25cm on X), lunging toward +Z — the same
+  "+Z is forward at rotation.y=0" convention as the mage rigs, so the same
+  180° correction applies for the same reason.
+  `makeEnemy()` now branches: goblin model for regular enemies (falls back
+  to the old procedural box if `goblinTemplate` hasn't finished loading —
+  a level shouldn't block starting on a ~19MB download), unchanged
+  procedural box for the boss. Attack/run/idle crossfading reuses the same
+  `{mixer, actions, current}` shape and Loop-Once/`clampWhenFinished`
+  pattern as the mage cast clips, via new `triggerGoblinAttack`/
+  `advanceGoblinAnimation` helpers (kept separate from the mage
+  `triggerCast`/`advanceCharacterAnimation` since those hardcode the
+  `cast1`/`cast2` state names) — `actions.attack.setDuration(ATTACK_ANIM_DURATION)`
+  keeps the visual in sync with the existing melee gameplay timing
+  regardless of the source clip's native length. Facing while moving is
+  recomputed from the position delta every frame (`Math.atan2(-dx,-dz)`,
+  same convention as remote players/debug body) — no network field needed,
+  since it's derived identically on host and clients from the same synced
+  position. Wet-status tinting now lerps each material's own original
+  color toward a blue tint instead of hardcoding a replacement hex, since
+  the real model can have more than one material (it has two: body + eyes).
+  **Screenshot technique note**: the base64 PNG round-trip through the
+  Write tool corrupted the data at ~40-48K characters (twice in a row,
+  same `binascii`/PNG-checksum failure as earlier in this project) but
+  worked reliably once the render was shrunk to a small JPEG (64×64,
+  ~1-2.5KB base64) instead of a full-size PNG — small-and-lossy beats
+  large-and-lossless for this specific verification workflow given this
+  constraint. Use that size/format going forward for any similar check.
+- **"Не вижу гоблинов" — real bug, found via the above screenshot
+  technique on the actual live game scene** (not a synthetic test scene):
+  the goblin model renders completely correctly (right pose, right scale,
+  right skinning — confirmed by re-rendering the same live enemy with
+  boosted test lighting and seeing a normal idle stance), but its actual
+  texture is dark, and this dungeon's real ambient light
+  (`HemisphereLight` 0.32 + `DirectionalLight` 0.22, deliberately dim
+  outside torch radius) is too low to make that dark texture visible more
+  than a couple meters from a torch. The old procedural placeholder used
+  flat light-gray colors that stayed visible in the same dim light, so
+  this regression was invisible until the real model was actually
+  rendered in place. Fixed by giving each cloned material a small baseline
+  `emissive` (`0x554128`, a dim warm tint matching the torches' own
+  color) in `makeGoblinModel()` — confirmed by re-rendering the same
+  in-game enemy before/after: invisible → a barely-there silhouette
+  (first pass, `0x2a2018`) → a clearly readable dim goblin (final value).
+  Boss unaffected (still the procedural box, untouched by this change).
+- **FP camera offsets increased** per follow-up feedback that the first
+  pass (`-0.15`/`0.12`) wasn't enough: `FP_CAMERA_HEIGHT_OFFSET` is now
+  `-0.35`, `FP_CAMERA_FORWARD_OFFSET` is now `0.3`. Still first-pass
+  numbers tuned by feel from the request, not re-verified visually (this
+  one isn't screenshot-checkable the same way — it's about how the view
+  feels to move around in, not a static pose) — confirm and retune once
+  more if still off.
 - (multiplayer-specific findings to be filled after a real 2+ client playtest)
