@@ -1,6 +1,6 @@
 # Session State — Covenant of Mages
 
-*Last updated: 2026-08-26*
+*Last updated: 2026-09-07*
 
 ## User Preferences (durable — apply every session)
 
@@ -389,6 +389,55 @@ either archived or replaced before design work continues:
 8. **[FOLLOW-UP, not blocking]** Schedule a real 2-player test of
    `prototypes/co-op-spellcasting-concept/` to validate the co-op-discovery hypothesis
    before finalizing the synergy-dependent parts of the combat GDD.
+9. **[SEPARATE TRACK, not part of the GDD/ADR pipeline above]** Ongoing manual
+   iteration on `prototypes/web-mvp-concept/prototype.html` (a standalone
+   browser/PeerJS co-op combat prototype, unrelated to the Unity production
+   track above except as a feel/animation reference). See "ACTIVE: Web MVP
+   Prototype iteration" section below for current state — that prototype's
+   own README.md Findings section is the authoritative detail log; this
+   section just points to it and lists the last commit.
+
+## ACTIVE: Web MVP Prototype iteration (`prototypes/web-mvp-concept/`)
+
+- **What it is**: a single-file Three.js + PeerJS browser prototype
+  ("Covenant of Mages — Web MVP") the user has been iterating on across
+  several sessions to test co-op elemental-synergy combat feel. Fully
+  separate from the Unity production track — see
+  `.claude/rules/prototype-code.md` (relaxed standards, no production
+  dependency either direction).
+- **Where the real detail lives**: `prototypes/web-mvp-concept/README.md`
+  → **Findings** section (bottom of file). Every fix this session and
+  prior sessions is logged there with root cause and the exact constant/
+  function changed — read that before touching `prototype.html` again.
+- **Last commit on this track**: `c00166d` — "Replace regular enemy model
+  with Goblin FBX, fix visibility and FP camera" (2026-09-07). Also on
+  this branch from the same session: `78b2146` (class-select models face
+  the player + mouse-rotatable), `40202d4` (Water idle pose / Fire spark
+  spawn point / debug camera orbit), `3324546` and earlier (loading
+  screen, Water's own model, movement lock during cast).
+- **Local dev server**: `.claude/launch.json` has a `web-mvp` config
+  (`python -m http.server 8743 --directory prototypes/web-mvp-concept`) —
+  use `preview_start` with name `web-mvp`, then open
+  `http://localhost:8743/prototype.html`.
+- **Known-good debugging technique** (rediscovered/refined this session,
+  worth reusing directly rather than re-deriving): the Browser pane's own
+  render loop does not run reliably in this tool environment, so the
+  normal screenshot tool often shows nothing useful for anything that
+  depends on live animation. Instead: call `renderer.render(scene, camera)`
+  manually once (via `javascript_tool`) against a **small** off-screen
+  canvas — 64×64, JPEG at ~0.6 quality — and return `canvas.toDataURL(...)`.
+  Larger PNGs (~40K+ base64 chars) reliably corrupted when written to a
+  file via the `Write` tool this session (twice); the small JPEG approach
+  (~1-2.5KB base64) did not. Decode with a small Python script reading a
+  file the base64 was written to, not embedded inline in a bash heredoc
+  (quoting broke on one attempt with special characters in the string).
+- **`window.__debug`** already exposes most internals needed for this
+  (scene, THREE, enemies, goblinTemplate, mageTemplate*, playerPos, etc.)
+  — check it before adding new exports.
+- **Open/unverified items** (see README Findings for exact wording):
+  the FP camera offset values are tuned by feel from user feedback, not
+  independently re-verified; multiplayer-specific (2+ real client) testing
+  has not happened this session.
 
 ## Recovery Instructions
 
@@ -397,3 +446,6 @@ either archived or replaced before design work continues:
 3. Read `CLAUDE.md` and `.claude/docs/technical-preferences.md` for engine config.
 4. See "SUPERSEDED" and "BLOCKING" sections above for what needs attention first.
 5. Apply User Preferences (Russian language; instructions in chat, not new repo files).
+6. If picking up the web prototype instead of the Unity/GDD track, skip to
+   "ACTIVE: Web MVP Prototype iteration" above and read
+   `prototypes/web-mvp-concept/README.md`'s Findings section first.
