@@ -439,6 +439,354 @@ either archived or replaced before design work continues:
   independently re-verified; multiplayer-specific (2+ real client) testing
   has not happened this session.
 
+## COMPLETE (this session, new): Goblin colors fixed, real FP viewmodel abandoned, placeholder arms are now the actual solution
+
+- **Goblin colors fix**: replaced flat baseline emissive (which was
+  washing out the texture into one brown blob) with `emissiveMap = map`.
+  See README Findings for the before/after detail.
+- **Decision this session**: after exploring an arms-only shader clip +
+  live camera/viewmodel-offset tuning tools for the real mage-model FP
+  viewmodel, user decided to stop investing in that approach (three
+  attempts across sessions, same root problem each time — a third-person
+  body isn't a viewmodel without a dedicated FPS rig) and commit to the
+  placeholder box/sphere arms as the permanent FP visual.
+  - `ensureMyViewmodel()`/`myViewmodel`/`myViewmodelHandBone`/
+    `myViewmodelHandGlow` and every call site removed from `main`.
+  - **That exploratory work (arms-only clip, live camera-offset adjuster
+    C-key debug mode, live viewmodel-offset arrow-key tuning) is
+    preserved on its own branch**: `web-mvp-camera-viewmodel-experiment`
+    (one commit, `34b7a8b`). Not merged — kept for reference only, per
+    explicit user request to keep it separate from main.
+  - **Placeholder/projectile sync** (the other half of this session's
+    request): the recoil animation that drives `fpArmR`'s punch-forward
+    motion now peaks (`castRecoilPeakT`) at exactly `castFireDelayMs` —
+    the same tier-specific timing already used to delay the actual shot
+    — instead of a fixed 0.08s that had nothing to do with real fire
+    timing. `fpOrb` (child of `fpArmR`) was already the projectile/
+    hitscan spawn-position fallback; now that it's the only source (no
+    more real hand bone), its position at fire time always matches
+    wherever the recoil animation actually put the arm. Verified in the
+    browser pane: switched to a flying-projectile spell, called
+    `tryCast()`, confirmed a projectile spawns at `fpOrb`'s live world
+    position with no console errors — did not verify the recoil motion
+    visually frame-by-frame (rAF doesn't reliably tick in this sandbox).
+- Full detail, including exact numbers and the branch note, in
+  `prototypes/web-mvp-concept/README.md` Findings.
+- Committed to `main`? **Not yet** — same as everything else on this
+  track this session, awaiting explicit commit instruction.
+
+## IN PROGRESS: Per-player spawn/despawn portals (Lightning wired, Fire/Water pending)
+
+- User wants each player to spawn from/despawn into their own portal
+  (one model per class), supplying 4 hand-authored `.blend` files
+  (3 elements currently used in code + one spare). Only Lightning's
+  files placed so far: `models/portal/portal_lightning.fbx` + `.png`
+  (renamed from the user's `yellow.fbx`/`.png`).
+- **Implemented and working**: `ensurePortalTemplate`/`instantiatePortal`/
+  `refreshPortal`/`updatePortal` near `loadGoblinAssets` in
+  `prototype.html`. Hooked into `respawnLocalPlayer()` (local player —
+  covers both initial spawn and every respawn) and the remote-player
+  interpolation block (first placement + downed→alive transition).
+  Portal despawns once its owner walks `PORTAL_EXIT_RADIUS` (2.2) away;
+  a fresh one spawns on every respawn rather than following the player.
+- **Real bug found and fixed during testing**: portals never appeared
+  on the very first try — `respawnLocalPlayer()` asks for the portal
+  synchronously, but the element's FBX/PNG are only fetched lazily on
+  first need, so that first ask always raced the still-in-flight fetch
+  and got `null` back with no retry. Fixed with a deferred-callback +
+  generation-counter pattern (`portalWaiters`, `myPortalGen`/
+  `rp.portalGen`) — see README Findings for the exact mechanism.
+- **Also applied the same emissive-map fix as the goblin** (dungeon's
+  dim ambient light was making the portal read as a dark blob) —
+  fixed.
+- **User confirmed working** (goblin colors, flicker, portal visibility
+  all good) after two follow-up fixes: (1) old shared pentagram decal
+  removed — was directly coplanar with the portal's ground ring
+  (z-fight candidate); (2) actual flicker cause was the portal itself
+  sitting at world y=0, exactly coplanar with the stone floor — same
+  z-fighting mechanism, fixed by lifting it to y=0.03. An earlier
+  `renderOrder` fix (for a *different*, real but not-the-cause draw-
+  order concern between the portal's own 2 meshes) did NOT fix the
+  flicker — kept anyway since it's still correct for its own reason.
+  Also scaled up twice on request: 0.4 → 0.6 → 1.2 (`PORTAL_SCALE`),
+  `PORTAL_EXIT_RADIUS` scaled alongside each time (2.2 → 3.3 → 6.6).
+- Fire/Water assets still pending — once placed in `models/portal/`,
+  they work with zero code changes (same lazy loader, keyed by element
+  name).
+
+## IN PROGRESS: Portal antechambers + walk-through door for levels 1 & 2
+
+- User wants portals to live in their own small room per level, with a
+  **physical** doorway into the enemy arena (not another teleport-
+  trigger like the hub's existing "continue portal") — door opens on E,
+  slides down into the floor, stays open permanently (no re-closing).
+- **Built**: `buildArena()` gained an optional `doorGapWidth` param
+  (cuts a gap in a zone's north wall instead of one solid box); new
+  `buildPortalRoom()` builds a 9×7 room right outside that gap (in
+  empty world space that already existed between zones — level1's
+  north wall is at z=20, level2 starts at z=-70+29=-41, nothing used
+  that gap before) with its own walls/floor/door. `ZONES[1]`/`ZONES[2]`
+  `.spawn` moved into the new rooms. Door collision via a new
+  `ZONE_DOOR_WALLS[zoneId]`, resolved the same way as level 2's maze
+  walls; player movement clamp widened to actually reach the room.
+  `openZoneDoor()`/`resetZoneDoor()` + a slide-down animation in
+  `animate()`; `startLevel()` reseals the door every fresh entry.
+- **No enemy-side work needed** — confirmed by reading
+  `clampEnemyToArena()` first: it already keeps every enemy a full unit
+  short of the original wall line regardless of aiState, so they're
+  physically incapable of ever reaching the new room. Saved a lot of
+  otherwise-necessary work.
+- **Real bug caught before it shipped**: the door's proximity prompt
+  would have kept `activeDoorAction` truthy across a level→hub
+  teleport (its own update function just returned early during
+  shopPhase without clearing it), letting a stale E-press hijack a
+  shop-stand interact. Fixed by clearing it on that early return.
+- **Verified this session**: player spawn position and both door mesh
+  positions match the computed design exactly (checked via
+  `scene.traverse`); rendered the room off-screen — looks like a small
+  correct enclosed space with the portal on the floor. **NOT verified**:
+  the live E-to-open flow, the slide animation, or actually walking
+  through into the arena — needs the same real-browser check as
+  everything else this session (sandboxed pane can't tick
+  `requestAnimationFrame` reliably). **This is what the user should
+  test first.**
+- Level 3 (boss) and the hub were deliberately left untouched — only
+  levels 1 and 2 were asked for.
+- **User confirmed this all works**, then asked for 5 more changes in
+  one message, all done:
+  1. **One shared portal, not one per player** — removed the whole
+     per-player/per-remote-player portal system in favor of a single
+     `zonePortal` fixed at the zone's `spawn` point; the existing
+     1-unit jitter on `respawnLocalPlayer()` already covers "everyone
+     appears close together but not stacked," untouched.
+  2. Room bigger: 9×7 → 16×13 (`PORTAL_ROOM_WIDTH`/`DEPTH`).
+  3. A lever next to the door (`makeLever()`) as a visible "this is how
+     you leave" cue — swings in sync with the door's slide animation.
+  4. Taller walls + a real ceiling — new `PORTAL_ROOM_HEIGHT = 7` (the
+     first ceiling anywhere in this game).
+  5. Dirt-look floor for the antechamber only (`makeDirtTexture()`/
+     `dirtMaterial()`, mottled blotches instead of the usual brick
+     pattern) — rest of the dungeon keeps stone.
+  Verified structurally (spawn position, ceiling count, lever position
+  by distinctive color, door height) — **not** verified live (pulling
+  the lever, watching it animate) for the same recurring sandboxed-pane
+  reason as everything interactive this session.
+- Full detail in `prototypes/web-mvp-concept/README.md` Findings
+  (search "portal antechambers" and "Portal-room follow-up round").
+- **Then 4 more asks in one message**, all done:
+  1. **Dirt floor everywhere in the dungeon** (was antechamber-only) —
+     `buildArena()`'s floor is `dirtMaterial()` for every zone except
+     `'hub'` now (hub keeps stone — deliberately different calmer room).
+  2. **Goblins 1.5x smaller** (`GOBLIN_SCALE` `0.01`→`0.01/1.5`,
+     confirmed 1.40m via bounding box) — HP bar height scaled down to
+     match (`GOBLIN_HP_BAR_Y`) so it doesn't float above the shorter
+     model.
+  3. **Button instead of lever, more noticeable** — `makeButton()`
+     replaces `makeLever()`: pulsing red push-button + point light,
+     goes flat grey once pressed. Prompt text now "Нажать кнопку".
+  4. **Menu lag while typing name / after pressing Host** — traced to
+     `loadMageAssets()` firing 6 `FBXLoader.load()` calls (incl. two
+     ~120MB files) via `Promise.all`, so their synchronous parses
+     tended to land back-to-back on the main thread. Changed to
+     sequential `await`s — spreads the hitches out (longer total load,
+     smoother per-hitch). Confirmed the rewrite still loads correctly
+     (`mageTemplate*` all populated, no console errors) but couldn't
+     verify the felt lag is actually gone (needs real-time judgment in
+     a real browser). Noted a deeper fix (parallel `fetch()` + serial
+     `loader.parse()`) as the next step if this isn't enough.
+  Full detail in README Findings ("Four more asks in one message").
+- Not committed yet.
+
+## COMPLETE: Combat tuning batch — 8 asks in one message
+
+- 1. Same portal for every class (`ZONE_PORTAL_ELEMENT` map, defaults to
+     Lightning). 2. Goblin melee re-timed with a real telegraph — the
+     actual bug was damage landing instantly with zero windup, not the
+     raw numbers; added `meleePending`/`MELEE_IMPACT_FRAC` so the hit
+     fires partway through the windup and re-checks range at impact
+     (backing off now makes it whiff). 3. HP color coding
+     (green/yellow/red, `hpFracColor()`) on both enemy bars and the
+     player HUD bar. 4. Out-of-combat regen (`timeSinceDamage`,
+     `REGEN_DELAY_S`/`REGEN_RATE_HP_S`). 5. 2nd-ability cooldown now has
+     a real visible overlay on its slot icon (was tracked correctly,
+     just never shown). 6. Enemy HP bars shrink from the right,
+     anchored left (geometry-translate trick). 7. Tier-2 damage bumped
+     (Fire 22→32, Water 8→13, Lightning 14→22) — they were actually
+     *lower* dps than their own tier-1 once cooldown was factored in.
+     8. Fire applies a burn DOT (`applyBurn()`, 4s, 60% of the hit's own
+     damage); Water extinguishes burn instead of applying Wet if the
+     target was already on fire.
+- **Verified live** via `window.__debug` calling `hostResolveCast`/
+  `hostApplyDamage`/`hostSimulate` directly with synthetic args (these
+  are host-simulation functions — callable without a render loop, unlike
+  most things blocked by this session's rAF limitation). Confirmed: burn
+  applies and Water correctly extinguishes it (no Wet) when there's no
+  delay between the two calls — an earlier test WITH an artificial delay
+  produced a misleading result because the burn timer legitimately
+  expired during real wall-clock time between tool calls, not a logic
+  bug. Confirmed the melee delay: HP stays full through the windup,
+  drops by exactly `MELEE_DAMAGE` only at the impact fraction; a
+  same-idea side effect (enemy teleported into the antechamber got
+  clamped back out mid-windup by the existing arena bound) doubled as
+  a second proof the impact-time range recheck works. Confirmed regen
+  math, cooldown-overlay DOM state, and the HP-bar left-anchor geometry
+  directly.
+- Full detail in `prototypes/web-mvp-concept/README.md` Findings ("Big
+  combat-tuning batch, 8 asks in one message").
+- Not committed yet.
+
+## COMPLETE: Maze fix + combat pacing round 2 (5 asks)
+
+- **"Walk/see through some walls" in the level-2 maze — real root cause
+  found, not a maze-generation gap.** Verified the maze generation
+  itself first (all cell neighbor-flag pairs consistent, sample corner
+  wall overlaps clean) before concluding the actual bug was elsewhere:
+  FP camera sits 0.3 units forward of the actual collision point
+  (`FP_CAMERA_FORWARD_OFFSET`), but `PLAYER_RADIUS` was only 0.35 — so
+  the camera could get within 0.05 units of a wall, inside the camera's
+  own 0.1 near-clip plane. Bumped `PLAYER_RADIUS` to 0.55 for real
+  margin.
+- **Maze corridors wider**: 9×9 grid @ 6 units/cell (5.4-unit
+  corridors) → 7×7 @ 8 units/cell (7.3-unit corridors), same tight fit
+  against the zone bounds (28 half-width either way).
+- **Goblins slowed further** (still felt fast after the first pass):
+  `ATTACK_ANIM_DURATION` 0.7→1.1s, `MELEE_COOLDOWN` 1.6→2.4s.
+- **Ability cooldown now starts only when the cast finishes**, not when
+  it begins — `cooldowns[slot]` assignment moved from the start of
+  `tryCast()` into a `setTimeout` firing after the cast's own duration.
+  Verified directly: cooldown reads 0 immediately after casting, ~0.75
+  only after the cast animation duration has actually elapsed.
+- **Tier-2 cooldowns increased again**: Fire 1.0→1.8s, Water 1.3→2.2s,
+  Lightning 1.1→2.0s.
+- Verified live via `window.__debug` (maze structural consistency
+  re-checked on the new grid size; cooldown-timing behavior called and
+  timed directly).
+- Full detail in README Findings ("5 more asks, mostly level-2 maze +
+  combat pacing").
+- Not committed yet.
+
+## COMPLETE: Real fix for "walk/see through walls" (previous fix was incomplete)
+
+- User reported the maze wall bug was still happening after the
+  `PLAYER_RADIUS` 0.35→0.55 bump from the previous round — that fix
+  addressed a real but secondary near-clip risk, not the actual bug.
+- Real root cause found in `resolveCircleWallCollision()`: when the
+  player's position ends up fully *inside* a wall's AABB on both axes, the
+  circle-vs-closest-point vector degenerates to zero (`dx=dz=0`), so the
+  `distSq > 1e-9` guard skips the wall entirely — no push-out, player left
+  embedded in solid geometry. This is reachable in real play because the
+  per-zone boundary clamp lands the player exactly on the zone's outer
+  edge, while the maze's perimeter walls (real thickness 0.7) are centered
+  on that same edge and straddle it — the clamp itself can shove the
+  player's collision point inside a wall box.
+- Fixed by adding a branch for the "center inside box" case: push out along
+  the nearest of the box's four faces (standard shallow AABB penetration
+  resolution) instead of the degenerate closest-point vector.
+- Verified live via `window.__debug`: reproduced the exact boundary-clamp
+  scenario against level 2's actual west-perimeter wall — old code left the
+  player's position inside the wall box untouched; new code correctly
+  pushes it to just outside the nearest face.
+- This is a fix to the shared collision function, so it also covers the
+  portal-room doors and anywhere else it's used, not just the maze.
+- Full detail in README Findings.
+- Not committed yet.
+
+## COMPLETE: Level 2 antechamber removed, loading-bar regression fix, hub mirror
+
+- User reported the maze wall bug was STILL happening even after the
+  `resolveCircleWallCollision()` fix above, and asked to simplify: no
+  separate portal room for level 2 anymore — players spawn straight into
+  the maze like before that room was added. `buildPortalRoom(2, ...)` call
+  removed, level 2's north wall reverted to solid (no door gap), and
+  `ZONES[2].spawn` now resolves to the maze's own center cell (computed
+  right after `buildMaze(2, ...)` since the maze doesn't exist yet when
+  `ZONES` is declared). Level 1 keeps its antechamber unchanged.
+- **Loading-bar-goes-backward bug found and fixed**: `updateLoadProgressUI()`
+  summed bytes across only the files that had started downloading so far,
+  not all 6 known files — since mage models load one at a time, a new
+  ~120MB file starting could instantly drop the shown percentage (e.g.
+  90%→45%) the moment its full size joined the total before any of its
+  bytes arrived. Rewrote to count whole finished files
+  (`(filesDone + currentFileFraction) / 6`), which is monotonic by
+  construction.
+- **Wall mirror added in the hub** (the room between dungeon runs) via
+  `three/addons/objects/Reflector.js`, mounted on the west wall. Reuses the
+  existing `debugOwnBody` world-space avatar mesh (previously only built/
+  shown for the V-key debug third-person view) — now always built, updated,
+  and visible every frame so the mirror has the local player's own class
+  model to actually reflect.
+- Verified live via `window.__debug`: level 2 spawn point confirmed clear
+  of walls (3.65 units to nearest); no new console errors after any of the
+  three changes; the `Reflector` object confirmed present in the scene
+  graph at the correct wall position/rotation, and `debugOwnBody` confirmed
+  live/visible. Could NOT get an actual screenshot of the mirror's
+  reflection — the sandbox's unreliable `requestAnimationFrame`/input
+  timing (documented earlier) made it impossible to rotate the debug camera
+  to frame it before the next frame overwrote the manual override. Visual
+  quality of the mirror (lighting, reflection clarity) needs a real
+  playtest.
+- Full detail in README Findings.
+- Not committed yet.
+
+## COMPLETE: Mirror regression fix — real model's hands were showing during normal play
+
+- User reported the previous mirror change made the real class model's
+  hands visible during normal first-person play, stacked on the placeholder
+  FP arms. Caused by making `debugOwnBody.mesh.visible` unconditionally
+  true so the mirror always had something to reflect — the main camera
+  rendered it too, not just the mirror.
+- Fixed by separating the two concerns: `debugOwnBody.mesh.visible` is back
+  to `debugThirdPerson`-gated (hidden during normal play, like before the
+  mirror existed). The mirror now forces it visible (and hides the
+  placeholder `fpArmL`/`fpArmR`, which are parented to `camera` and thus
+  also in the scene graph) only for its own internal reflection render,
+  via a wrapped `Reflector.onBeforeRender` in `makeMirror()`, restoring
+  both right after.
+- Verified live: only placeholder FP arms visible during normal play
+  (screenshot); `debugOwnBody.mesh.visible` reads back `false` after a full
+  frame in the hub, confirming the mirror's before/after hooks ran and
+  restored it correctly; no console errors.
+- Full detail in README Findings.
+- Not committed yet.
+
+## COMPLETE: Mirror frame fix, tier-1 rework (no CD, mastery system), 4-hit goblins, stone floor, spell wheel UI
+
+Large batch, all verified live via `window.__debug` calls (math checked
+against hand-computed expected values, not just "ran without crashing")
+except where noted:
+
+- **Mirror frame**: was invisible (placed behind the glass, inside/flush
+  with the wall). Rebuilt as 4 bars in front, in a `THREE.Group` at the
+  mirror's transform. Confirmed 4 frame-bar boxes in the scene graph.
+- **Tier-1 spells (Искра/Плеск/Разряд) have 0 cooldown** — limited only by
+  the cast animation (`castLockedUntil` already covered this).
+- **Goblins die in 4 hits**: `ENEMY_MAX_HP` 100→60 (4× Искра's 15 dmg).
+- **Floor back to stone brick everywhere** (dirt floor from an earlier
+  round removed, including `makeDirtTexture`/`dirtMaterial` — dead code).
+- **New tier-1 mastery system**: hits fill an XP bar (`useHits`, cap 8, no
+  more auto-level mid-fight); actual level-up happens at the hub mentor
+  stand only (still gold-gated, now ALSO needs the bar full). Capped at
+  level 4, each level a real mechanical change:
+  - Разряд: 2 hits at lvl 2, 3 at lvl 3 (verified: dealt exactly 2× a
+    single hit). Max level → new 3s continuous channel
+    (`startLightningChannel`), movement locked via the existing
+    `castLockedUntil`/`isCasting` gate but mouse look untouched.
+  - Искра: dmg scales via existing levelMult; max level fires 3 real
+    independent projectiles in a fan.
+  - Плеск: Wet duration scales with level; level 2+ slows (`e.slowFactor`,
+    verified: enemy took 0 movement over 0.5s while frozen); max level
+    freezes 1s (`e.frozenT`, gates the whole AI block). New icy tint added.
+- **New circular spell wheel UI** replacing the 3-slot row — icons at fixed
+  angles, `updateSlotUI()` recomputes `translate(x,y)` on switch, CSS
+  transition makes it read as spinning without rotating any element.
+  Verified visually with both 1 and 3 spells equipped — layout matches.
+- Not verified live: gold-gated mentor-stand purchase itself
+  (`hostLevelUpSpell` isn't on the debug object — code-review only), and
+  the actual *feel* of the Fire triple-shot spread / Lightning channel
+  (needs a real playtest, same rAF-reliability limitation as always).
+- Full detail in README Findings.
+- Not committed yet.
+
 ## Recovery Instructions
 
 1. Read this file.

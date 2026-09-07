@@ -10,15 +10,32 @@
   html, body { margin: 0; padding: 0; overflow: hidden; background: #0a0a0f; font-family: 'Segoe UI', sans-serif; }
   #hud { position: fixed; inset: 0; pointer-events: none; color: #eee; }
   #crosshair { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 20px; color: rgba(255,255,255,0.8); }
-  #slots { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); display: flex; gap: 10px; }
-  .slot { width: 64px; height: 64px; border: 2px solid #555; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 30px; background: rgba(0,0,0,0.5); transition: border-color .1s, transform .1s; }
-  .slot.active { border-color: #fff; transform: scale(1.15); }
+  /* Spell wheel (per user request, replaces the old horizontal row): a
+     circular track anchored above the HP bar. Icons sit at fixed angles
+     around #slotWheel's center; switchSlot() recomputes each icon's own
+     translate(x,y) offset every time (see updateSlotUI()) so the CSS
+     `transition: transform` on .slot animates them smoothly around the
+     circle to their new spots — the whole thing *reads* as the wheel
+     spinning even though no element is actually rotated (deliberately:
+     rotating icons themselves would turn them upside down partway around,
+     so only their position moves, never their own orientation). */
+  #slotWheel { position: absolute; bottom: 118px; left: 50%; width: 4px; height: 4px; }
+  #slotWheelTrack { position: absolute; left: 50%; top: 50%; width: 100px; height: 100px; margin: -50px 0 0 -50px; border: 2px solid rgba(255,255,255,0.18); border-radius: 50%; }
+  .slot { position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; margin: -28px 0 0 -28px; border: 2px solid #555; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 26px; background: rgba(15,10,25,0.75); transition: transform .3s ease, border-color .15s; overflow: hidden; }
+  .slot.active { border-color: #fff; box-shadow: 0 0 14px rgba(255,255,255,0.5); z-index: 2; }
+  .slotLevel { position: absolute; top: 1px; right: 3px; font-size: 10px; font-weight: bold; text-shadow: 0 1px 2px #000; pointer-events: none; }
+  .slotCd { position: absolute; left: 0; right: 0; bottom: 0; height: 0%; background: rgba(0,0,0,0.72); pointer-events: none; }
+  .slotCdText { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: bold; text-shadow: 0 1px 3px #000; pointer-events: none; }
+  #masteryWrap { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); width: 160px; text-align: center; }
+  #masteryLabel { font-size: 11px; text-shadow: 0 1px 2px #000; margin-bottom: 2px; }
+  #masteryBarBg { width: 100%; height: 6px; background: rgba(0,0,0,0.5); border: 1px solid #333; border-radius: 4px; overflow: hidden; }
+  #masteryBarFill { height: 100%; width: 0%; background: linear-gradient(90deg, #ffd166, #ff9f1c); transition: width .2s; }
   #status { position: absolute; top: 12px; left: 12px; font-size: 14px; text-shadow: 0 1px 2px #000; white-space: pre-line; }
   #combatlog { position: absolute; bottom: 148px; left: 12px; font-size: 13px; text-shadow: 0 1px 2px #000; opacity: .9; }
   #hpWrap { position: absolute; bottom: 24px; left: 12px; width: 200px; }
   #hpLabel { font-size: 12px; margin-bottom: 3px; text-shadow: 0 1px 2px #000; display: flex; justify-content: space-between; }
   #hpBarBg { width: 100%; height: 16px; background: rgba(0,0,0,0.5); border: 1px solid #611; border-radius: 4px; overflow: hidden; }
-  #hpBarFill { height: 100%; width: 100%; background: linear-gradient(90deg, #d92e2e, #ff5a3c); transition: width .15s; }
+  #hpBarFill { height: 100%; width: 100%; background: #33dd44; transition: width .15s, background-color .2s; }
   #xpBarBg { width: 100%; height: 8px; background: rgba(0,0,0,0.5); border: 1px solid #333; border-radius: 4px; overflow: hidden; margin-top: 4px; }
   #xpBarFill { height: 100%; width: 0%; background: linear-gradient(90deg, #7a5cff, #b98cff); transition: width .2s; }
   #downedOverlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(80,0,0,0.35); color: #ffdede; font-size: 28px; font-weight: bold; text-shadow: 0 2px 6px #000; }
@@ -191,10 +208,15 @@
     <div id="hpBarBg"><div id="hpBarFill"></div></div>
     <div id="xpBarBg"><div id="xpBarFill"></div></div>
   </div>
-  <div id="slots">
-    <div class="slot" id="slot0">🔥</div>
-    <div class="slot" id="slot1">💧</div>
-    <div class="slot" id="slot2">⚡</div>
+  <div id="slotWheel">
+    <div id="slotWheelTrack"></div>
+    <div class="slot" id="slot0"><span class="slotIcon" id="slotIcon0">🔥</span><span class="slotLevel" id="slotLevel0"></span><div class="slotCd" id="slotCd0"></div><div class="slotCdText" id="slotCdText0"></div></div>
+    <div class="slot" id="slot1"><span class="slotIcon" id="slotIcon1">💧</span><span class="slotLevel" id="slotLevel1"></span><div class="slotCd" id="slotCd1"></div><div class="slotCdText" id="slotCdText1"></div></div>
+    <div class="slot" id="slot2"><span class="slotIcon" id="slotIcon2">⚡</span><span class="slotLevel" id="slotLevel2"></span><div class="slotCd" id="slotCd2"></div><div class="slotCdText" id="slotCdText2"></div></div>
+  </div>
+  <div id="masteryWrap">
+    <div id="masteryLabel"></div>
+    <div id="masteryBarBg"><div id="masteryBarFill"></div></div>
   </div>
   <div id="downedOverlay">Вы повержены… возрождение через <span id="respawnT">4</span>с</div>
 </div>
@@ -216,6 +238,7 @@
 import * as THREE from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { clone as skeletonClone } from 'three/addons/utils/SkeletonUtils.js';
+import { Reflector } from 'three/addons/objects/Reflector.js';
 // ============================================================
 // Tuning (sourced from GDDs where they exist)
 // ============================================================
@@ -253,8 +276,35 @@ const MOVE_SPEED = 6;
 // on top of the code-driven movement rather than an actual pace mismatch.
 const MOVE_ANIM_TIMESCALE = MOVE_SPEED / 6.34;
 const ARENA_HALF = 19; // level 1's half-size — kept as a named constant since it's referenced individually
-const ENEMY_MAX_HP = 100;
+// Portal antechambers (level 1 & 2 only, per user request) — small rooms
+// attached just outside a zone's north wall, in the empty gap that
+// already exists between consecutive zones, connected by a door that
+// starts closed and opens permanently on E. See buildPortalRoom() near
+// buildArena() and ZONES' spawn coordinates below (computed from these).
+const PORTAL_ROOM_WIDTH = 16, PORTAL_ROOM_DEPTH = 13; // bumped up from 9x7 per user feedback ("room bigger")
+const PORTAL_ROOM_HEIGHT = 7; // taller than the normal 4-unit dungeon wall height, plus a real ceiling (see buildPortalRoom) — per user feedback
+const PORTAL_DOOR_WIDTH = 3.2;
+// 4 hits from a level-1 Fire tier-1 cast (Искра, 15 dmg) per user request —
+// used as the reference since it's the straightforward flat-damage tier-1
+// (Water's is intentionally a low-damage status applier, not a dps tool,
+// and Lightning's real damage comes from Water-synergy/chain, not solo hits).
+const ENEMY_MAX_HP = 60;
 const WET_DURATION_S = 6;
+// Burning — every Fire hit (both tiers, splash-hit targets included)
+// leaves the target on fire for BURN_DURATION_S, ticking BURN_TOTAL_MULT
+// of that original hit's damage spread evenly over the duration. Water
+// damage extinguishes it (see hostResolveCast/hostResolveNova) instead of
+// applying Wet — the target can't be both at once, matching how a target
+// on fire getting doused reads more sensibly than "soaked but still
+// burning".
+const BURN_DURATION_S = 4;
+const BURN_TOTAL_MULT = 0.6;
+function applyBurn(e, hitDmg, casterPid) {
+  e.burning = BURN_DURATION_S;
+  e.burnDps = (hitDmg * BURN_TOTAL_MULT) / BURN_DURATION_S;
+  e.burnCasterPid = casterPid;
+  updateEnemyVisual(e);
+}
 const CHAIN_RADIUS = 6;
 const ENEMY_WANDER_SPEED = 1.2;
 const ENEMY_CHASE_SPEED = 2.6;
@@ -262,9 +312,17 @@ const AGGRO_RADIUS = 11;         // enemy notices a player within this range
 const PATROL_LEASH_RADIUS = 20;  // > AGGRO_RADIUS: enemy gives up chase beyond this (measured from its home)
 const STOP_RANGE = 2.1;          // enemy stops closing once this near — stays visible instead of hugging the player
 const ATTACK_RANGE = 2.6;        // can still land a hit slightly beyond STOP_RANGE
-const ATTACK_ANIM_DURATION = 0.35;
+const ATTACK_ANIM_DURATION = 1.1; // was 0.35, then 0.7 — user still felt goblins attack too fast even after the first bump, so slowed further
 const MELEE_DAMAGE = 8;
-const MELEE_COOLDOWN = 1.1;
+const MELEE_COOLDOWN = 2.4; // was 1.1, then 1.6 — same follow-up round as ATTACK_ANIM_DURATION above
+// The actual fix for "goblins hit too hard": damage used to land the
+// instant the lunge started (attackAnimT=0), same frame — the animation
+// was purely cosmetic and trailed the hit rather than telegraphing it,
+// so there was never any real chance to react. Now the hit lands at this
+// fraction into the windup instead, and only if the target is still
+// actually in range then — backing off after seeing the windup start now
+// makes the swing whiff instead of being unavoidable.
+const MELEE_IMPACT_FRAC = 0.6;
 // Goblin model tuning — measured, not guessed (see README Findings):
 // bounding box at raw import scale is ~210cm tall, matching the mage
 // rigs' same Mixamo cm-export convention (0.01 scale -> ~2.1m, almost
@@ -274,9 +332,12 @@ const MELEE_COOLDOWN = 1.1;
 // along local Z, lunging toward +Z — the same "+Z is forward at
 // rotation.y=0" convention as the mage rigs — so the same Math.PI
 // correction applies for the same reason (see makeRemotePlayerModel).
-const GOBLIN_SCALE = 0.01;
+const GOBLIN_SCALE = 0.01 / 1.5; // shrunk 1.5x per user feedback (was reading too big/bulky next to players)
+const GOBLIN_HP_BAR_Y = 2.4 / 1.5; // scaled down with the model so the bar doesn't float high above its now-shorter head
 const GOBLIN_ROTATION_OFFSET = Math.PI;
 const GOBLIN_WET_TINT = new THREE.Color(0x3a5fb0);
+const GOBLIN_BURN_TINT = new THREE.Color(0xff5522);
+const GOBLIN_FROZEN_TINT = new THREE.Color(0xaeeeff); // Плеск mastery max level — see TIER1_MAX_LEVEL comment
 const BOSS_HP = 900;
 const BOSS_SCALE = 2.1;
 const BOSS_SLAM_RADIUS = 4.5;
@@ -287,6 +348,8 @@ const BOSS_CHARGE_DAMAGE = 16;
 const BOSS_CHARGE_COOLDOWN = 7;
 const PLAYER_MAX_HP = 100;
 const PLAYER_RESPAWN_S = 4;
+const REGEN_DELAY_S = 5; // seconds since the last hit before out-of-combat regen kicks in
+const REGEN_RATE_HP_S = 3; // hp/sec once it does
 const SYNERGY_MULT = 3;           // health-damage-system.md synergy_damage_multiplier
 // ============================================================
 // Zones — every dungeon level plus the hub room are separate, far-apart
@@ -294,9 +357,13 @@ const SYNERGY_MULT = 3;           // health-damage-system.md synergy_damage_mult
 // is just teleporting playerPos to another zone's spawn point. Each zone
 // owns its own bounds/spawn/pillar layout for collision + enemy placement.
 // ============================================================
+// Levels 1 & 2's `spawn` now sits inside their portal antechamber, not the
+// enemy arena itself — antechamber floor spans
+// [half+1, half+1+PORTAL_ROOM_DEPTH] past the zone center, so its middle
+// is half+1+PORTAL_ROOM_DEPTH/2. See buildPortalRoom() near buildArena().
 const ZONES = {
-  1:   { cx: 0, cz: 0,    half: ARENA_HALF, spawn: [0, 12] },
-  2:   { cx: 0, cz: -70,  half: 28,         spawn: [0, -70 + 18] },
+  1:   { cx: 0, cz: 0,    half: ARENA_HALF, spawn: [0, ARENA_HALF + 1 + PORTAL_ROOM_DEPTH / 2] },
+  2:   { cx: 0, cz: -70,  half: 28,         spawn: [0, -70 + 28 + 1 + PORTAL_ROOM_DEPTH / 2] },
   3:   { cx: 0, cz: -160, half: 15,         spawn: [0, -160 + 11] },
   hub: { cx: 0, cz: -230, half: 10,         spawn: [0, -230] },
 };
@@ -325,13 +392,29 @@ function xpNeeded(level) { return level * 100; }
 //   Fire:      splashRadius/splashDmgMult — explosion damages everything near the target
 //   Water:     selfNova — instant nova around the CASTER, no aim needed, hits/soaks all directions
 //   Lightning: autoChainRadius/autoChainDmgMult — chains on its own, no Water needed
+// Tier-2 dmg bumped up (per user request) — they used to actually deal
+// LESS damage-per-second than their own tier-1 counterpart once cooldown
+// is factored in (e.g. Fire: 22/1.0s=22dps vs Искра's 15/0.6s=25dps),
+// which made buying them a downgrade in raw output, only worth it for
+// the AoE/utility hook. Now each tier-2's own dps clearly exceeds its
+// tier-1's, on top of that AoE hook still being pure upside.
+// Tier-2 cooldowns bumped up further (per user request, on top of the
+// dmg increase above) — with cooldown now only starting once the cast
+// actually finishes (see tryCast()), a low tier-2 cooldown would've made
+// the bigger hit too spammable; a clearly longer cooldown keeps it
+// reading as "the big one" rather than just a better version of tier-1.
+// Tier-1 spells have NO cooldown (per user request) — spammable as fast as
+// the cast animation itself allows. tryCast() already blocks re-casting
+// during the windup via castLockedUntil regardless of cooldowns[], so a
+// cooldown of 0 here just means the *visible* cooldown timer never shows
+// anything: the animation is the only real rate limit.
 const SCHOOL_SPELLS = {
-  Fire:      [ { name: 'Искра',          icon: '✨', school: 'Fire',      dmg: 15, cooldown: 0.6, speed: 16, color: 0xff6622, tier: 1 },
-               { name: 'Огненный шар',   icon: '💥', school: 'Fire',      dmg: 22, cooldown: 1.0, speed: 12, color: 0xff3300, tier: 2, splashRadius: 3.2, splashDmgMult: 0.55 } ],
-  Water:     [ { name: 'Плеск',          icon: '💧', school: 'Water',     dmg: 5,  cooldown: 0.5, speed: 12, color: 0x3388ee, tier: 1 },
-               { name: 'Волна',          icon: '🌊', school: 'Water',     dmg: 8,  cooldown: 1.3, speed: 0,  color: 0x2266cc, tier: 2, selfNova: 3.6 } ],
-  Lightning: [ { name: 'Разряд',         icon: '⚡', school: 'Lightning', dmg: 12, cooldown: 0.8, speed: 0,  color: 0xffe14d, tier: 1 },
-               { name: 'Цепная молния',  icon: '🌩️', school: 'Lightning', dmg: 14, cooldown: 1.1, speed: 0,  color: 0xffdd00, tier: 2, autoChainRadius: 5, autoChainDmgMult: 0.6 } ],
+  Fire:      [ { name: 'Искра',          icon: '✨', school: 'Fire',      dmg: 15, cooldown: 0,   speed: 16, color: 0xff6622, tier: 1 },
+               { name: 'Огненный шар',   icon: '💥', school: 'Fire',      dmg: 32, cooldown: 1.8, speed: 12, color: 0xff3300, tier: 2, splashRadius: 3.2, splashDmgMult: 0.55 } ],
+  Water:     [ { name: 'Плеск',          icon: '💧', school: 'Water',     dmg: 5,  cooldown: 0,   speed: 12, color: 0x3388ee, tier: 1 },
+               { name: 'Волна',          icon: '🌊', school: 'Water',     dmg: 13, cooldown: 2.2, speed: 0,  color: 0x2266cc, tier: 2, selfNova: 3.6 } ],
+  Lightning: [ { name: 'Разряд',         icon: '⚡', school: 'Lightning', dmg: 12, cooldown: 0,   speed: 0,  color: 0xffe14d, tier: 1 },
+               { name: 'Цепная молния',  icon: '🌩️', school: 'Lightning', dmg: 22, cooldown: 2.0, speed: 0,  color: 0xffdd00, tier: 2, autoChainRadius: 5, autoChainDmgMult: 0.6 } ],
 };
 const PASSIVE_POOL = [
   { id: 'vitality',  name: 'Живучесть',       desc: '+20 макс. HP',        apply: p => { p.maxHpBonus += 20; } },
@@ -339,6 +422,25 @@ const PASSIVE_POOL = [
   { id: 'potency',   name: 'Мощь',            desc: '+15% урона',          apply: p => { p.dmgMult *= 1.15; } },
 ];
 function elementEmoji(school) { return school === 'Fire' ? '🔥' : school === 'Water' ? '💧' : '⚡'; }
+// Tier-1 mastery (per user request): landed hits with a school's tier-1
+// spell fill a visible XP bar (spell.useHits, capped at TIER1_XP_PER_LEVEL
+// — see hostResolveCast's leveling block); the level-up itself only
+// applies at the hub's mentor stand once that bar is full (hostLevelUpSpell),
+// not automatically mid-fight. Capped at TIER1_MAX_LEVEL — each step is a
+// real mechanical change per school, not just more damage:
+//   Fire (Искра):       more dmg per level (existing levelMult formula);
+//                        max level fires 3 projectiles in one cast.
+//   Water (Плеск):      longer Wet duration per level; level 2+ also
+//                        slows; max level also freezes (1s full stop).
+//   Lightning (Разряд): hits twice at level 2, thrice at level 3; max
+//                        level replaces the instant hit with a 3s
+//                        continuous channel (see tryCast()'s Lightning
+//                        channel branch).
+// Tier-2 spells keep the OLD auto-instant-level-on-hit-count system,
+// unchanged (see the `else` side of hostResolveCast/hostResolveNova's
+// leveling blocks) — this whole new system only touches tier-1.
+const TIER1_MAX_LEVEL = 4;
+const TIER1_XP_PER_LEVEL = 8; // landed tier-1 hits needed to fill the bar for the next level
 function cloneSpell(def) { return { ...def, level: 1, useHits: 0 }; }
 function shuffle(arr) { return arr.map(v => [Math.random(), v]).sort((a, b) => a[0] - b[0]).map(v => v[1]); }
 
@@ -361,16 +463,14 @@ addEventListener('resize', () => {
 });
 
 // First-person arms — parented to the camera so they follow the view.
-// Two earlier real-viewmodel attempts (Ganfaul, then Brady) were reverted
-// for two different specific reasons that both trace to the same root
-// cause — a full-body third-person asset glued to the camera doesn't work
-// as a viewmodel without a dedicated FPS rig/IK (Ganfaul's shoulder
-// pauldrons dominated the frame; Brady's extended cast arm foreshortened
-// into near-invisibility along the view axis). Placeholder box/sphere arms
-// are kept here as the automatic fallback (used until mageTemplate/
-// myElement are ready, or if ensureMyViewmodel() is never called) — see
-// ensureMyViewmodel() below for the third attempt, now using each
-// element's own real model.
+// Three real-viewmodel attempts (Ganfaul, Brady, this project's own mage
+// model) were all reverted — see the long comment further down where the
+// last attempt used to live. These placeholder box/sphere arms are the
+// actual FP visual, not a fallback. `fpOrb` (the glowing sphere on the
+// right hand) is also the projectile spawn point in tryCast() below, and
+// the recoil animation driven by `castRecoilT` is timed to match each
+// spell tier's actual fire delay — see CAST_FIRE_DELAY_MS_T1/T2 and the
+// recoil block in animate().
 scene.add(camera);
 const armMat = new THREE.MeshLambertMaterial({ color: 0x2a2347 });
 const handMat = new THREE.MeshLambertMaterial({ color: 0xc9a07a });
@@ -395,13 +495,14 @@ fpArmR.add(fpOrb);
 const orbLight = new THREE.PointLight(0xff6622, 0.6, 2);
 fpOrb.add(orbLight);
 const FP_ARM_BASE_Y = -0.32, FP_ARM_BASE_Z = -0.55;
+const CAST_RECOIL_PEAK = 0.18; // how far the arm punches forward (world units) at full extension
 let castRecoilT = Infinity, walkBobT = 0;
-// Real-model FP viewmodel (third attempt at this — see ensureMyViewmodel()
-// below, defined after makeRemotePlayerModel exists). Falls back to the
-// placeholder arms above until this is built/ready.
-let myViewmodel = null; // {object, mixer, actions, current}
-let myViewmodelHandBone = null; // mixamorigRightHand — used for the projectile spawn point
-let myViewmodelHandGlow = null; // tinted to the active spell's color, mirroring the old placeholder orb
+// Recoil envelope timing — set per-cast in tryCast() to the actual spell
+// tier's fire delay/animation duration, so the arm reaches full "punch"
+// extension (CAST_RECOIL_PEAK) at exactly the moment the projectile
+// spawns (see the recoil block in animate()) instead of a fixed timing
+// that only matched one specific animation's frame timing.
+let castRecoilPeakT = 0.08, castRecoilEndT = 0.3;
 // Debug-only: lets the local player see their own body/animations in
 // third person (V key) instead of needing a second browser tab connected
 // as a real remote player just to eyeball idle/walk/cast visuals.
@@ -417,8 +518,8 @@ const DEBUG_TP_DISTANCE = 3.2;
 let debugOrbitYaw = 0, debugOrbitPitch = 0.3;
 // Marks exactly where the FP camera sits (playerPos + EYE_HEIGHT) while in
 // the debug third-person view, so the real FP eye position can be judged
-// and FP_VIEWMODEL_OFFSET tuned by eye against the visible third-person
-// body, without needing to actually switch views back and forth.
+// against the visible third-person body without needing to actually
+// switch views back and forth.
 const debugEyeMarker = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 8), new THREE.MeshBasicMaterial({ color: 0x00ffcc }));
 debugEyeMarker.visible = false;
 scene.add(debugEyeMarker);
@@ -485,13 +586,12 @@ function stoneMaterial(baseHex, mortarHex, repeatX, repeatY) {
   tex.repeat.set(repeatX, repeatY);
   return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95, metalness: 0 });
 }
-
 // ============================================================
 // Arena — buildArena() constructs one zone's floor/walls/pillars/torches at
 // a world-space offset (cx, cz). All zones coexist statically in the same
 // scene; "traveling" between them is just teleporting playerPos elsewhere.
 // ============================================================
-// All 4 zones' torches/pentagrams/lights coexist statically in the scene
+// All 4 zones' torches/portals/lights coexist statically in the scene
 // (see the zones comment above), but a WebGL forward renderer evaluates
 // EVERY light in the scene for every lit fragment regardless of whether the
 // player can currently see it — with ~50 always-on PointLights across 4
@@ -524,16 +624,33 @@ function makeTorch(x, y, z, zoneId) {
   if (zoneId !== undefined) registerZoneLight(zoneId, light);
 }
 const pillarMat = stoneMaterial(0x4a4358, 0x201e28, 2, 3);
-function buildArena(zoneId, cx, cz, half, relPillars, mortarHex) {
+function buildArena(zoneId, cx, cz, half, relPillars, mortarHex, doorGapWidth) {
   mortarHex = mortarHex || 0x18161e;
+  // Stone brick floor everywhere (reverted per user request — dirt floors
+  // were tried for a while, see the now-unused makeDirtTexture/dirtMaterial
+  // above, but didn't stick).
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(half * 2 + 2, half * 2 + 2),
-    stoneMaterial(0x4a4550, mortarHex === 0x18161e ? 0x1c1a22 : mortarHex, half, half));
+    stoneMaterial(0x4a4550, mortarHex, half, half));
   floor.rotation.x = -Math.PI / 2;
   floor.position.set(cx, 0, cz);
   scene.add(floor);
   const w2 = half + 1;
   for (const [x, z, w, d] of [[0, -w2, w2 * 2 + 2, 1], [0, w2, w2 * 2 + 2, 1], [-w2, 0, 1, w2 * 2 + 2], [w2, 0, 1, w2 * 2 + 2]]) {
+    // The north wall (x===0, z===w2) optionally gets a gap cut into it —
+    // a doorway into a portal antechamber built right after this call by
+    // buildPortalRoom(). Two shorter flanking segments instead of one
+    // solid box; the gap itself is filled by that room's own door slab,
+    // not by anything built here.
+    if (doorGapWidth && x === 0 && z === w2) {
+      const segW = (w - doorGapWidth) / 2;
+      for (const side of [-1, 1]) {
+        const wall = new THREE.Mesh(new THREE.BoxGeometry(segW, 4, d), stoneMaterial(0x3a3542, mortarHex, Math.max(segW, d) / 3, 2));
+        wall.position.set(cx + side * (doorGapWidth / 2 + segW / 2), 2, cz + z);
+        scene.add(wall);
+      }
+      continue;
+    }
     const wall = new THREE.Mesh(new THREE.BoxGeometry(w, 4, d), stoneMaterial(0x3a3542, mortarHex, Math.max(w, d) / 3, 2));
     wall.position.set(cx + x, 2, cz + z);
     scene.add(wall);
@@ -545,8 +662,121 @@ function buildArena(zoneId, cx, cz, half, relPillars, mortarHex) {
     scene.add(p);
     makeTorch(x, 4.6, z, zoneId);
   }
-  for (const [x, z] of [[0, -w2 + 0.6], [0, w2 - 0.6], [-w2 + 0.6, 0], [w2 - 0.6, 0]]) makeTorch(cx + x, 2.4, cz + z, zoneId);
+  for (const [x, z] of [[0, -w2 + 0.6], [0, w2 - 0.6], [-w2 + 0.6, 0], [w2 - 0.6, 0]]) {
+    if (doorGapWidth && x === 0 && z === w2 - 0.6) continue; // would float in the middle of the doorway gap
+    makeTorch(cx + x, 2.4, cz + z, zoneId);
+  }
   ZONE_PILLARS[zoneId] = absPillars;
+}
+// A small antechamber attached just outside a zone's north wall (in the
+// gap that already exists between consecutive zones — see the PORTAL_
+// ROOM_* constants), where that zone's players' own spawn portals now
+// live instead of inside the enemy arena. `wallZ` must match the doorGapWidth
+// gap buildArena() cut into that zone's own north wall (i.e. pass the
+// same cz+half+1). The doorway starts blocked by a solid slab; only a
+// local E-press opens it (openZoneDoor()) — permanently, no way to close
+// it again. Enemies need no collision against any of this:
+// clampEnemyToArena() already keeps them a full unit short of the
+// original wall line regardless of what's beyond it.
+const ZONE_DOOR_WALLS = {}; // zoneId -> mutable array of {minX,maxX,minZ,maxZ}, checked by the player's own movement collision only
+const ZONE_DOORS = {}; // zoneId -> { mesh, wallEntry, x, z, open, button }
+const ZONE_PORTAL_ROOM = {}; // zoneId -> { cx, wallZ, width, depth } — widens that zone's player movement clamp to actually reach the room
+// A big glowing push-button standing right next to the door — the
+// visible "press this to leave" affordance the door alone didn't make
+// obvious (user feedback: first tried a lever, then asked for a more
+// noticeable button instead). Idle-pulses to catch the eye even before
+// it's used (same idea as the torch/pentagram flicker elsewhere in this
+// file), then sinks down and locks dim+dark once pressed — see the
+// ZONE_DOORS loop in animate().
+const BUTTON_COLOR = 0xff3322;
+function makeButton(x, z) {
+  const group = new THREE.Group();
+  const base = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.4, 0.5, 0.9, 12),
+    stoneMaterial(0x3a3542, 0x18161e, 1, 1));
+  base.position.y = 0.45;
+  group.add(base);
+  const btnMat = new THREE.MeshStandardMaterial({
+    color: BUTTON_COLOR, emissive: BUTTON_COLOR, emissiveIntensity: 1.3, roughness: 0.3, metalness: 0.15 });
+  const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.34, 0.2, 16), btnMat);
+  btn.position.y = 1.0;
+  group.add(btn);
+  const glow = new THREE.PointLight(BUTTON_COLOR, 1.6, 5);
+  glow.position.y = 1.1;
+  group.add(glow);
+  group.position.set(x, 0, z);
+  scene.add(group);
+  return { group, btn, glow, restY: 1.0, pressedY: 0.85, pressed: false, phase: Math.random() * 6.28 };
+}
+function buildPortalRoom(zoneId, cx, wallZ, width, depth) {
+  const halfW = width / 2;
+  const h = PORTAL_ROOM_HEIGHT;
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(width, depth),
+    stoneMaterial(0x4a4550, 0x18161e, width / 2, depth / 2));
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.set(cx, 0, wallZ + depth / 2);
+  scene.add(floor);
+  const ceiling = new THREE.Mesh(
+    new THREE.PlaneGeometry(width, depth),
+    stoneMaterial(0x3a3542, 0x18161e, width / 2, depth / 2));
+  ceiling.rotation.x = Math.PI / 2;
+  ceiling.position.set(cx, h, wallZ + depth / 2);
+  scene.add(ceiling);
+  const walls = [];
+  function addWall(x, z, w, d) {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), stoneMaterial(0x3a3542, 0x18161e, 2, h / 3));
+    mesh.position.set(x, h / 2, z);
+    scene.add(mesh);
+    walls.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2 });
+  }
+  addWall(cx, wallZ + depth, width + 1, 1);          // far wall
+  addWall(cx - halfW, wallZ + depth / 2, 1, depth);  // left wall
+  addWall(cx + halfW, wallZ + depth / 2, 1, depth);  // right wall
+  makeTorch(cx - halfW + 0.6, 2.4, wallZ + depth - 0.6, zoneId);
+  makeTorch(cx + halfW - 0.6, 2.4, wallZ + depth - 0.6, zoneId);
+
+  const doorMesh = new THREE.Mesh(new THREE.BoxGeometry(PORTAL_DOOR_WIDTH, h, 1), stoneMaterial(0x3a3542, 0x18161e, 2, h / 3));
+  doorMesh.position.set(cx, h / 2, wallZ);
+  scene.add(doorMesh);
+  const wallEntry = { minX: cx - PORTAL_DOOR_WIDTH / 2, maxX: cx + PORTAL_DOOR_WIDTH / 2, minZ: wallZ - 0.5, maxZ: wallZ + 0.5 };
+  walls.push(wallEntry);
+  const button = makeButton(cx + PORTAL_DOOR_WIDTH / 2 + 0.9, wallZ + 0.4);
+
+  ZONE_DOOR_WALLS[zoneId] = walls;
+  ZONE_DOORS[zoneId] = { mesh: doorMesh, wallEntry, x: cx, z: wallZ, open: false, button, closedY: h / 2 };
+  ZONE_PORTAL_ROOM[zoneId] = { cx, wallZ, width, depth };
+}
+// Opens a zone's door permanently: drops it out of the collision list
+// right away (no "half-open, still solid" state to simulate) and starts
+// the slide-down animation, advanced once per frame in animate().
+function openZoneDoor(zoneId) {
+  const d = ZONE_DOORS[zoneId];
+  if (!d || d.open) return;
+  d.open = true;
+  const walls = ZONE_DOOR_WALLS[zoneId];
+  const idx = walls.indexOf(d.wallEntry);
+  if (idx !== -1) walls.splice(idx, 1);
+}
+// Re-closes a zone's door in the data/collision sense (called from
+// startLevel() so every fresh attempt at a level starts with its portal
+// room sealed again) — the visual slide-down is only ever played once
+// per real "open" though; resetting also snaps the mesh back up.
+function resetZoneDoor(zoneId) {
+  const d = ZONE_DOORS[zoneId];
+  if (!d) return;
+  d.open = false;
+  d.mesh.position.y = d.closedY;
+  if (d.button) {
+    d.button.pressed = false;
+    d.button.btn.position.y = d.button.restY;
+    d.button.btn.material.color.setHex(BUTTON_COLOR);
+    d.button.btn.material.emissive.setHex(BUTTON_COLOR);
+    d.button.glow.color.setHex(BUTTON_COLOR);
+    d.button.glow.intensity = 1.6;
+  }
+  const walls = ZONE_DOOR_WALLS[zoneId];
+  if (walls && !walls.includes(d.wallEntry)) walls.push(d.wallEntry);
 }
 // ============================================================
 // Level 2 maze — a real recursive-backtracker corridor maze (corridors,
@@ -671,18 +901,45 @@ function resolveCircleWallCollision(pos, radius, walls) {
     const closestZ = Math.max(box.minZ, Math.min(pos.z, box.maxZ));
     const dx = pos.x - closestX, dz = pos.z - closestZ;
     const distSq = dx * dx + dz * dz;
-    if (distSq < radius * radius && distSq > 1e-9) {
-      const dist = Math.sqrt(distSq);
-      const push = radius - dist;
-      pos.x += (dx / dist) * push;
-      pos.z += (dz / dist) * push;
+    if (distSq > 1e-9) {
+      if (distSq < radius * radius) {
+        const dist = Math.sqrt(distSq);
+        const push = radius - dist;
+        pos.x += (dx / dist) * push;
+        pos.z += (dz / dist) * push;
+      }
+    } else {
+      // pos is inside the box on both axes (closest point == pos itself), so
+      // the circle-vs-closest-point vector degenerates to zero and the block
+      // above never fires — the player gets stuck embedded in the wall with
+      // no collision response at all ("walk/see through the wall"). This
+      // happens in practice at the maze's outer perimeter, where the per-zone
+      // boundary clamp lands the player exactly on the zone edge, but the
+      // perimeter walls (drawn with thickness) straddle that same edge. Push
+      // out along whichever box face is nearest instead.
+      const left = pos.x - box.minX, right = box.maxX - pos.x;
+      const back = pos.z - box.minZ, front = box.maxZ - pos.z;
+      const minPen = Math.min(left, right, back, front);
+      if (minPen === left) pos.x = box.minX - radius;
+      else if (minPen === right) pos.x = box.maxX + radius;
+      else if (minPen === back) pos.z = box.minZ - radius;
+      else pos.z = box.maxZ + radius;
     }
   }
 }
-const PLAYER_RADIUS = 0.35;
+// 0.35 (the old value) is where "walk/see through some walls" traced
+// back to: the FP camera sits FP_CAMERA_FORWARD_OFFSET (0.3) forward of
+// the actual collision point, so wall collision only ever kept the
+// camera 0.35-0.3=0.05 units from a wall face — LESS than the camera's
+// own near-clip plane (0.1), meaning the wall could end up literally
+// behind the near plane and get clipped away, right as you walked up to
+// it (angle-dependent, since the offset is along facing — hence "some"
+// walls, not all). Bumped so that margin (radius - forward offset)
+// clears the near plane with real room to spare.
+const PLAYER_RADIUS = 0.55;
 const ENEMY_RADIUS = 0.4;
 const PILLAR_CLEARANCE = 1.3; // pillar radius (~1) + a bit of enemy body radius
-const SPAWN_SAFE_RADIUS = 6;  // enemies can't enter the pentagram's ward — scaled up alongside the bigger pentagram
+const SPAWN_SAFE_RADIUS = 6;  // enemies can't enter this ward around each zone's spawn point
 // Enemy chase/wander above is pure steering with no obstacle awareness —
 // this is the only thing stopping them walking through walls/pillars/the ward.
 function clampEnemyToArena(e, zoneId) {
@@ -713,14 +970,34 @@ function clampEnemyToArena(e, zoneId) {
 }
 
 // Level 1 — unchanged layout from the original single-arena prototype.
-buildArena(1, ZONES[1].cx, ZONES[1].cz, ZONES[1].half, [[-8, -8], [8, -8], [-8, 8], [8, 8]]);
+// Portal antechamber (see buildPortalRoom's doc comment) sits in the
+// empty gap just north of this room; the door gap width passed to
+// buildArena must match PORTAL_DOOR_WIDTH exactly, or the room's own
+// door slab wouldn't actually fill it.
+buildArena(1, ZONES[1].cx, ZONES[1].cz, ZONES[1].half, [[-8, -8], [8, -8], [-8, 8], [8, 8]], undefined, PORTAL_DOOR_WIDTH);
+buildPortalRoom(1, ZONES[1].cx, ZONES[1].cz + ZONES[1].half + 1, PORTAL_ROOM_WIDTH, PORTAL_ROOM_DEPTH);
 // Level 2 — a real corridor maze (recursive-backtracker: corridors, forks,
 // dead ends), per user request, instead of a room with scattered pillars.
-// 9x9 grid at 6 units/cell = 27 half-width, matching clampEnemyToArena's
-// own bound (half-1 = 27) almost exactly so there's no open ring around the
-// outside of the maze to just walk around it.
+// 7x7 grid at 8 units/cell = 28 half-width, matching ZONES[2].half (28)
+// exactly so there's still no open ring around the outside of the maze
+// to just walk around it. Was 9x9 at 6 units/cell (27 half-width, 5.4-
+// unit corridors) — widened to 7.3-unit corridors per user feedback
+// ("проходы должны быть шире"), fewer/bigger cells instead of just
+// thinning the walls so there's still a real maze shape, not an open
+// room. Same portal-antechamber treatment as level 1, in the gap
+// between this zone and level 1's.
+// No portal antechamber for level 2 (user request — players spawn straight
+// into the maze, like before the antechamber was added). Solid perimeter
+// wall (no door gap) since there's no room on the other side of it.
 buildArena(2, ZONES[2].cx, ZONES[2].cz, ZONES[2].half, []);
-buildMaze(2, ZONES[2].cx, ZONES[2].cz, 9, 9, 6, 0.6, 4);
+buildMaze(2, ZONES[2].cx, ZONES[2].cz, 7, 7, 8, 0.7, 4);
+// Spawn at the center cell of the maze itself — any cell center is
+// guaranteed clear of walls (walls only ever sit on cell boundaries).
+{
+  const m2 = ZONE_MAZE[2];
+  const [sr, sc] = mazeCellAt(m2, ZONES[2].cx, ZONES[2].cz) || [Math.floor(m2.rows / 2), Math.floor(m2.cols / 2)];
+  ZONES[2].spawn = mazeCellCenter(m2, sr, sc);
+}
 // Level 3 — open boss arena, just corner pillars so the boss has room to charge.
 buildArena(3, ZONES[3].cx, ZONES[3].cz, ZONES[3].half, [[-10, -10], [10, -10], [-10, 10], [10, 10]]);
 // Hub — the progression room between sessions. Distinct warm mortar tone so
@@ -728,8 +1005,8 @@ buildArena(3, ZONES[3].cx, ZONES[3].cz, ZONES[3].half, [[-10, -10], [10, -10], [
 // ever spawn here (see buildLevelEnemies) so no maze/pillars are needed.
 buildArena('hub', ZONES.hub.cx, ZONES.hub.cz, ZONES.hub.half, [], 0x2a1a12);
 // Extra warm ambient glow so the hub reads as a clearly different, calmer
-// place than the dungeon's cold purple pentagram light — not just a reused
-// arena with a different mortar color.
+// place than the dungeon's cold torchlit dark — not just a reused arena
+// with a different mortar color.
 {
   const hubGlow = new THREE.PointLight(0xffaa55, 1.1, ZONES.hub.half * 2.5, 1.5);
   hubGlow.position.set(ZONES.hub.cx, 3.5, ZONES.hub.cz);
@@ -780,6 +1057,67 @@ const shopPassiveStandA = makeShopStand(ZONES.hub.cx - 3, ZONES.hub.cz + 2, 0xcc
 const shopPassiveStandB = makeShopStand(ZONES.hub.cx + 3, ZONES.hub.cz + 2, 0xcc88ff);
 const shopContinuePortal = makeContinuePortal(ZONES.hub.cx, ZONES.hub.cz + 7);
 
+// A real wall mirror in the hub (the room between dungeon runs) so players
+// can actually see their own class model. The FP camera never renders your
+// own body, so this leans on the same world-space "own body" mesh already
+// built for the V-key debug third-person view (ensureDebugOwnBody) — kept
+// live every frame now (see animate()), but only made VISIBLE during this
+// mirror's own reflection render pass (below), not during normal FP
+// rendering — otherwise the real model's hands/arms show up stacked on top
+// of the placeholder FP arms during ordinary play (user-reported).
+// Placeholder FP arms are hidden for that same reflection pass in the other
+// direction: `camera` itself is added to `scene` (see the FP-arms comment
+// near makeFpArm), so Reflector's internal scene traversal would otherwise
+// render them floating at the reflected camera position too.
+function makeMirror(x, y, z, rotY, width, height) {
+  const mirror = new Reflector(new THREE.PlaneGeometry(width, height), {
+    color: 0x8a97a0,
+    textureWidth: 512 * (window.devicePixelRatio || 1),
+    textureHeight: 512 * (window.devicePixelRatio || 1),
+  });
+  mirror.position.set(x, y, z);
+  mirror.rotation.y = rotY;
+  const baseOnBeforeRender = mirror.onBeforeRender.bind(mirror);
+  mirror.onBeforeRender = function (renderer, sc, cam, geometry, material, group) {
+    const bodyWasVisible = debugOwnBody ? debugOwnBody.mesh.visible : false;
+    if (debugOwnBody) debugOwnBody.mesh.visible = true;
+    fpArmL.visible = false;
+    fpArmR.visible = false;
+    baseOnBeforeRender(renderer, sc, cam, geometry, material, group);
+    if (debugOwnBody) debugOwnBody.mesh.visible = bodyWasVisible;
+    fpArmL.visible = !debugThirdPerson;
+    fpArmR.visible = !debugThirdPerson;
+  };
+  scene.add(mirror);
+  // Frame: 4 bars forming a border around the glass, pushed slightly IN
+  // FRONT of the reflective plane (toward the room) so they're guaranteed
+  // visible overlapping the glass's edge — a single box placed behind the
+  // plane (the first attempt) ended up flush with/inside the wall itself
+  // and never actually rendered. A Group at the mirror's own position/
+  // rotation lets each bar just use local offsets instead of hand-rolling
+  // the rotated-normal trig.
+  const frameGroup = new THREE.Group();
+  frameGroup.position.set(x, y, z);
+  frameGroup.rotation.y = rotY;
+  scene.add(frameGroup);
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0x2a2233, roughness: 0.6 });
+  const barThick = 0.16, barDepth = 0.08, overlap = 0.16, pushForward = 0.04;
+  function addFrameBar(w, h, lx, ly) {
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(w, h, barDepth), frameMat);
+    bar.position.set(lx, ly, pushForward);
+    frameGroup.add(bar);
+  }
+  addFrameBar(width + overlap * 2, barThick, 0, height / 2 + barThick / 2);      // top
+  addFrameBar(width + overlap * 2, barThick, 0, -(height / 2 + barThick / 2));   // bottom
+  addFrameBar(barThick, height + overlap * 2, -(width / 2 + barThick / 2), 0);   // left
+  addFrameBar(barThick, height + overlap * 2, width / 2 + barThick / 2, 0);      // right
+  return mirror;
+}
+// Mounted on the hub's west wall, facing into the room (+X). Wall's inner
+// face sits at cx-(half+1)+0.5 (see buildArena's w2/wall-thickness math);
+// nudged a hair further in to avoid z-fighting with the wall itself.
+makeMirror(ZONES.hub.cx - (ZONES.hub.half + 1) + 0.56, 1.35, ZONES.hub.cz, Math.PI / 2, 3, 2.6);
+
 function distXZ(pos, stand) { return Math.hypot(pos.x - stand.x, pos.z - stand.z); }
 function positionLabel(el, stand) {
   const v = new THREE.Vector3(stand.x, stand.labelY, stand.z).project(camera);
@@ -827,12 +1165,23 @@ function updateShopStands() {
 
   // Mentor stand — levels up whichever spell is in your active hotbar slot
   const activeSpell = mySpells[activeSlot];
+  // Tier-1 spells are now gated behind their own XP bar (fills from landed
+  // hits — see hostResolveCast's leveling block) on top of the gold cost;
+  // tier-2 spells keep the old gold-only leveling, no XP requirement.
+  const t1Maxed = activeSpell && activeSpell.tier === 1 && activeSpell.level >= TIER1_MAX_LEVEL;
+  const t1NotReady = activeSpell && activeSpell.tier === 1 && !t1Maxed && (activeSpell.useHits || 0) < TIER1_XP_PER_LEVEL;
   if (activeSpell && positionLabel(labelMentor, shopMentorStand)) {
     labelMentor.style.display = 'block';
-    const cost = 30 * activeSpell.level;
-    labelMentor.textContent = `${activeSpell.icon} ${activeSpell.name} ур.${activeSpell.level}→${activeSpell.level + 1} — ${cost}💰`;
+    if (t1Maxed) {
+      labelMentor.textContent = `${activeSpell.icon} ${activeSpell.name} — макс. уровень`;
+    } else if (t1NotReady) {
+      labelMentor.textContent = `${activeSpell.icon} ${activeSpell.name}: опыт ${activeSpell.useHits || 0}/${TIER1_XP_PER_LEVEL} (нужно попадать)`;
+    } else {
+      const cost = 30 * activeSpell.level;
+      labelMentor.textContent = `${activeSpell.icon} ${activeSpell.name} ур.${activeSpell.level}→${activeSpell.level + 1} — ${cost}💰`;
+    }
   } else labelMentor.style.display = 'none';
-  if (activeSpell) {
+  if (activeSpell && !t1Maxed && !t1NotReady) {
     const cost = 30 * activeSpell.level;
     consider({ kind: 'mentor', idx: activeSlot, label: `Прокачать ${activeSpell.icon} ${activeSpell.name} до ур.${activeSpell.level + 1} — ${cost}💰` }, distXZ(playerPos, shopMentorStand));
   }
@@ -897,7 +1246,24 @@ function flashInsufficientFunds(labelEl) {
     setTimeout(() => labelEl.classList.remove('error'), 450);
   }
 }
+let activeDoorAction = null; // set by updateDoorPrompt(), consumed here — same pattern as activeStandAction, separate state since doors matter outside the shop phase
+// Proximity prompt for a zone's portal-room door — the shop-stand prompt
+// (updateShopStands) only runs during shopPhase, so this owns the same
+// #interactPrompt element the rest of the time instead.
+function updateDoorPrompt() {
+  if (shopPhase) { activeDoorAction = null; return; } // updateShopStands() owns the prompt then — also clears a stale door reference from before the teleport, so a leftover E-press can't hijack a shop-stand interact
+  const prompt = document.getElementById('interactPrompt');
+  const d = ZONE_DOORS[currentZone];
+  activeDoorAction = (d && !d.open && distXZ(playerPos, d) < 3) ? d : null;
+  if (activeDoorAction) {
+    prompt.innerHTML = '<b>[E]</b> Нажать кнопку';
+    prompt.style.display = 'block';
+  } else {
+    prompt.style.display = 'none';
+  }
+}
 function tryInteract() {
+  if (activeDoorAction) { openZoneDoor(currentZone); return; }
   if (!shopPhase || !activeStandAction) return;
   const a = activeStandAction;
   if (a.kind === 'buy') {
@@ -914,79 +1280,14 @@ function tryInteract() {
 }
 
 // ============================================================
-// Spawn/respawn pentagrams — one per zone, canvas-drawn glyph decal on the
-// floor at each zone's spawn point (no external image needed, same trick as
-// the stone textures).
+// Zone lights that don't belong to a single fixed prop (torches etc. are
+// registered where they're created) still need `setZoneLightsVisible`
+// called once every zone's lights are registered — the spawn/respawn
+// pentagram used to be the last thing to do that; now that it's gone
+// (replaced by per-player portals — see loadGoblinAssets' neighborhood),
+// this call just moved here instead of dropping it entirely.
 // ============================================================
-function makePentagramTexture(size) {
-  size = size || 512;
-  const cnv = document.createElement('canvas');
-  cnv.width = cnv.height = size;
-  const ctx = cnv.getContext('2d');
-  const cx = size / 2, cy = size / 2, r = size * 0.42;
-  // soft outer glow
-  const glow = ctx.createRadialGradient(cx, cy, r * 0.5, cx, cy, r * 1.2);
-  glow.addColorStop(0, 'rgba(160,120,255,0.35)');
-  glow.addColorStop(1, 'rgba(160,120,255,0)');
-  ctx.fillStyle = glow;
-  ctx.beginPath(); ctx.arc(cx, cy, r * 1.2, 0, Math.PI * 2); ctx.fill();
-
-  ctx.strokeStyle = 'rgba(205,180,255,0.95)';
-  ctx.lineWidth = size * 0.012;
-  ctx.shadowColor = 'rgba(180,140,255,0.9)';
-  ctx.shadowBlur = size * 0.02;
-
-  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
-  ctx.beginPath(); ctx.arc(cx, cy, r * 0.86, 0, Math.PI * 2); ctx.stroke();
-
-  // five-pointed star: connect every 2nd vertex of a pentagon
-  const pts = [];
-  for (let i = 0; i < 5; i++) {
-    const a = -Math.PI / 2 + i * (2 * Math.PI / 5);
-    pts.push([cx + Math.cos(a) * r * 0.86, cy + Math.sin(a) * r * 0.86]);
-  }
-  ctx.beginPath();
-  for (let i = 0; i <= 5; i++) {
-    const [x, y] = pts[(i * 2) % 5];
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-  }
-  ctx.closePath();
-  ctx.stroke();
-
-  // small runic dots ringing the outer circle
-  ctx.shadowBlur = size * 0.01;
-  for (let i = 0; i < 12; i++) {
-    const a = i * (Math.PI * 2 / 12);
-    ctx.beginPath();
-    ctx.arc(cx + Math.cos(a) * r * 1.05, cy + Math.sin(a) * r * 1.05, size * 0.007, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(220,195,255,0.9)';
-    ctx.fill();
-  }
-
-  return new THREE.CanvasTexture(cnv);
-}
-const pentagrams = [];
-function makePentagram(x, z, zoneId) {
-  const mat = new THREE.MeshBasicMaterial({ map: makePentagramTexture(), transparent: true, depthWrite: false });
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(5, 5), mat);
-  mesh.rotation.x = -Math.PI / 2;
-  mesh.position.set(x, 0.02, z); // just above the floor to avoid z-fighting
-  scene.add(mesh);
-  const light = new THREE.PointLight(0xb090ff, 0.7, 6, 2);
-  light.position.set(x, 0.6, z);
-  scene.add(light);
-  pentagrams.push({ mat, light, phase: Math.random() * 6.28 });
-  if (zoneId !== undefined) registerZoneLight(zoneId, light);
-}
-for (const key of Object.keys(ZONES)) makePentagram(ZONES[key].spawn[0], ZONES[key].spawn[1], key);
 setZoneLightsVisible(currentZone); // all zone lights are registered now — cull everything but the starting zone
-function updatePentagram(t) {
-  for (const p of pentagrams) {
-    const pulse = 0.75 + 0.25 * Math.sin(t * 1.5 + p.phase);
-    p.mat.opacity = pulse;
-    p.light.intensity = 0.7 * pulse;
-  }
-}
 
 function updateTorches(t) {
   for (const torch of torches) {
@@ -1011,12 +1312,30 @@ let myHp = PLAYER_MAX_HP, myDowned = false, wasDowned = false, myGold = 0;
 let mySpells = [];
 let myPendingPassive = null;
 let myMaxHp = PLAYER_MAX_HP;
+// One shared portal per room (user request — not one per player), fixed
+// at the zone's own spawn point rather than each player's jittered
+// position, so a full party arriving nearby all sees the same portal
+// instead of a small stack of identical copies. See refreshPortal()/
+// updatePortal() near loadGoblinAssets.
+let zonePortal = null;
+let zonePortalGen = 0; // discards a stale deferred refreshPortal() result if respawnLocalPlayer() is called again before the first one's (possibly async) load finishes
 function respawnLocalPlayer() {
-  // Small random jitter within the pentagram so a full-party respawn doesn't
+  // Small random jitter within the spawn area so a full-party respawn doesn't
   // stack everyone on the exact same point, while still reading as "the same place".
   const spawn = ZONES[currentZone].spawn;
   const angle = Math.random() * Math.PI * 2, r = Math.random() * 1.0;
   playerPos.set(spawn[0] + Math.cos(angle) * r, 0, spawn[1] + Math.sin(angle) * r);
+  // A fresh portal opens wherever players just (re)appeared — every call
+  // to respawnLocalPlayer() is exactly that moment (initial level start
+  // or a post-death respawn), so hooking it here covers both without a
+  // separate "just spawned" flag. Fixed at the zone's own spawn point
+  // (not the jittered playerPos) since it's shared, not personal.
+  const gen = ++zonePortalGen;
+  const portalElement = ZONE_PORTAL_ELEMENT[currentZone] || 'Lightning';
+  refreshPortal(zonePortal, portalElement, spawn[0], spawn[1], p => {
+    if (gen === zonePortalGen) zonePortal = p;
+    else if (p) scene.remove(p.object); // superseded by a newer respawn before this (deferred) load finished
+  });
 }
 
 // ============================================================
@@ -1025,6 +1344,8 @@ function respawnLocalPlayer() {
 // ============================================================
 const SKIN_COLOR = 0x8a8075, CLOTH_COLOR = 0x4a3f5c;
 const SKIN_WET = 0x4d79c9, CLOTH_WET = 0x33507a;
+const SKIN_BURN = 0xdd5522, CLOTH_BURN = 0x992211;
+const SKIN_FROZEN = 0xaeeeff, CLOTH_FROZEN = 0x7fb8cc;
 let enemies = [];
 function makeEnemy(id, x, z, maxHp, isBoss) {
   const group = new THREE.Group();
@@ -1070,22 +1391,37 @@ function makeEnemy(id, x, z, maxHp, isBoss) {
     const legR = part(legGeo.clone(), clothMat, 0.16, 0.9, 0);
     limbs = { armL, armR, legL, legR };
   }
-  const barBg = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.12, 0.05), new THREE.MeshBasicMaterial({ color: 0x441111 }));
-  barBg.position.y = 2.4;
+  const barY = isGoblin ? GOBLIN_HP_BAR_Y : 2.4;
+  const BAR_WIDTH = 1.2;
+  const barBg = new THREE.Mesh(new THREE.BoxGeometry(BAR_WIDTH, 0.12, 0.05), new THREE.MeshBasicMaterial({ color: 0x441111 }));
+  barBg.position.y = barY;
   group.add(barBg);
-  const bar = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.12, 0.06), new THREE.MeshBasicMaterial({ color: 0x33dd44 }));
-  bar.position.y = 2.4;
+  // Left-anchored fill (per user request — was shrinking from both edges
+  // toward the center as hp dropped; now only the right edge retreats).
+  // Achieved by moving the geometry's own origin to its left edge via
+  // translate() — Object3D#scale always scales around the LOCAL origin,
+  // so with the origin at the left edge, scale.x shrinks purely rightward
+  // instead of symmetrically. Mesh position then shifted left by half the
+  // width to land the (now off-center) geometry back where the old
+  // centered one used to sit.
+  const barGeo = new THREE.BoxGeometry(BAR_WIDTH, 0.12, 0.06);
+  barGeo.translate(BAR_WIDTH / 2, 0, 0);
+  const bar = new THREE.Mesh(barGeo, new THREE.MeshBasicMaterial({ color: 0x33dd44 }));
+  bar.position.set(-BAR_WIDTH / 2, barY, 0);
   group.add(bar);
   group.position.set(x, 0, z);
   if (isBoss) group.scale.setScalar(BOSS_SCALE);
   scene.add(group);
   return { id, mesh: group, parts, skinMat, clothMat, materials, mixer, actions, current, isGoblin,
            hpBar: bar, hp: maxHp, maxHp, wet: 0, alive: true,
+           burning: 0, burnDps: 0, burnCasterPid: null, // periodic fire damage — see hostSimulate's decay tick and hostResolveCast's Fire branch
+           slowFactor: 1, frozenT: 0, // Плеск (Water tier-1) leveling — see hostResolveCast's Water branch and TIER1_MAX_LEVEL
            home: new THREE.Vector3(x, 0, z), wanderTarget: new THREE.Vector3(x, 0, z),
            limbs, walkPhase: Math.random() * 6.28,
            lastPos: new THREE.Vector3(x, 0, z),
            aiState: 'patrol', targetPeerId: null, attackCooldown: 0,
            attackAnimT: Infinity, justAttacked: false,
+           meleePending: false, meleePendingT: 0, meleePendingTarget: null, // delayed melee hit — see MELEE_IMPACT_FRAC
            isBoss: !!isBoss, slamCooldown: BOSS_SLAM_COOLDOWN * 0.5, chargeCooldown: BOSS_CHARGE_COOLDOWN * 0.5,
            chargeState: null };
 }
@@ -1129,17 +1465,29 @@ function buildLevelEnemies(level) {
   const maxHp = ENEMY_MAX_HP + (level - 1) * 35; // level 2 enemies noticeably tankier, per user request
   computeSpawnsForLevel(level).forEach(([x, z], i) => enemies.push(makeEnemy(i, x, z, maxHp)));
 }
+// Shared green/yellow/red HP color coding (per user request) — same
+// thresholds used for both enemy HP bars (below) and the player's own
+// HUD bar (see the #hpBarFill update in animate()).
+const HP_COLOR_HIGH = 0x33dd44, HP_COLOR_MID = 0xdddd33, HP_COLOR_LOW = 0xdd3333;
+function hpFracColor(frac) {
+  if (frac > 0.6) return HP_COLOR_HIGH;
+  if (frac > 0.25) return HP_COLOR_MID;
+  return HP_COLOR_LOW;
+}
 function updateEnemyVisual(e) {
   e.mesh.visible = e.alive;
   e.hpBar.scale.x = Math.max(0.001, e.hp / e.maxHp);
+  e.hpBar.material.color.setHex(hpFracColor(e.hp / e.maxHp));
   if (e.isGoblin) {
     for (const { mat, orig } of e.materials) {
-      if (e.wet > 0) mat.color.copy(orig).lerp(GOBLIN_WET_TINT, 0.55);
+      if (e.frozenT > 0) mat.color.copy(orig).lerp(GOBLIN_FROZEN_TINT, 0.7);
+      else if (e.burning > 0) mat.color.copy(orig).lerp(GOBLIN_BURN_TINT, 0.6);
+      else if (e.wet > 0) mat.color.copy(orig).lerp(GOBLIN_WET_TINT, 0.55);
       else mat.color.copy(orig);
     }
   } else {
-    e.skinMat.color.setHex(e.wet > 0 ? SKIN_WET : SKIN_COLOR);
-    e.clothMat.color.setHex(e.wet > 0 ? CLOTH_WET : CLOTH_COLOR);
+    e.skinMat.color.setHex(e.frozenT > 0 ? SKIN_FROZEN : e.burning > 0 ? SKIN_BURN : e.wet > 0 ? SKIN_WET : SKIN_COLOR);
+    e.clothMat.color.setHex(e.frozenT > 0 ? CLOTH_FROZEN : e.burning > 0 ? CLOTH_BURN : e.wet > 0 ? CLOTH_WET : CLOTH_COLOR);
   }
 }
 
@@ -1218,16 +1566,25 @@ function remapClipToSkeleton(clip, newPrefix) {
 // when the player clicks host/join.
 let mageAssetsReadyResolve;
 const mageAssetsReady = new Promise(res => { mageAssetsReadyResolve = res; });
-const loadProgress = {}; // url -> {loaded, total}, used only for the loading-screen progress bar
+// Progress is tracked as (files fully done + current file's own byte
+// fraction) / total files, NOT as summed-bytes-so-far / summed-totals-so-far.
+// The old summed approach went backwards: files load one at a time (see
+// loadMageAssets), so the moment a new ~120MB file starts, its full size
+// joins the "total" sum before any of its bytes have arrived, instantly
+// dropping the ratio (e.g. file 1 finishing at ~90% could drop to ~45% the
+// instant file 2's download started). Counting whole finished files instead
+// of raw bytes is monotonic by construction: completing a file increments
+// the done-count by exactly 1 while its own fraction resets from 1 to 0, so
+// the displayed percentage never dips.
+const LOAD_MAGE_FILE_COUNT = 6; // idle, idle_fire, water_mesh, walk, cast1, cast2 — see loadMageAssets
+let loadFilesDone = 0;
+let loadCurrentFileFrac = 0;
 // Byte progress only covers the download — capped at 90% so the bar/text
 // can never claim "100%" while the (synchronous, can take real time) FBX
 // parse and shader-compile warmup are still running afterward. Those get
 // their own explicit phase below instead of being folded into this math.
 function updateLoadProgressUI() {
-  const entries = Object.values(loadProgress);
-  const loaded = entries.reduce((s, p) => s + p.loaded, 0);
-  const total = entries.reduce((s, p) => s + (p.total || p.loaded), 0);
-  const pct = total > 0 ? Math.min(90, Math.round((loaded / total) * 90)) : 0;
+  const pct = Math.min(90, Math.round(((loadFilesDone + loadCurrentFileFrac) / LOAD_MAGE_FILE_COUNT) * 90));
   setLoadProgressUI(pct, `Загрузка моделей… ${pct}%`);
 }
 function setLoadProgressUI(pct, text) {
@@ -1236,19 +1593,30 @@ function setLoadProgressUI(pct, text) {
   if (bar) bar.style.width = pct + '%';
   if (textEl) textEl.textContent = text;
 }
-(function loadMageAssets() {
+(async function loadMageAssets() {
   const loader = new FBXLoader();
-  const loadOne = url => new Promise((resolve, reject) => loader.load(url, resolve,
-    xhr => { loadProgress[url] = { loaded: xhr.loaded, total: xhr.total }; updateLoadProgressUI(); },
+  const loadOne = url => new Promise((resolve, reject) => loader.load(url,
+    obj => { loadFilesDone++; loadCurrentFileFrac = 0; updateLoadProgressUI(); resolve(obj); },
+    xhr => { loadCurrentFileFrac = xhr.total ? xhr.loaded / xhr.total : 0; updateLoadProgressUI(); },
     reject));
-  Promise.all([
-    loadOne(MODEL_BASE + 'idle.fbx'),
-    loadOne(MODEL_BASE + 'idle_fire.fbx'),
-    loadOne(MODEL_BASE + 'water_mesh.fbx'),
-    loadOne(MODEL_BASE + 'walk.fbx'),
-    loadOne(MODEL_BASE + 'cast1.fbx'),
-    loadOne(MODEL_BASE + 'cast2.fbx'),
-  ]).then(async ([idleObj, fireIdleObj, waterMeshObj, walkObj, cast1Obj, cast2Obj]) => {
+  try {
+    // Loaded one at a time, not Promise.all-in-parallel — user-reported
+    // lag ("laggy while typing the name / right after pressing Host")
+    // traced to this: idle.fbx and idle_fire.fbx are ~116-120MB each, and
+    // FBXLoader's parse step is synchronous (blocks the main thread for
+    // real, noticeable time on files this big). Kicking off all 6 loads
+    // at once meant their downloads tended to finish in a cluster — two
+    // giant parses landing back-to-back right as the player was typing.
+    // Sequencing spreads those hitches out instead of stacking them.
+    // Total wall-clock load time goes up a bit (no more overlapped
+    // downloads); smoother beats faster-but-janky for this specific
+    // complaint.
+    const idleObj = await loadOne(MODEL_BASE + 'idle.fbx');
+    const fireIdleObj = await loadOne(MODEL_BASE + 'idle_fire.fbx');
+    const waterMeshObj = await loadOne(MODEL_BASE + 'water_mesh.fbx');
+    const walkObj = await loadOne(MODEL_BASE + 'walk.fbx');
+    const cast1Obj = await loadOne(MODEL_BASE + 'cast1.fbx');
+    const cast2Obj = await loadOne(MODEL_BASE + 'cast2.fbx');
     const walkClip = walkObj.animations[0];
     stripHorizontalRootMotion(walkClip);
     const castClip1 = cast1Obj.animations[0];
@@ -1290,7 +1658,9 @@ function setLoadProgressUI(pct, text) {
     // while the player was looking at the now-visible screen.
     await warmupAllElementPreviews();
     mageAssetsReadyResolve();
-  }).catch(err => console.error('Failed to load mage assets', err));
+  } catch (err) {
+    console.error('Failed to load mage assets', err);
+  }
 })();
 // Regular (non-boss) enemy model, replacing the earlier procedural
 // box/sphere goblin. goblin_run.fbx carries the mesh+skeleton+run
@@ -1316,6 +1686,167 @@ let goblinTemplate = null; // { root, runClip, attackClip }
     goblinTemplate = { root: runObj, runClip, attackClip: attackObj.animations[0] };
   }).catch(err => console.error('Failed to load goblin assets', err));
 })();
+
+// Per-player spawn/despawn portals, one model per element/class. Loaded
+// lazily per element (not all up front) since only some of the 4 blend
+// files exist at any given time during asset rollout — a missing file
+// just means that element's players spawn without a visual, not a crash.
+const MODEL_BASE_PORTAL = 'models/portal/';
+const PORTAL_ELEMENT_FILE = { Fire: 'fire', Water: 'water', Lightning: 'lightning' };
+// The room's shared portal shows the same look for every player
+// regardless of their own class (user request) — keyed by zone, not by
+// whoever happens to be looking at it. Only Lightning's asset exists so
+// far, so every zone defaults to it for now ("жёлтый" — yellow — for
+// level 1, per the request); add Fire/Water entries here once those
+// files land instead of changing anything else.
+const ZONE_PORTAL_ELEMENT = { 1: 'Lightning', 2: 'Lightning', hub: 'Lightning' };
+// Source model measured at ~6.7m across/2.2m tall at scale 1 (see README
+// Findings) — scaled down to a walk-through-sized ring. First pass (0.4)
+// read as too small, then 0.6 (1.5x) still too small — user asked for
+// 3x the ORIGINAL 0.4, i.e. 1.2, not 3x the already-bumped 0.6.
+const PORTAL_SCALE = 1.2;
+// Each of the model's 2 baked animations (a ground-disc spin + a rising
+// column, going by mesh names "Plane"/"Plane006") has only 2 keyframes
+// but an absurd native duration (~5791, likely an FBX export quirk, not
+// a real 5791-second clip) — compressed to a sane loop length instead of
+// trusting the source duration, same idea as ATTACK_ANIM_DURATION for
+// the goblin's attack clip.
+const PORTAL_SPIN_SECONDS = 4;
+const PORTAL_EXIT_RADIUS = 6.6; // how far a player walks from their own portal before it despawns — scaled up alongside PORTAL_SCALE so the despawn distance still clears the (now bigger) visible ring
+const portalTemplates = {}; // element -> Object3D template | null (confirmed missing/failed) — absent key means "not requested yet"
+const portalLoading = new Set(); // elements currently mid-fetch — separates "still loading" from "confirmed missing" (both read as portalTemplates[el] === undefined/null otherwise)
+const portalWaiters = {}; // element -> [callbacks], fired once when that element's load settles (success or fail)
+function ensurePortalTemplate(element) {
+  if (element in portalTemplates || portalLoading.has(element)) return; // already loaded, loading, or confirmed missing
+  const file = PORTAL_ELEMENT_FILE[element];
+  if (!file) { portalTemplates[element] = null; return; }
+  portalLoading.add(element);
+  const base = MODEL_BASE_PORTAL + 'portal_' + file;
+  const loader = new FBXLoader();
+  const texLoader = new THREE.TextureLoader();
+  const settle = result => {
+    portalTemplates[element] = result;
+    portalLoading.delete(element);
+    const waiters = portalWaiters[element];
+    if (waiters) { delete portalWaiters[element]; for (const cb of waiters) cb(); }
+  };
+  Promise.all([
+    new Promise((resolve, reject) => loader.load(base + '.fbx', resolve, undefined, reject)),
+    // Texture is a separate PNG, not embedded in the FBX (unlike the
+    // goblin's) — resolve(null) on failure instead of rejecting, so a
+    // missing/not-yet-placed texture still shows the untextured portal
+    // shape rather than losing the whole model.
+    new Promise(resolve => texLoader.load(base + '.png', resolve, undefined, () => resolve(null))),
+  ]).then(([obj, tex]) => {
+    if (tex) tex.colorSpace = THREE.SRGBColorSpace;
+    // Flicker on camera movement (user report, persisted after removing
+    // the old pentagram decal): the model is 2 separate meshes ("Plane"
+    // ground ring + "Plane006" standing column) that visually overlap,
+    // both transparent with depthWrite:false — three.js sorts transparent
+    // objects back-to-front by camera distance every frame, so as the
+    // camera moves their draw order can flip, and with depthWrite off
+    // that reorder is directly visible as flicker. Giving them fixed,
+    // distinct renderOrder values (copied onto every clone via
+    // Object3D#clone, which THREE.Object3D#copy carries renderOrder
+    // through) makes the draw order constant regardless of camera
+    // position — the actual fix, not just a workaround for one angle.
+    let meshIndex = 0;
+    obj.traverse(o => {
+      if (!o.isMesh) return;
+      o.renderOrder = meshIndex++;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) {
+        if (tex) {
+          m.map = tex;
+          // Same fix as the goblin's texture (see makeGoblinModel) — this
+          // dungeon's ambient light is deliberately dim, and a magic
+          // portal is supposed to glow on its own rather than depend on
+          // scene lighting to be visible at all. Using its own diffuse
+          // texture as the emissive source (instead of a flat tint) keeps
+          // the swirl/rune pattern readable instead of washing it into a
+          // silhouette.
+          if (m.emissive) {
+            m.emissive.setHex(0xffffff);
+            m.emissiveMap = tex;
+            m.emissiveIntensity = 1.0; // a portal should read as fully self-lit, unlike the goblin's subtler 0.35
+          }
+        }
+        m.transparent = true;
+        m.depthWrite = false; // glow-VFX plane — avoid it occluding itself/other FX oddly
+        m.side = THREE.DoubleSide;
+        m.needsUpdate = true;
+      }
+    });
+    settle(obj);
+  }).catch(err => {
+    console.warn(`Portal model for ${element} not available yet (expected ${base}.fbx)`, err);
+    settle(null);
+  });
+}
+// Creates one live instance at a world position from an ALREADY-LOADED
+// template. Each instance gets its own AnimationMixer bound to the clone
+// (clip tracks resolve by child name at bind time, same trick as the
+// skeletal models elsewhere in this file) so multiple players' portals
+// animate independently.
+function instantiatePortal(tmpl, x, z) {
+  const clone = tmpl.clone(true);
+  clone.scale.setScalar(PORTAL_SCALE);
+  // The ground-ring mesh sits at local y=0, i.e. exactly coplanar with
+  // the stone floor at world y=0 — genuine GPU depth-buffer z-fighting
+  // (not a draw-order issue; renderOrder alone didn't fix the reported
+  // flicker because this is a different cause: two near-identical depth
+  // values fighting for which one wins the depth test, flipping as the
+  // camera angle changes). Same fix the old pentagram decal already used
+  // for the same reason ("just above the floor to avoid z-fighting") —
+  // lift it a hair above the floor. Fixed world-unit offset, not scaled
+  // by PORTAL_SCALE, since it only needs to clear the floor's own depth,
+  // not track the portal's size.
+  clone.position.set(x, 0.03, z);
+  scene.add(clone);
+  const mixer = new THREE.AnimationMixer(clone);
+  for (const clip of tmpl.animations) {
+    const action = mixer.clipAction(clip);
+    action.setLoop(THREE.LoopRepeat, Infinity);
+    action.setDuration(PORTAL_SPIN_SECONDS);
+    action.play();
+  }
+  return { object: clone, mixer, x, z };
+}
+// Removes the old instance (if any) and requests a fresh one at (x, z) —
+// used both for first appearance and every respawn, since a respawn is
+// visually "a new portal opens here", not the same one following you.
+// `onReady(portalOrNull)` fires exactly once: synchronously if the
+// element's template is already cached, or later (once) if this is the
+// very first time that element's portal is needed this session — its
+// FBX/PNG are only fetched lazily, on first use, so the common case is
+// asking for a portal before that fetch has actually finished. Without
+// this deferred path, that first spawn would silently no-op forever
+// (this was an actual bug caught in testing, not a hypothetical).
+function refreshPortal(oldPortal, element, x, z, onReady) {
+  if (oldPortal) scene.remove(oldPortal.object);
+  ensurePortalTemplate(element);
+  if (element in portalTemplates) {
+    onReady(portalTemplates[element] ? instantiatePortal(portalTemplates[element], x, z) : null);
+    return;
+  }
+  (portalWaiters[element] || (portalWaiters[element] = [])).push(() => {
+    onReady(portalTemplates[element] ? instantiatePortal(portalTemplates[element], x, z) : null);
+  });
+}
+// Advances one portal's spin and despawns it once its owner has walked
+// PORTAL_EXIT_RADIUS away — shared by the local-player and remote-player
+// update code in animate(). Returns the (possibly now-null) portal so
+// callers can just reassign: `x.portal = updatePortal(x.portal, ownerX, ownerZ, dt)`.
+function updatePortal(portal, ownerX, ownerZ, dt) {
+  if (!portal) return null;
+  portal.mixer.update(dt);
+  const dx = ownerX - portal.x, dz = ownerZ - portal.z;
+  if (dx * dx + dz * dz > PORTAL_EXIT_RADIUS * PORTAL_EXIT_RADIUS) {
+    scene.remove(portal.object);
+    return null;
+  }
+  return portal;
+}
 async function warmupAllElementPreviews() {
   ensureElementPreviews(); // builds each card's scene/camera + the shared renderer if not already
   for (const el of ELEMENTS) {
@@ -1408,9 +1939,17 @@ function makeGoblinModel() {
         // visible in the dark, but this real texture goes near-black in
         // the same spots (confirmed by rendering it in-place: visible
         // right next to a torch, essentially invisible a few meters away).
-        // A small baseline emissive keeps it readable everywhere without
-        // washing out the texture detail near light sources.
-        if (c.emissive) c.emissive.setHex(0x554128);
+        // First attempt used a flat baseline emissive color (0x554128),
+        // but that overpowers the texture's own colors in the dark —
+        // the goblin read as a single muddy brown blob (user report:
+        // "colors are gone"). Using the diffuse map itself as the
+        // emissive source keeps the per-pixel skin/cloth color variation
+        // visible even at low light, instead of flattening it to one hue.
+        if (c.emissive && c.map) {
+          c.emissive.setHex(0xffffff);
+          c.emissiveMap = c.map;
+          c.emissiveIntensity = 0.35;
+        }
         return c;
       };
       if (Array.isArray(o.material)) o.material = o.material.map(cloneMat);
@@ -1465,7 +2004,7 @@ function makeRemotePlayer(name, element) {
   // handled per-frame in the main loop (it needs to check "are they moving
   // *right now*", not "were they moving when the cast started") — see the
   // "Remote player interpolation" block in animate().
-  const rp = { mesh: group, target: { p: [0, 0, 0], ry: 0 }, downed: false,
+  const rp = { mesh: group, target: { p: [0, 0, 0], ry: 0 }, downed: false, wasDowned: false,
            mixer: model.mixer, actions: model.actions, current: model.current, lastPos: new THREE.Vector3(),
            placed: false }; // placed=false: snap to the first real position instead of lerping from world origin
   return rp;
@@ -1493,29 +2032,18 @@ function ensureDebugOwnBody() {
   debugOwnBody = { mesh: group, mixer: model.mixer, actions: model.actions, current: model.current };
 }
 
-// Third attempt at a real-model FP viewmodel (see the long comment where
-// the placeholder arms are built for why the first two were reverted).
-// Parented to the camera exactly like the placeholder arms, at an offset
-// tuned so the head sits at/behind the camera (invisible, as it should be)
-// — same idea as the earlier attempts' tuning, just against this
-// project's current models instead of Ganfaul/Brady. This is a starting
-// guess, not re-verified visually this session (see README Findings) —
-// expect to retune `FP_VIEWMODEL_OFFSET` by eye.
-const FP_VIEWMODEL_OFFSET = new THREE.Vector3(0, -EYE_HEIGHT, 0.15);
-function ensureMyViewmodel() {
-  if (myViewmodel || !mageTemplate || !myElement) return;
-  const model = makeRemotePlayerModel(myElement);
-  model.object.position.copy(FP_VIEWMODEL_OFFSET);
-  camera.add(model.object);
-  myViewmodel = model;
-  model.object.traverse(o => { if (o.isBone && /RightHand$/i.test(o.name)) myViewmodelHandBone = o; });
-  if (myViewmodelHandBone) {
-    myViewmodelHandGlow = new THREE.PointLight(0xff6622, 0.6, 2);
-    myViewmodelHandBone.add(myViewmodelHandGlow);
-  }
-  fpArmL.visible = false;
-  fpArmR.visible = false;
-}
+// A real-model FP viewmodel was attempted three times across earlier
+// sessions (Ganfaul, Brady, then this project's own mage model) and
+// reverted every time — a full-body third-person asset glued to the
+// camera doesn't work as a viewmodel without a dedicated FPS rig/IK
+// (dominant shoulder pauldrons, foreshortened cast arms, or — the last
+// attempt — no separate arms mesh to isolate, meaning "hide everything
+// but the arms" needed a per-fragment shader clip and still left the
+// hand's screen position/cast timing out of sync with the placeholder
+// recoil/projectile-spawn code below). Decided to stop chasing this and
+// commit to the placeholder box/sphere arms as the actual solution
+// instead of a fallback — see makeFpArm() above and the recoil/
+// projectile-sync code in tryCast()/animate() below.
 
 // ============================================================
 // Class-selection screen previews — one small independent Three.js scene
@@ -2060,7 +2588,10 @@ function startHost() {
     conn.on('data', raw => onHostData(conn, JSON.parse(raw)));
     conn.on('close', () => {
       connections = connections.filter(c => c !== conn);
-      if (remotePlayers[conn.peer]) { scene.remove(remotePlayers[conn.peer].mesh); delete remotePlayers[conn.peer]; }
+      if (remotePlayers[conn.peer]) {
+        scene.remove(remotePlayers[conn.peer].mesh);
+        delete remotePlayers[conn.peer];
+      }
       combatLog(`${(peerMeta[conn.peer] || {}).name || '???'} отключился`);
       delete peerMeta[conn.peer];
       delete playerData[conn.peer];
@@ -2109,6 +2640,7 @@ function initPlayerData(pid, element) {
     element, hp: PLAYER_MAX_HP, respawnTimer: 0, gold: 0,
     spells: [cloneSpell(SCHOOL_SPELLS[element][0])],
     pendingPassive: null, passives: [], maxHpBonus: 0, dmgMult: 1, cooldownMult: 1,
+    timeSinceDamage: 0, // out-of-combat HP regen — see hostSimulate/hostDamagePlayer
   };
 }
 
@@ -2157,7 +2689,7 @@ function onClientData(msg) {
     for (const e of msg.enemies) {
       const local = enemies[e.id];
       if (!local) continue;
-      local.hp = e.hp; local.wet = e.wet; local.alive = e.alive; local.maxHp = e.maxHp || local.maxHp;
+      local.hp = e.hp; local.wet = e.wet; local.burning = e.burning; local.frozenT = e.frozenT || 0; local.alive = e.alive; local.maxHp = e.maxHp || local.maxHp;
       local.mesh.position.set(e.p[0], 0, e.p[2]);
       if (e.attacking) local.attackAnimT = 0;
       updateEnemyVisual(local);
@@ -2177,7 +2709,10 @@ function onClientData(msg) {
       remotePlayers[pid].downed = !!pdata.downed;
     }
     for (const pid of Object.keys(remotePlayers)) {
-      if (!msg.players[pid]) { scene.remove(remotePlayers[pid].mesh); delete remotePlayers[pid]; }
+      if (!msg.players[pid]) {
+        scene.remove(remotePlayers[pid].mesh);
+        delete remotePlayers[pid];
+      }
     }
   } else if (msg.t === 'fx') {
     handleFx(msg);
@@ -2283,12 +2818,26 @@ function hostResolveCast(msg, casterPid) {
 
   const levelMult = 1 + 0.12 * (spell.level - 1);
   let dmg = spell.dmg * levelMult * pd.dmgMult;
+  const baseDmg = dmg; // snapshot before any branch below scales `dmg` up (synergy etc.) — Lightning's extra strikes (see below) reuse this, not the synergy-boosted amount
 
   if (spell.school === 'Water') {
     // Плеск (tier 1) only — Волна (tier 2) doesn't fly at a target at all,
-    // see hostResolveNova().
-    e.wet = WET_DURATION_S;
-    hostLog(`${nameFor(casterPid)}: 💧 промок`);
+    // see hostResolveNova(). Extinguishes fire instead of soaking a target
+    // that's already burning (per user request) — the two statuses never
+    // coexist.
+    if (e.burning > 0) {
+      e.burning = 0; e.burnDps = 0; e.burnCasterPid = null;
+      updateEnemyVisual(e);
+      hostLog(`${nameFor(casterPid)}: 💧 потушил огонь`);
+    } else {
+      // Tier-1 mastery (see TIER1_MAX_LEVEL comment): longer soak per
+      // level, slow from level 2, a full 1s freeze at max level.
+      const isT1 = spell.tier === 1;
+      e.wet = WET_DURATION_S + (isT1 ? (spell.level - 1) * 2 : 0);
+      e.slowFactor = (isT1 && spell.level >= 2) ? 0.5 : 1;
+      if (isT1 && spell.level >= TIER1_MAX_LEVEL) e.frozenT = 1;
+      hostLog(`${nameFor(casterPid)}: 💧 промок` + (e.slowFactor < 1 ? ' и замедлен' : '') + (e.frozenT > 0 ? ', заморожен!' : ''));
+    }
   } else if (spell.school === 'Lightning' && e.wet > 0) {
     // ⭐ SYNERGY: Chain Shock — synergy_damage_multiplier applied here
     dmg *= SYNERGY_MULT;
@@ -2325,6 +2874,7 @@ function hostResolveCast(msg, casterPid) {
     for (const other of enemies) {
       if (other !== e && other.alive && other.mesh.position.distanceTo(e.mesh.position) < spell.splashRadius) {
         hostApplyDamage(other, dmg * spell.splashDmgMult, casterPid);
+        if (other.alive) applyBurn(other, dmg * spell.splashDmgMult, casterPid);
         splashed.push(other.id);
       }
     }
@@ -2342,14 +2892,36 @@ function hostResolveCast(msg, casterPid) {
     spawnImpactFx(hitCenter, spell.color);
   }
   hostApplyDamage(e, dmg, casterPid);
+  if (spell.school === 'Fire' && e.alive) applyBurn(e, dmg, casterPid); // every Fire hit ignites — both tiers
 
-  // Use-based leveling — only counts landed hits (per user request).
-  spell.useHits = (spell.useHits || 0) + 1;
-  const need = 5 * spell.level;
-  if (spell.useHits >= need) {
-    spell.useHits -= need;
-    spell.level++;
-    hostLog(`${nameFor(casterPid)}: ${spell.name} → ур. ${spell.level}`);
+  // Разряд (Lightning tier 1) mastery: extra strikes at level 2+ (2 hits at
+  // level 2, 3 at level 3 — max level replaces this whole instant-cast path
+  // with the continuous channel in tryCast(), so it never reaches this
+  // function with level >= TIER1_MAX_LEVEL). Each extra strike uses the
+  // plain baseDmg, not a synergy-boosted `dmg`, so multi-hit doesn't also
+  // multiply Chain Shock.
+  if (spell.school === 'Lightning' && spell.tier === 1 && spell.level >= 2 && spell.level < TIER1_MAX_LEVEL && e.alive) {
+    // Max level never reaches this — it's diverted to the channel in
+    // tryCast(), whose own repeated ticks already ARE its "multiple hits",
+    // so this would double-dip if it also applied here.
+    const extraHits = spell.level - 1; // level 2 -> 1 extra (2 total), level 3 -> 2 extra (3 total)
+    for (let i = 0; i < extraHits && e.alive; i++) hostApplyDamage(e, baseDmg, casterPid);
+  }
+
+  // Leveling: tier-1 spells only fill their XP bar here (capped, no
+  // auto-level — see TIER1_MAX_LEVEL comment); actually applying the level
+  // happens at the hub's mentor stand (hostLevelUpSpell). Tier-2 spells
+  // keep the old auto-instant-level-on-hit-count behavior, unchanged.
+  if (spell.tier === 1) {
+    if (spell.level < TIER1_MAX_LEVEL) spell.useHits = Math.min(TIER1_XP_PER_LEVEL, (spell.useHits || 0) + 1);
+  } else {
+    spell.useHits = (spell.useHits || 0) + 1;
+    const need = 5 * spell.level;
+    if (spell.useHits >= need) {
+      spell.useHits -= need;
+      spell.level++;
+      hostLog(`${nameFor(casterPid)}: ${spell.name} → ур. ${spell.level}`);
+    }
   }
 }
 
@@ -2372,7 +2944,8 @@ function hostResolveNova(msg, casterPid) {
   for (const e of enemies) {
     if (!e.alive) continue;
     if (e.mesh.position.distanceTo(center) < spell.selfNova) {
-      e.wet = WET_DURATION_S;
+      if (e.burning > 0) { e.burning = 0; e.burnDps = 0; e.burnCasterPid = null; updateEnemyVisual(e); }
+      else e.wet = WET_DURATION_S;
       hostApplyDamage(e, dmg, casterPid);
       hitCount++;
     }
@@ -2406,11 +2979,18 @@ function hostBuySpell(pid) {
 function hostLevelUpSpell(pid, idx) {
   const pd = playerData[pid];
   if (!pd || !pd.spells[idx]) return;
-  const cost = 30 * pd.spells[idx].level;
+  const spell = pd.spells[idx];
+  if (spell.tier === 1) {
+    // Gated behind the XP bar on top of gold — see TIER1_MAX_LEVEL comment.
+    if (spell.level >= TIER1_MAX_LEVEL) return;
+    if ((spell.useHits || 0) < TIER1_XP_PER_LEVEL) return;
+  }
+  const cost = 30 * spell.level;
   if (pd.gold < cost) return;
   pd.gold -= cost;
-  pd.spells[idx].level++;
-  hostLog(`${nameFor(pid)} прокачал ${pd.spells[idx].name} у наставника → ур. ${pd.spells[idx].level}`);
+  if (spell.tier === 1) spell.useHits -= TIER1_XP_PER_LEVEL;
+  spell.level++;
+  hostLog(`${nameFor(pid)} прокачал ${spell.name} у наставника → ур. ${spell.level}`);
 }
 function hostChoosePassive(pid, passiveId) {
   const pd = playerData[pid];
@@ -2427,6 +3007,7 @@ function hostDamagePlayer(pid, amount) {
   const pd = playerData[pid];
   if (!pd || pd.respawnTimer > 0) return;
   pd.hp = Math.max(0, pd.hp - amount);
+  pd.timeSinceDamage = 0; // any hit resets the out-of-combat regen delay — see hostSimulate
   if (pd.hp <= 0) {
     pd.respawnTimer = PLAYER_RESPAWN_S;
     hostLog(`${nameFor(pid)} повержен!`);
@@ -2455,6 +3036,7 @@ function startLevel(level) {
   setZoneLightsVisible(currentZone);
   levelActive = true;
   buildLevelEnemies(level);
+  resetZoneDoor(level); // fresh, closed portal-room door every time this level is (re)entered
   respawnLocalPlayer();
 }
 function startShopPhase() {
@@ -2484,6 +3066,14 @@ function hostSimulate(dt) {
     if (pd.respawnTimer > 0) {
       pd.respawnTimer -= dt;
       if (pd.respawnTimer <= 0) { pd.respawnTimer = 0; pd.hp = maxHpFor(pid); hostLog(`${nameFor(pid)} возродился`); }
+    } else {
+      // Out-of-combat HP regen (per user request): starts REGEN_DELAY_S
+      // after the last hit taken, so it never kicks in mid-fight.
+      pd.timeSinceDamage = (pd.timeSinceDamage || 0) + dt;
+      const maxHp = maxHpFor(pid);
+      if (pd.timeSinceDamage >= REGEN_DELAY_S && pd.hp < maxHp) {
+        pd.hp = Math.min(maxHp, pd.hp + REGEN_RATE_HP_S * dt);
+      }
     }
   }
 
@@ -2491,8 +3081,28 @@ function hostSimulate(dt) {
     const players = getPlayerPositions();
     for (const e of enemies) {
       if (!e.alive) continue;
-      if (e.wet > 0) { e.wet -= dt; if (e.wet <= 0) { e.wet = 0; updateEnemyVisual(e); } }
+      if (e.wet > 0) { e.wet -= dt; if (e.wet <= 0) { e.wet = 0; e.slowFactor = 1; updateEnemyVisual(e); } }
+      if (e.frozenT > 0) { e.frozenT -= dt; if (e.frozenT <= 0) { e.frozenT = 0; updateEnemyVisual(e); } }
+      if (e.burning > 0) {
+        hostApplyDamage(e, e.burnDps * dt, e.burnCasterPid);
+        if (e.alive) { e.burning -= dt; if (e.burning <= 0) { e.burning = 0; updateEnemyVisual(e); } }
+      }
       if (e.attackCooldown > 0) e.attackCooldown -= dt;
+      if (e.meleePending) {
+        e.meleePendingT += dt;
+        if (e.meleePendingT >= ATTACK_ANIM_DURATION * MELEE_IMPACT_FRAC) {
+          e.meleePending = false;
+          const target = players.find(p => p.pid === e.meleePendingTarget);
+          // Re-check range at the actual moment of impact, not when the
+          // swing started — a player who backs off after seeing the
+          // windup begin now makes the goblin whiff instead of eating a
+          // guaranteed hit (small buffer over ATTACK_RANGE so it doesn't
+          // feel like it whiffs from standing still).
+          if (target && !target.downed && target.pos.distanceTo(e.mesh.position) <= ATTACK_RANGE + 0.6) {
+            hostDamagePlayer(target.pid, MELEE_DAMAGE);
+          }
+        }
+      }
 
       // Boss (level 3): always aggro'd, no patrol/leash — alternates between a
       // point-blank slam AoE and a telegraphed charge dash instead of the
@@ -2540,6 +3150,10 @@ function hostSimulate(dt) {
         continue;
       }
 
+      // Плеск (Water tier-1) mastery, max level: a full 1s freeze — enemy
+      // skips target acquisition, movement and attacking entirely while
+      // e.frozenT > 0 (decremented above alongside wet/burning).
+      if (e.frozenT <= 0) {
       if (e.aiState === 'patrol') {
         const target = players.find(p => !p.downed && e.mesh.position.distanceTo(p.pos) < AGGRO_RADIUS);
         if (target) { e.aiState = 'chase'; e.targetPeerId = target.pid; }
@@ -2575,13 +3189,18 @@ function hostSimulate(dt) {
           const trueDist = target.pos.distanceTo(e.mesh.position); // STOP/ATTACK decisions use real distance to the player, not the waypoint
           if (trueDist > STOP_RANGE && moveDir.lengthSq() > 0.0025) {
             moveDir.normalize();
-            e.mesh.position.addScaledVector(moveDir, ENEMY_CHASE_SPEED * dt);
+            e.mesh.position.addScaledVector(moveDir, ENEMY_CHASE_SPEED * (e.slowFactor || 1) * dt);
           }
           if (trueDist <= ATTACK_RANGE && e.attackCooldown <= 0) {
             e.attackCooldown = MELEE_COOLDOWN;
             e.justAttacked = true;
             e.attackAnimT = 0; // host's own immediate visual; clients get it via 'attacking' flag
-            hostDamagePlayer(target.pid, MELEE_DAMAGE);
+            // Damage no longer lands here, instantly — see MELEE_IMPACT_FRAC
+            // and the meleePending tick above, which fires the actual hit
+            // partway through the windup instead.
+            e.meleePending = true;
+            e.meleePendingT = 0;
+            e.meleePendingTarget = target.pid;
           }
         }
       }
@@ -2607,9 +3226,10 @@ function hostSimulate(dt) {
         const dir = e.wanderTarget.clone().sub(e.mesh.position).setY(0);
         if (dir.lengthSq() > 0.0025) {
           dir.normalize();
-          e.mesh.position.addScaledVector(dir, ENEMY_WANDER_SPEED * dt);
+          e.mesh.position.addScaledVector(dir, ENEMY_WANDER_SPEED * (e.slowFactor || 1) * dt);
         }
       }
+      } // e.frozenT <= 0
 
       clampEnemyToArena(e, currentLevel); // keep enemies inside the walls and off the pillars — chase/wander above has no collision of its own
     }
@@ -2640,7 +3260,7 @@ function hostSimulate(dt) {
       party: { level: partyLevel, xp: partyXp },
       players: outPlayers,
       enemies: enemies.map(e => {
-        const out = { id: e.id, hp: e.hp, maxHp: e.maxHp, wet: e.wet, alive: e.alive, p: [e.mesh.position.x, 0, e.mesh.position.z], attacking: e.justAttacked };
+        const out = { id: e.id, hp: e.hp, maxHp: e.maxHp, wet: e.wet, burning: e.burning, frozenT: e.frozenT, alive: e.alive, p: [e.mesh.position.x, 0, e.mesh.position.z], attacking: e.justAttacked };
         e.justAttacked = false;
         return out;
       }),
@@ -2676,15 +3296,10 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyV') { // debug: third-person self-view, to eyeball animations without a 2nd browser
     debugThirdPerson = !debugThirdPerson;
     ensureDebugOwnBody();
-    // Only re-show the placeholder arms on toggling back to FP if there's
-    // no real viewmodel — otherwise they'd reappear on top of it (see
-    // ensureMyViewmodel, which hides them permanently once it builds).
-    if (!myViewmodel) {
-      fpArmL.visible = !debugThirdPerson;
-      fpArmR.visible = !debugThirdPerson;
-    }
-    if (myViewmodel) myViewmodel.object.visible = !debugThirdPerson;
-    if (debugOwnBody) debugOwnBody.mesh.visible = debugThirdPerson;
+    fpArmL.visible = !debugThirdPerson;
+    fpArmR.visible = !debugThirdPerson;
+    // debugOwnBody.mesh stays visible either way now — it's always kept
+    // live for the hub mirror's reflection, not just this debug view.
     debugEyeMarker.visible = debugThirdPerson;
     if (debugThirdPerson) {
       // Start the free orbit facing the same way the gameplay camera was
@@ -2707,14 +3322,33 @@ function switchSlot(next) {
   activeSlot = ((next % mySpells.length) + mySpells.length) % mySpells.length;
   updateSlotUI();
 }
+const SLOT_WHEEL_RADIUS = 50;
 function updateSlotUI() {
+  const n = mySpells.length;
   for (let i = 0; i < 3; i++) {
     const el = document.getElementById('slot' + i);
-    if (i < mySpells.length) {
+    if (i < n) {
       el.style.display = 'flex';
-      el.textContent = mySpells[i].icon;
+      document.getElementById('slotIcon' + i).textContent = mySpells[i].icon;
+      document.getElementById('slotLevel' + i).textContent = mySpells[i].level > 1 ? ('ур.' + mySpells[i].level) : '';
       el.title = `${mySpells[i].name} ур.${mySpells[i].level}`;
       el.classList.toggle('active', i === activeSlot);
+      // Wheel layout: each icon's angle is fixed (evenly spaced around the
+      // circle), only the OFFSET (which one currently sits at angle 0 = the
+      // top) changes on switchSlot() — recomputing every icon's translate()
+      // here, with the CSS `transition: transform` on .slot, is what makes
+      // it read as the wheel spinning (see the #slotWheel CSS comment).
+      const angle = (2 * Math.PI * (i - activeSlot)) / n;
+      const x = Math.sin(angle) * SLOT_WHEEL_RADIUS, y = -Math.cos(angle) * SLOT_WHEEL_RADIUS;
+      el.style.transform = `translate(${x}px, ${y}px)`;
+      // Cooldown overlay (per user request — the 2nd ability's cooldown
+      // previously had zero visual indication at all): a dark curtain
+      // rises up from the bottom as cooldowns[i] counts down, plus a
+      // numeric readout, both hidden once the ability's actually ready.
+      const spellCd = mySpells[i].cooldown;
+      const frac = spellCd > 0 ? Math.max(0, Math.min(1, cooldowns[i] / spellCd)) : 0;
+      document.getElementById('slotCd' + i).style.height = (frac * 100) + '%';
+      document.getElementById('slotCdText' + i).textContent = cooldowns[i] > 0.05 ? cooldowns[i].toFixed(1) : '';
     } else {
       el.style.display = 'none';
     }
@@ -2722,7 +3356,20 @@ function updateSlotUI() {
   if (mySpells[activeSlot]) {
     orbMat.color.setHex(mySpells[activeSlot].color);
     orbLight.color.setHex(mySpells[activeSlot].color);
-    if (myViewmodelHandGlow) myViewmodelHandGlow.color.setHex(mySpells[activeSlot].color);
+  }
+  // Tier-1 mastery XP bar — only relevant for the active slot's own spell,
+  // hidden once it's capped or if the active spell is tier 2 (which keeps
+  // the old gold-only leveling with no XP requirement — see TIER1_MAX_LEVEL).
+  const active = mySpells[activeSlot];
+  const masteryWrap = document.getElementById('masteryWrap');
+  if (active && active.tier === 1 && active.level < TIER1_MAX_LEVEL) {
+    masteryWrap.style.display = 'block';
+    const xp = active.useHits || 0;
+    document.getElementById('masteryLabel').textContent =
+      `${active.icon} мастерство: ${xp}/${TIER1_XP_PER_LEVEL}` + (xp >= TIER1_XP_PER_LEVEL ? ' — прокачать у наставника!' : '');
+    document.getElementById('masteryBarFill').style.width = Math.min(100, (xp / TIER1_XP_PER_LEVEL) * 100) + '%';
+  } else {
+    masteryWrap.style.display = 'none';
   }
 }
 
@@ -2808,20 +3455,78 @@ function handleFx(msg) {
   if (msg.pid && msg.pid !== myPeerId) triggerRemoteCast(msg.pid, msg.tier);
 }
 let castLockedUntil = 0; // performance.now() timestamp — no spell (any slot) can be cast again until the cast animation finishes
+// Разряд (Lightning tier-1) mastery, max level: replaces the normal instant
+// hitscan with a 3s continuous channel — re-aims and strikes on its own
+// tick instead of once. Movement is locked the same way a normal cast
+// windup already locks it (castLockedUntil — see the isCasting check in
+// animate()), but mouse look is untouched, so the player stands still and
+// can still aim. Each tick is its own independent 'cast' resolution (same
+// message shape tryCast's normal Lightning branch sends), just fired
+// LIGHTNING_CHANNEL_TICK_MS apart instead of once.
+const LIGHTNING_CHANNEL_DURATION_MS = 3000;
+const LIGHTNING_CHANNEL_TICK_MS = 250;
+function startLightningChannel(castSlot, spell) {
+  castLockedUntil = performance.now() + LIGHTNING_CHANNEL_DURATION_MS;
+  const castStartMsg = { t: 'fx', kind: 'castStart', pid: myPeerId, tier: spell.tier };
+  if (isHost) broadcast(castStartMsg);
+  else if (connections[0] && connections[0].open) connections[0].send(JSON.stringify(castStartMsg));
+  if (debugThirdPerson && debugOwnBody) triggerCast(debugOwnBody, spell.tier);
+  let elapsed = 0;
+  function tick() {
+    if (myDowned) return; // stop the channel early if downed mid-cast
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    const targets = enemies.filter(e => e.alive).flatMap(e => e.parts);
+    const hits = raycaster.intersectObjects(targets, false);
+    let to, enemyId = null;
+    if (hits.length > 0) { to = hits[0].point; enemyId = hits[0].object.userData.enemyId; }
+    else to = camera.position.clone().addScaledVector(raycaster.ray.direction, 40);
+    fpOrb.updateWorldMatrix(true, false);
+    const handWorld = fpOrb.getWorldPosition(new THREE.Vector3());
+    spawnLightningBolt(handWorld.toArray(), to.toArray(), spell.color, false);
+    const castMsg = { t: 'cast', spellIndex: castSlot, enemyId, from: handWorld.toArray(), to: to.toArray(), color: spell.color };
+    if (isHost) {
+      hostResolveCast(castMsg, myPeerId);
+      broadcast({ t: 'fx', kind: 'bolt', from: castMsg.from, to: castMsg.to, color: spell.color, pid: myPeerId, big: false });
+    } else if (connections[0] && connections[0].open) {
+      connections[0].send(JSON.stringify(castMsg));
+    }
+    elapsed += LIGHTNING_CHANNEL_TICK_MS;
+    if (elapsed < LIGHTNING_CHANNEL_DURATION_MS) setTimeout(tick, LIGHTNING_CHANNEL_TICK_MS);
+  }
+  tick();
+}
 function tryCast() {
   if (myDowned || mySpells.length === 0) return;
   if (cooldowns[activeSlot] > 0) return;
   if (performance.now() < castLockedUntil) return; // still mid cast-animation from the last cast
   const spell = mySpells[activeSlot];
   const castSlot = activeSlot; // snapshot — player might scroll to another slot before the delayed effect below fires
-  cooldowns[activeSlot] = spell.cooldown; // cooldownMult from passives is applied client-side for feel only
+  if (spell.school === 'Lightning' && spell.tier === 1 && spell.level >= TIER1_MAX_LEVEL) {
+    startLightningChannel(castSlot, spell);
+    return;
+  }
   const big = spell.tier === 2; // tier-2 spells read as visibly "bigger" tools, not just re-skinned numbers
   const castAnimDurationMs = big ? castAnimDurationMs2 : castAnimDurationMs1;
   const castFireDelayMs = big ? CAST_FIRE_DELAY_MS_T2 : CAST_FIRE_DELAY_MS_T1;
-  castLockedUntil = performance.now() + (castAnimDurationMs || spell.cooldown * 1000);
+  const castTotalMs = castAnimDurationMs || spell.cooldown * 1000;
+  castLockedUntil = performance.now() + castTotalMs;
+  // Cooldown now starts only once the cast itself actually finishes (per
+  // user request) — it used to start ticking the instant the cast began,
+  // running concurrently with the windup, so part of the cooldown was
+  // silently spent before the spell even went off. Re-casting during the
+  // windup is already blocked by castLockedUntil above regardless of
+  // cooldowns[] being 0 during that window.
+  setTimeout(() => { cooldowns[castSlot] = spell.cooldown; }, castTotalMs); // cooldownMult from passives is applied client-side for feel only
   fovKickT = 0; // fov_kick_response trigger (re-trigger resets, no stacking)
-  castRecoilT = 0; // local first-person arm recoil (placeholder-arms fallback only)
-  if (myViewmodel) triggerCast(myViewmodel, spell.tier); // real FP viewmodel's own cast gesture
+  // Local first-person arm recoil — peak (full "punch" extension) timed to
+  // land exactly at castFireDelayMs, when the projectile actually spawns
+  // below, so the visible arm motion and the shot leaving the hand always
+  // agree regardless of which spell tier (and therefore which delay) was
+  // cast. Falls back to a short guessed decay if castAnimDurationMs isn't
+  // set for some reason, just to avoid a zero-length/negative envelope.
+  castRecoilT = 0;
+  castRecoilPeakT = castFireDelayMs / 1000;
+  castRecoilEndT = Math.max(castRecoilPeakT + 0.05, (castAnimDurationMs || (castFireDelayMs + 200)) / 1000);
   if (debugThirdPerson && debugOwnBody) triggerCast(debugOwnBody, spell.tier); // debug self-view
 
   // Let everyone see the cast gesture start right away; the actual shot
@@ -2847,29 +3552,38 @@ function tryCast() {
     }
 
     raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-    // Spawn exactly where the caster's own hand actually is right now
-    // (rather than a hand-guessed fixed offset from the camera that didn't
-    // quite line up with the visible hand): the real viewmodel's own right
-    // hand bone if it's built, else the placeholder arm's orb — both are
-    // animated every frame by the code below, so either one matches
-    // whatever pose the arm is actually in at fire time. This fires from a
-    // setTimeout, not the render loop, so force a fresh matrix first.
-    // In the debug third-person view the camera orbits freely away from the
-    // player (see the free-orbit camera above), so the FP viewmodel's hand
-    // bone — parented to that camera — is no longer anywhere near the
-    // visible body and produced sparks spawning far behind/away from it.
-    // Use the visible debug body's own hand bone there instead.
-    const handSource = (debugThirdPerson && debugOwnBodyHandBone) ? debugOwnBodyHandBone : (myViewmodelHandBone || fpOrb);
+    // Spawn exactly where the caster's own hand actually is right now:
+    // `fpOrb` (the glowing orb on the placeholder right arm) is animated
+    // every frame by the recoil block in animate(), so its world position
+    // at this exact moment already reflects the just-synced recoil peak
+    // above. This fires from a setTimeout, not the render loop, so force
+    // a fresh matrix first. In the debug third-person view the camera
+    // orbits freely away from the player (see the free-orbit camera
+    // above), so the camera-parented placeholder arm is no longer
+    // anywhere near the visible body and would spawn sparks far behind/
+    // away from it — use the visible debug body's own hand bone there
+    // instead.
+    const handSource = (debugThirdPerson && debugOwnBodyHandBone) ? debugOwnBodyHandBone : fpOrb;
     handSource.updateWorldMatrix(true, false);
     const handWorld = handSource.getWorldPosition(new THREE.Vector3());
 
     if (spell.speed > 0) {
-      // Fire/Water: flying projectile — shooter owns hit detection on impact
+      // Fire/Water: flying projectile — shooter owns hit detection on impact.
+      // Искра mastery, max level: fires 3 projectiles in a small fan instead
+      // of 1 (see TIER1_MAX_LEVEL comment) — each is a fully independent
+      // projectile with its own hit detection, so this is a real 3x output
+      // increase, not a visual trick.
       const dir = raycaster.ray.direction.clone().normalize();
-      spawnProjectile(handWorld.toArray(), dir.toArray(), spell.color, spell.speed, true, castSlot, big);
-      const fxMsg = { t: 'fx', kind: 'proj', from: handWorld.toArray(), dir: dir.toArray(), color: spell.color, speed: spell.speed, pid: myPeerId, big };
-      if (isHost) broadcast(fxMsg);
-      else if (connections[0] && connections[0].open) connections[0].send(JSON.stringify(fxMsg));
+      const fireTriple = spell.school === 'Fire' && spell.tier === 1 && spell.level >= TIER1_MAX_LEVEL;
+      const dirs = fireTriple
+        ? [-0.06, 0, 0.06].map(a => dir.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), a))
+        : [dir];
+      for (const d of dirs) {
+        spawnProjectile(handWorld.toArray(), d.toArray(), spell.color, spell.speed, true, castSlot, big);
+        const fxMsg = { t: 'fx', kind: 'proj', from: handWorld.toArray(), dir: d.toArray(), color: spell.color, speed: spell.speed, pid: myPeerId, big };
+        if (isHost) broadcast(fxMsg);
+        else if (connections[0] && connections[0].open) connections[0].send(JSON.stringify(fxMsg));
+      }
       return;
     }
 
@@ -2924,6 +3638,7 @@ function animate() {
     }
     wasDowned = myDowned;
     document.getElementById('hpBarFill').style.width = Math.max(0, (myHp / myMaxHp) * 100) + '%';
+    document.getElementById('hpBarFill').style.background = '#' + hpFracColor(myHp / myMaxHp).toString(16).padStart(6, '0');
     document.getElementById('goldLabel').textContent = '💰 ' + myGold;
     document.getElementById('xpBarFill').style.width = Math.min(100, (partyXp / xpNeeded(partyLevel)) * 100) + '%';
     document.getElementById('hpLabelText').textContent = `HP · Ур.${partyLevel}`;
@@ -2932,6 +3647,34 @@ function animate() {
       document.getElementById('respawnT').textContent = remain;
     }
     updateShopStands();
+    updateDoorPrompt();
+    // Slide any just-opened door down into the floor (collision was
+    // already dropped the instant openZoneDoor() ran) and press/dim its
+    // button to match — both purely visual at this point.
+    for (const key in ZONE_DOORS) {
+      const d = ZONE_DOORS[key];
+      const restY = -PORTAL_ROOM_HEIGHT;
+      if (d.open && d.mesh.position.y > restY) d.mesh.position.y = Math.max(restY, d.mesh.position.y - dt * 2.5);
+      if (d.button) {
+        if (d.open && !d.button.pressed) {
+          // First frame after pressing: sink the button in and lock it
+          // dim+dark (grey, no more pulse) — a fired one-shot switch,
+          // not something to keep drawing the eye back to.
+          d.button.pressed = true;
+          d.button.btn.position.y = d.button.pressedY;
+          d.button.btn.material.color.setHex(0x555555);
+          d.button.btn.material.emissive.setHex(0x111111);
+          d.button.glow.intensity = 0;
+        } else if (!d.open) {
+          // Idle pulse while unpressed — the whole point is to catch the
+          // eye before it's ever used, same trick as the torches/pentagram
+          // elsewhere in this file.
+          const pulse = 0.7 + 0.3 * Math.sin(clock.elapsedTime * 3 + d.button.phase);
+          d.button.btn.material.emissiveIntensity = 1.0 + 0.6 * pulse;
+          d.button.glow.intensity = 1.2 + 0.8 * pulse;
+        }
+      }
+    }
 
     // Movement relative to yaw (locked while downed or mid-cast — a spell's
     // own cast animation already locks out re-casting via castLockedUntil;
@@ -2951,11 +3694,20 @@ function animate() {
     if (isMoving) playerPos.addScaledVector(move.normalize(), MOVE_SPEED * dt);
     {
       const z = ZONES[currentZone];
+      // Portal antechamber zones (see ZONE_PORTAL_ROOM) extend past the
+      // normal z.cz+z.half wall on the north side — widen the clamp's
+      // upper z bound just enough to actually reach that room, instead of
+      // the generic per-zone square clamp invisibly walling it off.
+      const room = ZONE_PORTAL_ROOM[currentZone];
+      const zMax = z.cz + z.half + (room ? room.depth + 1 : 0);
       playerPos.x = Math.max(z.cx - z.half, Math.min(z.cx + z.half, playerPos.x));
-      playerPos.z = Math.max(z.cz - z.half, Math.min(z.cz + z.half, playerPos.z));
+      playerPos.z = Math.max(z.cz - z.half, Math.min(zMax, playerPos.z));
       const maze = ZONE_MAZE[currentZone];
       if (maze) resolveCircleWallCollision(playerPos, PLAYER_RADIUS, maze.walls);
+      const doorWalls = ZONE_DOOR_WALLS[currentZone];
+      if (doorWalls) resolveCircleWallCollision(playerPos, PLAYER_RADIUS, doorWalls);
     }
+    zonePortal = updatePortal(zonePortal, playerPos.x, playerPos.z, dt);
 
     // Arrow-key look (touchpad fallback) — scales with the same shared `sensitivity`
     const keyLookSpeed = LOOK_KEY_SPEED * (sensitivity / BASE_SENSITIVITY);
@@ -2965,30 +3717,46 @@ function animate() {
     if (keys['ArrowDown'])  pitch -= keyLookSpeed * dt;
     pitch = Math.max(-PITCH_CLAMP, Math.min(PITCH_CLAMP, pitch));
 
-    // First-person arm animation: walk bob + cast recoil on the right arm
+    // First-person arm animation: walk bob + cast recoil on the right arm.
+    // Recoil envelope (ramp up to castRecoilPeakT, back down by
+    // castRecoilEndT) is set per-cast in tryCast() to match the actual
+    // spell tier's fire delay — full extension lands exactly when
+    // spawnProjectile() reads fpOrb's world position, so the shot always
+    // visibly leaves the hand at the point/time the arm is actually there.
     if (isMoving) walkBobT += dt * 9;
     const bobY = isMoving ? Math.sin(walkBobT) * 0.02 : 0;
     castRecoilT += dt;
     let recoilZ = 0;
-    if (castRecoilT < 0.08) recoilZ = 0.18 * (castRecoilT / 0.08);
-    else if (castRecoilT < 0.3) recoilZ = 0.18 * (1 - (castRecoilT - 0.08) / 0.22);
+    if (castRecoilT < castRecoilPeakT) recoilZ = CAST_RECOIL_PEAK * (castRecoilT / castRecoilPeakT);
+    else if (castRecoilT < castRecoilEndT) recoilZ = CAST_RECOIL_PEAK * (1 - (castRecoilT - castRecoilPeakT) / (castRecoilEndT - castRecoilPeakT));
     fpArmL.position.y = FP_ARM_BASE_Y + bobY;
     fpArmR.position.y = FP_ARM_BASE_Y - bobY;
     fpArmR.position.z = FP_ARM_BASE_Z + recoilZ;
-    // Real FP viewmodel: same idle/walk state machine as remote players and
-    // the debug third-person body, just parented to the camera so it has
-    // no world position of its own to update.
-    if (myViewmodel) advanceCharacterAnimation(myViewmodel, isMoving ? 'walk' : 'idle', dt);
     if (debugThirdPerson) debugEyeMarker.position.set(playerPos.x, EYE_HEIGHT, playerPos.z);
 
-    if (debugThirdPerson && debugOwnBody) {
-      // Debug third-person view (V key): same facing rule as remote
-      // players — face actual movement direction while moving (only one
-      // directional Running clip), otherwise face the camera/aim yaw.
+    // Keep a real world-space body for the local player positioned/animated
+    // every frame, not just while the V-key debug third-person view is on —
+    // the hub mirror (see makeMirror) needs something to actually reflect,
+    // since the FP camera itself never renders your own body. Visibility
+    // for the MAIN camera stays gated to debugThirdPerson as before (this
+    // used to be unconditionally visible, which put the real model's own
+    // hands/arms in view during normal FP play, stacked right on top of the
+    // placeholder FP arms — user-reported regression). The mirror instead
+    // forces this mesh visible only for its own internal reflection render
+    // pass, via the onBeforeRender/onAfterRender hooks set up in
+    // makeMirror(), then restores whatever this line set it to.
+    ensureDebugOwnBody();
+    if (debugOwnBody) {
+      // Same facing rule as remote players — face actual movement direction
+      // while moving (only one directional Running clip), otherwise face
+      // the camera/aim yaw.
       debugOwnBody.mesh.position.set(playerPos.x, 0, playerPos.z);
       debugOwnBody.mesh.rotation.y = isMoving ? Math.atan2(-move.x, -move.z) : yaw;
       advanceCharacterAnimation(debugOwnBody, isMoving ? 'walk' : 'idle', dt);
+      debugOwnBody.mesh.visible = debugThirdPerson;
+    }
 
+    if (debugThirdPerson) {
       // Free orbit around the character (decoupled from gameplay yaw/pitch
       // — see the mousemove handler) so the debug view can actually look at
       // the character from all sides instead of just trailing behind
@@ -3070,14 +3838,15 @@ function animate() {
       const t = rp.target;
       if (!rp.placed) {
         // First position update after joining/loading — appear exactly where
-        // they actually are (the spawn pentagram) instead of at the world
-        // origin and lerping visibly across the room to get there.
+        // they actually are (the room's shared spawn portal) instead of at
+        // the world origin and lerping visibly across the room to get there.
         rp.mesh.position.set(t.p[0], 0, t.p[2]);
         rp.lastPos.copy(rp.mesh.position);
         rp.placed = true;
       } else {
         rp.mesh.position.lerp(new THREE.Vector3(t.p[0], 0, t.p[2]), Math.min(1, dt * 12));
       }
+      rp.wasDowned = rp.downed;
       // Same fix as the (now-removed) local third-person body: there's only
       // one directional Running clip, so facing the sender's own aim yaw
       // while actually moving sideways/backward looked like skating. Derive
@@ -3105,7 +3874,6 @@ function animate() {
   }
 
   updateTorches(clock.elapsedTime);
-  updatePentagram(clock.elapsedTime);
 
   // FX decay
   for (let i = fx.length - 1; i >= 0; i--) {
@@ -3208,7 +3976,6 @@ function enterGame() {
   inGame = true;
   applyLightingMode();
   switchSlot(0);
-  ensureMyViewmodel();
   combatLog('Кликни по экрану, чтобы захватить мышь');
 }
 document.getElementById('btnHost').onclick = () => { readName(); startHost(); };
@@ -3277,7 +4044,7 @@ window.__debug = {
   get castAnimDurationMs1() { return castAnimDurationMs1; }, get castAnimDurationMs2() { return castAnimDurationMs2; },
   get castLockedUntil() { return castLockedUntil; }, camera,
   get debugThirdPerson() { return debugThirdPerson; }, get debugOwnBody() { return debugOwnBody; },
-  ensureDebugOwnBody, get myViewmodel() { return myViewmodel; }, ensureMyViewmodel, FP_VIEWMODEL_OFFSET,
+  ensureDebugOwnBody, get fpOrb() { return fpOrb; },
   getPlayerPositions, get fx() { return fx; },
   get zoneLights() { return zoneLights; }, setZoneLightsVisible, get flashLightPool() { return flashLightPool; },
   get ZONE_MAZE() { return ZONE_MAZE; }, mazeCellAt, mazeBFSPath, mazeCellCenter,
