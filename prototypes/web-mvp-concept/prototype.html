@@ -6,22 +6,29 @@
 <head>
 <meta charset="utf-8">
 <title>Covenant of Mages — Web MVP Prototype</title>
+<!-- Handwriting font for the skill-tree panel's "hand-drawn on paper" look (per user request) -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&display=swap" rel="stylesheet">
 <style>
   html, body { margin: 0; padding: 0; overflow: hidden; background: #0a0a0f; font-family: 'Segoe UI', sans-serif; }
   #hud { position: fixed; inset: 0; pointer-events: none; color: #eee; }
   #crosshair { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 20px; color: rgba(255,255,255,0.8); }
   /* Spell wheel (per user request, replaces the old horizontal row): a
      circular track anchored above the HP bar. Icons sit at fixed angles
-     around #slotWheel's center; switchSlot() recomputes each icon's own
-     translate(x,y) offset every time (see updateSlotUI()) so the CSS
-     `transition: transform` on .slot animates them smoothly around the
-     circle to their new spots — the whole thing *reads* as the wheel
-     spinning even though no element is actually rotated (deliberately:
-     rotating icons themselves would turn them upside down partway around,
-     so only their position moves, never their own orientation). */
+     around #slotWheel's center; updateSlotUI() recomputes each icon's own
+     translate(x,y) from sin/cos of a smoothed rotation value every frame
+     (see wheelRotTarget/wheelRotDisplay), so icons visibly ARC around the
+     ring as you switch — not a CSS transition on transform (that would
+     interpolate x/y in a straight line, cutting across the circle instead
+     of following it). Icons themselves never rotate, only their position —
+     rotating them too would turn them upside-down partway around. */
   #slotWheel { position: absolute; bottom: 118px; left: 50%; width: 4px; height: 4px; }
   #slotWheelTrack { position: absolute; left: 50%; top: 50%; width: 100px; height: 100px; margin: -50px 0 0 -50px; border: 2px solid rgba(255,255,255,0.18); border-radius: 50%; }
-  .slot { position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; margin: -28px 0 0 -28px; border: 2px solid #555; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 26px; background: rgba(15,10,25,0.75); transition: transform .3s ease, border-color .15s; overflow: hidden; }
+  /* No `transition` on transform here on purpose — updateSlotUI() now
+     drives the position every frame itself (smoothed, arcing motion via
+     sin/cos — see its comment), so a CSS transition on top would just add
+     a second, conflicting round of easing lag. */
+  .slot { position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; margin: -28px 0 0 -28px; border: 2px solid #555; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 26px; background: rgba(15,10,25,0.75); transition: border-color .15s; overflow: hidden; }
   .slot.active { border-color: #fff; box-shadow: 0 0 14px rgba(255,255,255,0.5); z-index: 2; }
   .slotLevel { position: absolute; top: 1px; right: 3px; font-size: 10px; font-weight: bold; text-shadow: 0 1px 2px #000; pointer-events: none; }
   .slotCd { position: absolute; left: 0; right: 0; bottom: 0; height: 0%; background: rgba(0,0,0,0.72); pointer-events: none; }
@@ -104,6 +111,24 @@
   .chatRow { display: flex; gap: 6px; margin-top: 6px; }
   .chatRow input { flex: 1; margin: 0 !important; }
   .chatRow button { width: auto !important; margin: 0 !important; padding: 10px 14px !important; }
+  /* Skill tree panel (per user request — "как рисунок на бумаге, где
+     появляются новые точки"): a hand-drawn-looking node diagram on a paper
+     background, opened at the mentor stand instead of the old single-line
+     buy/level prompt. Only owned nodes + the single next reachable node per
+     branch are ever drawn — new dots visibly appear on the page as you
+     actually invest, rather than showing a fully-drawn locked tree upfront. */
+  #skillTreeOverlay { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; background: rgba(10,8,14,0.75); }
+  #skillTreeOverlay.hidden { display: none; }
+  #skillTreePaper { position: relative; width: min(480px, 92vw); height: min(680px, 88vh); background: #ece3cf; background-image: radial-gradient(rgba(0,0,0,0.05) 1px, transparent 1px); background-size: 6px 6px; border-radius: 4px; box-shadow: 0 20px 60px rgba(0,0,0,0.6), inset 0 0 40px rgba(120,100,60,0.15); font-family: 'Caveat', cursive; color: #2a2016; }
+  #skillTreeTitle { position: absolute; top: 14px; left: 26px; font-size: 30px; font-weight: 700; color: #3a2c18; }
+  #skillTreeClose { position: absolute; top: 12px; right: 16px; width: 34px; height: 34px; border-radius: 50%; border: 2px solid #3a2c18; background: transparent; color: #3a2c18; font-family: 'Caveat', cursive; font-size: 20px; cursor: pointer; line-height: 1; }
+  #skillTreeClose:hover { background: rgba(0,0,0,0.08); }
+  #skillTreeSvg { width: 100%; height: 100%; }
+  .stNode { cursor: default; }
+  .stNode.available { cursor: pointer; }
+  .stNodeLabel { font-family: 'Caveat', cursive; font-size: 18px; fill: #2a2016; pointer-events: none; }
+  .stNodeCost { font-family: 'Caveat', cursive; font-size: 14px; fill: #6a5432; pointer-events: none; }
+  #skillTreeHint { position: absolute; bottom: 10px; left: 0; right: 0; text-align: center; font-size: 16px; color: #6a5432; }
 </style>
 </head>
 <body>
@@ -194,7 +219,6 @@
   <div id="crosshair">+</div>
   <!-- Shop is physical, not a modal: floating price tags over each stand in
        the hub room, plus a bottom prompt for whatever's in interact range. -->
-  <div id="labelBuy" class="worldLabel"></div>
   <div id="labelMentor" class="worldLabel"></div>
   <div id="labelPassiveA" class="worldLabel"></div>
   <div id="labelPassiveB" class="worldLabel"></div>
@@ -219,6 +243,18 @@
     <div id="masteryBarBg"><div id="masteryBarFill"></div></div>
   </div>
   <div id="downedOverlay">Вы повержены… возрождение через <span id="respawnT">4</span>с</div>
+</div>
+
+<!-- Skill tree panel — opened at the mentor stand (E), replaces the old
+     direct buy/level-up prompt. Sits outside #hud so its own pointer-events
+     aren't affected by #hud's pointer-events:none root. -->
+<div id="skillTreeOverlay" class="hidden">
+  <div id="skillTreePaper">
+    <div id="skillTreeTitle"></div>
+    <button id="skillTreeClose" type="button">✕</button>
+    <svg id="skillTreeSvg" viewBox="0 0 460 680"></svg>
+    <div id="skillTreeHint"></div>
+  </div>
 </div>
 
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
@@ -411,8 +447,11 @@ function xpNeeded(level) { return level * 100; }
 const SCHOOL_SPELLS = {
   Fire:      [ { name: 'Искра',          icon: '✨', school: 'Fire',      dmg: 15, cooldown: 0,   speed: 16, color: 0xff6622, tier: 1 },
                { name: 'Огненный шар',   icon: '💥', school: 'Fire',      dmg: 32, cooldown: 1.8, speed: 12, color: 0xff3300, tier: 2, splashRadius: 3.2, splashDmgMult: 0.55 } ],
-  Water:     [ { name: 'Плеск',          icon: '💧', school: 'Water',     dmg: 5,  cooldown: 0,   speed: 12, color: 0x3388ee, tier: 1 },
-               { name: 'Волна',          icon: '🌊', school: 'Water',     dmg: 13, cooldown: 2.2, speed: 0,  color: 0x2266cc, tier: 2, selfNova: 3.6 } ],
+  // Water dmg set to exactly 80% of Fire's own tier-for-tier (per user
+  // request — Water was landing as too weak a damage dealer even accounting
+  // for its Wet/slow/freeze utility): 15*0.8=12, 32*0.8=25.6.
+  Water:     [ { name: 'Плеск',          icon: '💧', school: 'Water',     dmg: 12,   cooldown: 0,   speed: 12, color: 0x3388ee, tier: 1 },
+               { name: 'Волна',          icon: '🌊', school: 'Water',     dmg: 25.6, cooldown: 2.2, speed: 0,  color: 0x2266cc, tier: 2, selfNova: 3.6 } ],
   Lightning: [ { name: 'Разряд',         icon: '⚡', school: 'Lightning', dmg: 12, cooldown: 0,   speed: 0,  color: 0xffe14d, tier: 1 },
                { name: 'Цепная молния',  icon: '🌩️', school: 'Lightning', dmg: 22, cooldown: 2.0, speed: 0,  color: 0xffdd00, tier: 2, autoChainRadius: 5, autoChainDmgMult: 0.6 } ],
 };
@@ -959,11 +998,22 @@ function clampEnemyToArena(e, zoneId) {
   }
   const maze = ZONE_MAZE[zoneId];
   if (maze) resolveCircleWallCollision(e.mesh.position, ENEMY_RADIUS, maze.walls);
+  // The spawn ward below used to guard a portal antechamber far from the
+  // enemy arena — a maze zone's spawn now sits INSIDE the maze itself (a
+  // single 7.3-unit-wide corridor cell, see buildMaze), so the old flat
+  // SPAWN_SAFE_RADIUS (6) is bigger than the corridor and permanently
+  // shoves any goblin back the instant it gets anywhere near the player's
+  // own spawn/portal — read by the player as "goblins only ever land a hit
+  // from point-blank" (they're fighting the ward, not actually closing the
+  // real distance) and "bumping into a portal that's already gone" (the
+  // ward has no visual of its own and outlives the portal mesh fading).
+  // Shrunk to fit one corridor's width for maze zones; untouched elsewhere.
+  const wardRadius = maze ? 2.5 : SPAWN_SAFE_RADIUS;
   const sdx = e.mesh.position.x - z.spawn[0], sdz = e.mesh.position.z - z.spawn[1];
   const sDistSq = sdx * sdx + sdz * sdz;
-  if (sDistSq < SPAWN_SAFE_RADIUS * SPAWN_SAFE_RADIUS) {
+  if (sDistSq < wardRadius * wardRadius) {
     const sDist = Math.sqrt(sDistSq) || 0.001; // guard against landing exactly on the point
-    const push = SPAWN_SAFE_RADIUS - sDist;
+    const push = wardRadius - sDist;
     e.mesh.position.x += (sdx / sDist) * push;
     e.mesh.position.z += (sdz / sDist) * push;
   }
@@ -1051,8 +1101,14 @@ function makeContinuePortal(x, z) {
   registerZoneLight('hub', light);
   return { group, ring, x, z, labelY: 2.5 };
 }
-const shopBuyStand = makeShopStand(ZONES.hub.cx - 3, ZONES.hub.cz - 3, 0xffaa33);
-const shopMentorStand = makeShopStand(ZONES.hub.cx + 3, ZONES.hub.cz - 3, 0x66aaff);
+// Single mentor stand handles the whole per-class skill tree now (per user
+// request — "убираем покупку через кристалл, теперь покупка у наставника"):
+// unlocking tier-2 used to be its own separate "buy" stand paid in gold: now
+// it's just the first node of the same tree, offered at THIS stand until
+// bought, after which the stand switches to leveling whichever spell is in
+// the active hotbar slot (existing tier-1 XP-gated / tier-2 gold-only
+// leveling — see updateShopStands' mentor block).
+const shopMentorStand = makeShopStand(ZONES.hub.cx, ZONES.hub.cz - 3, 0x66aaff);
 const shopPassiveStandA = makeShopStand(ZONES.hub.cx - 3, ZONES.hub.cz + 2, 0xcc88ff);
 const shopPassiveStandB = makeShopStand(ZONES.hub.cx + 3, ZONES.hub.cz + 2, 0xcc88ff);
 const shopContinuePortal = makeContinuePortal(ZONES.hub.cx, ZONES.hub.cz + 7);
@@ -1128,13 +1184,12 @@ function positionLabel(el, stand) {
 }
 let activeStandAction = null; // set by updateShopStands(), consumed by tryInteract()
 function updateShopStands() {
-  const labelBuy = document.getElementById('labelBuy');
   const labelMentor = document.getElementById('labelMentor');
   const labelPassiveA = document.getElementById('labelPassiveA');
   const labelPassiveB = document.getElementById('labelPassiveB');
   const labelContinue = document.getElementById('labelContinue');
   if (!shopPhase) {
-    labelBuy.style.display = labelMentor.style.display = labelPassiveA.style.display = labelPassiveB.style.display = labelContinue.style.display = 'none';
+    labelMentor.style.display = labelPassiveA.style.display = labelPassiveB.style.display = labelContinue.style.display = 'none';
     activeStandAction = null;
     return;
   }
@@ -1145,46 +1200,14 @@ function updateShopStands() {
   let nearest = null, nearestDist = INTERACT_RANGE;
   function consider(action, dist) { if (dist < nearestDist) { nearestDist = dist; nearest = action; } }
 
-  // Buy stand — next spell in your own school
-  const pool = myElement ? SCHOOL_SPELLS[myElement] : [];
-  const canBuy = mySpells.length < pool.length;
-  if (positionLabel(labelBuy, shopBuyStand)) {
-    labelBuy.style.display = 'block';
-    if (canBuy) {
-      const next = pool[mySpells.length];
-      const cost = SPELL2_COST;
-      labelBuy.textContent = `${next.icon} ${next.name} — ${cost}💰`;
-    } else {
-      labelBuy.textContent = 'Все заклинания школы открыты';
-    }
-  } else labelBuy.style.display = 'none';
-  if (canBuy) {
-    const next = pool[mySpells.length];
-    consider({ kind: 'buy', label: `Купить ${next.icon} ${next.name} — ${SPELL2_COST}💰` }, distXZ(playerPos, shopBuyStand));
-  }
-
-  // Mentor stand — levels up whichever spell is in your active hotbar slot
-  const activeSpell = mySpells[activeSlot];
-  // Tier-1 spells are now gated behind their own XP bar (fills from landed
-  // hits — see hostResolveCast's leveling block) on top of the gold cost;
-  // tier-2 spells keep the old gold-only leveling, no XP requirement.
-  const t1Maxed = activeSpell && activeSpell.tier === 1 && activeSpell.level >= TIER1_MAX_LEVEL;
-  const t1NotReady = activeSpell && activeSpell.tier === 1 && !t1Maxed && (activeSpell.useHits || 0) < TIER1_XP_PER_LEVEL;
-  if (activeSpell && positionLabel(labelMentor, shopMentorStand)) {
+  // Mentor stand — opens the full skill-tree panel (per user request,
+  // replaces the old single-line "buy tier-2 / level up active spell"
+  // prompt — see openSkillTree()/renderSkillTree() near the panel's HTML).
+  if (positionLabel(labelMentor, shopMentorStand)) {
     labelMentor.style.display = 'block';
-    if (t1Maxed) {
-      labelMentor.textContent = `${activeSpell.icon} ${activeSpell.name} — макс. уровень`;
-    } else if (t1NotReady) {
-      labelMentor.textContent = `${activeSpell.icon} ${activeSpell.name}: опыт ${activeSpell.useHits || 0}/${TIER1_XP_PER_LEVEL} (нужно попадать)`;
-    } else {
-      const cost = 30 * activeSpell.level;
-      labelMentor.textContent = `${activeSpell.icon} ${activeSpell.name} ур.${activeSpell.level}→${activeSpell.level + 1} — ${cost}💰`;
-    }
+    labelMentor.textContent = 'Дерево умений';
   } else labelMentor.style.display = 'none';
-  if (activeSpell && !t1Maxed && !t1NotReady) {
-    const cost = 30 * activeSpell.level;
-    consider({ kind: 'mentor', idx: activeSlot, label: `Прокачать ${activeSpell.icon} ${activeSpell.name} до ур.${activeSpell.level + 1} — ${cost}💰` }, distXZ(playerPos, shopMentorStand));
-  }
+  consider({ kind: 'tree', label: 'Открыть дерево умений' }, distXZ(playerPos, shopMentorStand));
 
   // Passive stands — only appear when a passive choice is pending (odd party levels)
   if (myPendingPassive) {
@@ -1215,35 +1238,17 @@ function updateShopStands() {
   consider({ kind: 'continue', label: 'Пройти дальше' }, distXZ(playerPos, shopContinuePortal));
 
   activeStandAction = nearest;
+  // Insufficient-funds feedback moved into the skill tree panel itself
+  // (flashSkillTreeError) now that gold checks happen per-node in there,
+  // not at the moment of a single world-prompt E-press — this prompt is
+  // just "what's nearby" again.
   const prompt = document.getElementById('interactPrompt');
-  if (performance.now() < fundsErrorUntil) {
-    // Overrides the normal prompt for a moment — see tryInteract()'s
-    // insufficient-funds check. Re-set every frame here so it survives
-    // updateShopStands() otherwise stomping the textContent 60x/sec.
-    prompt.textContent = '❌ Недостаточно золота!';
-    prompt.classList.add('error');
+  prompt.classList.remove('error');
+  if (nearest) {
+    prompt.innerHTML = `<b>[E]</b> ${nearest.label}`;
     prompt.style.display = 'block';
   } else {
-    prompt.classList.remove('error');
-    if (nearest) {
-      // Full item name + cost right in the prompt (not just a generic verb)
-      // so it's unambiguous which stand you're about to interact with —
-      // buy and mentor stands look similar enough to mix up otherwise.
-      prompt.innerHTML = `<b>[E]</b> ${nearest.label}`;
-      prompt.style.display = 'block';
-    } else {
-      prompt.style.display = 'none';
-    }
-  }
-}
-let fundsErrorUntil = 0;
-function flashInsufficientFunds(labelEl) {
-  fundsErrorUntil = performance.now() + 600;
-  if (labelEl) {
-    labelEl.classList.remove('error'); // restart the shake animation if it's already mid-flash
-    void labelEl.offsetWidth; // force reflow so re-adding the class replays the CSS animation
-    labelEl.classList.add('error');
-    setTimeout(() => labelEl.classList.remove('error'), 450);
+    prompt.style.display = 'none';
   }
 }
 let activeDoorAction = null; // set by updateDoorPrompt(), consumed here — same pattern as activeStandAction, separate state since doors matter outside the shop phase
@@ -1266,15 +1271,8 @@ function tryInteract() {
   if (activeDoorAction) { openZoneDoor(currentZone); return; }
   if (!shopPhase || !activeStandAction) return;
   const a = activeStandAction;
-  if (a.kind === 'buy') {
-    const pool = myElement ? SCHOOL_SPELLS[myElement] : [];
-    if (mySpells.length < pool.length && myGold < SPELL2_COST) { flashInsufficientFunds(document.getElementById('labelBuy')); return; }
-    requestBuySpell();
-  } else if (a.kind === 'mentor') {
-    const s = mySpells[a.idx];
-    const cost = s ? 30 * s.level : Infinity;
-    if (myGold < cost) { flashInsufficientFunds(document.getElementById('labelMentor')); return; }
-    requestLevelUpSpell(a.idx);
+  if (a.kind === 'tree') {
+    openSkillTree();
   } else if (a.kind === 'passive') requestChoosePassive(a.id);
   else if (a.kind === 'continue') requestReadyNext();
 }
@@ -1305,6 +1303,16 @@ const playerPos = new THREE.Vector3(0, 0, 10);
 const keys = {};
 let activeSlot = 0;
 const cooldowns = [0, 0, 0];
+// Spell wheel rotation state — see updateSlotUI(). `wheelRotTarget` jumps
+// by a fixed step the instant switchSlot() runs and is never wrapped/
+// clamped (so it always keeps accumulating in the direction you're
+// cycling); `wheelRotDisplay` eases toward it every frame, and each icon's
+// on-screen angle is computed FROM that smoothed value — sin/cos of the
+// actual swept angle, not a linear tween of x/y — so icons visibly arc
+// around the ring instead of cutting straight across it (a plain CSS
+// transition on translate() interpolates x and y independently in a
+// straight line, which is what this replaces).
+let wheelRotTarget = 0, wheelRotDisplay = 0, wheelLastT = performance.now();
 let fovKickT = Infinity; // fov_kick_response timer
 let myName = 'Маг';
 let myElement = null;
@@ -2905,7 +2913,24 @@ function hostResolveCast(msg, casterPid) {
     // tryCast(), whose own repeated ticks already ARE its "multiple hits",
     // so this would double-dip if it also applied here.
     const extraHits = spell.level - 1; // level 2 -> 1 extra (2 total), level 3 -> 2 extra (3 total)
-    for (let i = 0; i < extraHits && e.alive; i++) hostApplyDamage(e, baseDmg, casterPid);
+    const impactCenter = e.mesh.position.clone().add(new THREE.Vector3(0, 1.1, 0)).toArray();
+    for (let i = 0; i < extraHits && e.alive; i++) {
+      hostApplyDamage(e, baseDmg, casterPid);
+      // Extra strikes previously had zero visual feedback — the only sign
+      // of a double/triple hit was a bigger number on the HP bar, so it
+      // never actually read as "hits twice/thrice" (user-reported: "нет
+      // анимации двойного удара"). Reuse the exact same bolt (msg.from ->
+      // msg.to, always real values here — Lightning tier-1 is a hitscan,
+      // never routed through the null-from/to projectile-hit path) and
+      // impact-flash fx the primary strike already gets, staggered so
+      // each strike is visually distinct instead of landing all at once.
+      setTimeout(() => {
+        broadcast({ t: 'fx', kind: 'bolt', from: msg.from, to: msg.to, color: spell.color, pid: casterPid, big: false });
+        spawnLightningBolt(msg.from, msg.to, spell.color, false);
+        broadcast({ t: 'fx', kind: 'impact', pos: impactCenter, color: spell.color });
+        spawnImpactFx(new THREE.Vector3().fromArray(impactCenter), spell.color);
+      }, (i + 1) * 110);
+    }
   }
 
   // Leveling: tier-1 spells only fill their XP bar here (capped, no
@@ -3290,7 +3315,7 @@ addEventListener('keydown', e => {
   if (!inGame) return;
   if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
   if (e.code === 'Space') tryCast();
-  if (e.code === 'KeyQ') switchSlot(activeSlot + mySpells.length - 1); // backward cycle
+  if (e.code === 'KeyQ') switchSlot(1); // cycle spells — replaces the old Digit1/2/3 direct-select (per user request)
   if (e.code === 'KeyE') tryInteract(); // physical shop stands in the hub room
   if (e.code === 'KeyK') cheatKillAllEnemies(); // debug cheat
   if (e.code === 'KeyV') { // debug: third-person self-view, to eyeball animations without a 2nd browser
@@ -3311,20 +3336,31 @@ addEventListener('keydown', e => {
       if (document.pointerLockElement !== renderer.domElement) renderer.domElement.requestPointerLock();
     }
   }
-  if (e.code === 'Digit1') switchSlot(0);
-  if (e.code === 'Digit2') switchSlot(1);
-  if (e.code === 'Digit3') switchSlot(2);
 });
 addEventListener('keyup', e => keys[e.code] = false);
-addEventListener('wheel', e => { if (inGame) switchSlot(activeSlot + (e.deltaY > 0 ? 1 : mySpells.length - 1)); });
-function switchSlot(next) {
-  if (mySpells.length === 0) return;
-  activeSlot = ((next % mySpells.length) + mySpells.length) % mySpells.length;
+addEventListener('wheel', e => { if (inGame) switchSlot(e.deltaY > 0 ? 1 : -1); });
+// `delta` is a step count (+1/-1, normally), not an absolute slot index —
+// keeps the wheel always spinning the same direction you asked for,
+// including across the wrap from the last slot back to the first (an
+// absolute-index version would have to jump the long way around or snap).
+function switchSlot(delta) {
+  const n = mySpells.length;
+  if (n === 0) return;
+  activeSlot = ((activeSlot + delta) % n + n) % n;
+  wheelRotTarget += delta * (2 * Math.PI / n);
   updateSlotUI();
 }
 const SLOT_WHEEL_RADIUS = 50;
 function updateSlotUI() {
   const n = mySpells.length;
+  // Ease the displayed rotation toward wheelRotTarget every call (this runs
+  // every frame from animate()) — framerate-independent exponential
+  // smoothing, not a fixed-duration tween, so it stays smooth regardless of
+  // how often updateSlotUI() happens to get called.
+  const now = performance.now();
+  const dt = Math.min(0.1, (now - wheelLastT) / 1000);
+  wheelLastT = now;
+  wheelRotDisplay += (wheelRotTarget - wheelRotDisplay) * Math.min(1, dt * 14);
   for (let i = 0; i < 3; i++) {
     const el = document.getElementById('slot' + i);
     if (i < n) {
@@ -3334,11 +3370,13 @@ function updateSlotUI() {
       el.title = `${mySpells[i].name} ур.${mySpells[i].level}`;
       el.classList.toggle('active', i === activeSlot);
       // Wheel layout: each icon's angle is fixed (evenly spaced around the
-      // circle), only the OFFSET (which one currently sits at angle 0 = the
-      // top) changes on switchSlot() — recomputing every icon's translate()
-      // here, with the CSS `transition: transform` on .slot, is what makes
-      // it read as the wheel spinning (see the #slotWheel CSS comment).
-      const angle = (2 * Math.PI * (i - activeSlot)) / n;
+      // circle); only wheelRotDisplay (smoothed toward wheelRotTarget above)
+      // changes as you switch. Computing x/y from sin/cos of that swept
+      // angle every frame is what makes icons actually ARC around the ring
+      // instead of cutting a straight line across it (which is what a CSS
+      // transition on a raw translate(x,y) does — interpolates x and y
+      // independently, in a straight line, not along the circle).
+      const angle = (2 * Math.PI * i) / n - wheelRotDisplay;
       const x = Math.sin(angle) * SLOT_WHEEL_RADIUS, y = -Math.cos(angle) * SLOT_WHEEL_RADIUS;
       el.style.transform = `translate(${x}px, ${y}px)`;
       // Cooldown overlay (per user request — the 2nd ability's cooldown
@@ -3920,11 +3958,152 @@ function openShopUI() {
   // and pressing E to interact is regular gameplay, not a UI takeover.
 }
 function closeShopUI() {
-  for (const id of ['labelBuy', 'labelMentor', 'labelPassiveA', 'labelPassiveB', 'labelContinue']) {
+  for (const id of ['labelMentor', 'labelPassiveA', 'labelPassiveB', 'labelContinue']) {
     document.getElementById(id).style.display = 'none';
   }
   document.getElementById('interactPrompt').style.display = 'none';
   activeStandAction = null;
+  closeSkillTree(); // safety — don't leave the panel open across a level transition
+}
+
+// ============================================================
+// Skill tree panel (per user request — "как рисунок на бумаге, где
+// появляются новые точки"): opened at the mentor stand instead of the old
+// one-line buy/level prompt. Only owned nodes plus the single next
+// reachable node per branch (tier-1 chain, tier-2 chain) are ever drawn —
+// new dots appear as you actually invest, rather than a fully-drawn
+// locked tree shown upfront. tier-2's own chain is capped at
+// TIER1_MAX_LEVEL in this display for a tidy, finite-looking tree, even
+// though hostLevelUpSpell itself doesn't enforce that cap for tier-2 (only
+// tier-1 is capped there) — a display-only simplification, not a stealth
+// balance change.
+// ============================================================
+let skillTreeOpen = false;
+function openSkillTree() {
+  if (skillTreeOpen) return;
+  skillTreeOpen = true;
+  document.getElementById('skillTreeOverlay').classList.remove('hidden');
+  if (document.pointerLockElement) document.exitPointerLock(); // need the real cursor to click nodes
+  renderSkillTree();
+}
+function closeSkillTree() {
+  if (!skillTreeOpen) return;
+  skillTreeOpen = false;
+  document.getElementById('skillTreeOverlay').classList.add('hidden');
+  if (inGame) { try { renderer.domElement.requestPointerLock(); } catch (err) {} } // best-effort re-lock, same as the normal click-to-capture flow
+}
+document.getElementById('skillTreeClose').addEventListener('click', closeSkillTree);
+addEventListener('keydown', e => { if (skillTreeOpen && e.code === 'Escape') closeSkillTree(); });
+
+const ST_ELEMENT_RU = { Fire: 'Огонь', Water: 'Вода', Lightning: 'Молния' };
+// Vertical layout (per user request): root at the top, two columns growing
+// DOWN the page instead of two rows growing right — tier-1 on the left,
+// tier-2 on the right, both branching off the same root.
+const ST_COL_X = { t1: 140, t2: 320 };
+const ST_ROOT_X = 230, ST_ROOT_Y = 70, ST_ROW0_Y = 190, ST_STEP_Y = 135;
+function skillTreeNodeXY(col, rowIndex) { return [ST_COL_X[col], ST_ROW0_Y + rowIndex * ST_STEP_Y]; }
+function renderSkillTree() {
+  const svg = document.getElementById('skillTreeSvg');
+  const title = document.getElementById('skillTreeTitle');
+  const hint = document.getElementById('skillTreeHint');
+  const t1 = mySpells[0]; // tier-1 is always slot 0
+  if (!t1) return; // shouldn't happen once in-game, but bail cleanly rather than throw
+  const t2 = mySpells.find(s => s.tier === 2);
+  title.textContent = myElement ? `Древо: ${elementEmoji(myElement)} ${ST_ELEMENT_RU[myElement] || myElement}` : 'Древо умений';
+  hint.style.color = '';
+  hint.textContent = `💰 ${myGold}`;
+
+  const parts = [];
+  function line(x1, y1, x2, y2, dashed) {
+    parts.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#6a5432" stroke-width="2"${dashed ? ' stroke-dasharray="6 6"' : ''} opacity="0.55"/>`);
+  }
+  function node(x, y, state, icon, label, sub, action) {
+    const known = state === 'known';
+    const fill = known ? '#3a2c18' : '#ece3cf';
+    const stroke = known ? '#3a2c18' : state === 'available' ? '#8a6a2f' : '#b8a878';
+    const textColor = known ? '#ece3cf' : '#2a2016';
+    const dash = state === 'pending' ? ' stroke-dasharray="4 3"' : '';
+    const pulse = state === 'available' ? '<animate attributeName="r" values="24;27;24" dur="1.6s" repeatCount="indefinite"/>' : '';
+    parts.push(`<g class="stNode${state === 'available' ? ' available' : ''}"${action ? ` data-action="${action}"` : ''}>
+      <circle cx="${x}" cy="${y}" r="24" fill="${fill}" stroke="${stroke}" stroke-width="2.5"${dash}>${pulse}</circle>
+      <text x="${x}" y="${y + 8}" text-anchor="middle" font-size="22" fill="${textColor}">${icon}</text>
+      <text class="stNodeLabel" x="${x}" y="${y + 44}" text-anchor="middle">${label}</text>
+      ${sub ? `<text class="stNodeCost" x="${x}" y="${y + 60}" text-anchor="middle">${sub}</text>` : ''}
+    </g>`);
+  }
+
+  // Root — tier-1, level 1, always known.
+  node(ST_ROOT_X, ST_ROOT_Y, 'known', t1.icon, t1.name, 'ур.1');
+
+  // Tier-1 chain: known levels up to t1.level, plus exactly one next node.
+  let prevX = ST_ROOT_X, prevY = ST_ROOT_Y;
+  for (let lvl = 2; lvl <= Math.min(t1.level + 1, TIER1_MAX_LEVEL); lvl++) {
+    const [x, y] = skillTreeNodeXY('t1', lvl - 2);
+    line(prevX, prevY, x, y);
+    if (lvl <= t1.level) {
+      node(x, y, 'known', t1.icon, t1.name, `ур.${lvl}`);
+    } else {
+      const ready = (t1.useHits || 0) >= TIER1_XP_PER_LEVEL;
+      const cost = 30 * (lvl - 1);
+      node(x, y, ready ? 'available' : 'pending', t1.icon, `ур.${lvl}`,
+        ready ? `${cost}💰` : `опыт ${t1.useHits || 0}/${TIER1_XP_PER_LEVEL}`,
+        ready ? 'level:0' : null);
+    }
+    prevX = x; prevY = y;
+  }
+
+  // Tier-2 branch: just the unlock node until bought, then its own chain
+  // (mirrors the tier-1 chain above, no XP gate — gold only).
+  if (!t2) {
+    const [x, y] = skillTreeNodeXY('t2', 0);
+    line(ST_ROOT_X, ST_ROOT_Y, x, y, true);
+    const next = SCHOOL_SPELLS[myElement][1];
+    node(x, y, 'available', next.icon, next.name, `${SPELL2_COST}💰`, 'buy');
+  } else {
+    const [x0, y0] = skillTreeNodeXY('t2', 0);
+    line(ST_ROOT_X, ST_ROOT_Y, x0, y0, true);
+    node(x0, y0, 'known', t2.icon, t2.name, 'ур.1');
+    const t2idx = mySpells.indexOf(t2);
+    let prevX2 = x0, prevY2 = y0;
+    for (let lvl = 2; lvl <= Math.min(t2.level + 1, TIER1_MAX_LEVEL); lvl++) {
+      const [x, y] = skillTreeNodeXY('t2', lvl - 1);
+      line(prevX2, prevY2, x, y);
+      if (lvl <= t2.level) {
+        node(x, y, 'known', t2.icon, t2.name, `ур.${lvl}`);
+      } else {
+        const cost = 30 * (lvl - 1);
+        node(x, y, 'available', t2.icon, `ур.${lvl}`, `${cost}💰`, `level:${t2idx}`);
+      }
+      prevX2 = x; prevY2 = y;
+    }
+  }
+
+  svg.innerHTML = parts.join('');
+}
+document.getElementById('skillTreeSvg').addEventListener('click', e => {
+  const g = e.target.closest('.stNode.available');
+  if (!g) return;
+  const action = g.getAttribute('data-action');
+  if (action === 'buy') {
+    if (myGold < SPELL2_COST) { flashSkillTreeError(); return; }
+    requestBuySpell();
+  } else if (action && action.startsWith('level:')) {
+    const idx = parseInt(action.slice(6), 10);
+    const s = mySpells[idx];
+    const cost = s ? 30 * s.level : Infinity;
+    if (myGold < cost) { flashSkillTreeError(); return; }
+    requestLevelUpSpell(idx);
+  }
+  // The purchase is host-authoritative (may even be a network round-trip to
+  // a remote host); re-render shortly after so the panel doesn't look
+  // unresponsive on click instead of waiting for the next natural trigger.
+  setTimeout(renderSkillTree, 80);
+});
+function flashSkillTreeError() {
+  const hint = document.getElementById('skillTreeHint');
+  hint.textContent = '❌ Недостаточно золота!';
+  hint.style.color = '#a33';
+  setTimeout(renderSkillTree, 700);
 }
 
 // ============================================================
@@ -3975,7 +4154,12 @@ function enterGame() {
   document.getElementById('hud').style.display = 'block';
   inGame = true;
   applyLightingMode();
-  switchSlot(0);
+  // Reset to slot 0 with the wheel at rest — switchSlot() now takes a step
+  // delta, not an absolute index (see its own comment), so a hard reset is
+  // done directly instead of through it.
+  activeSlot = 0;
+  wheelRotTarget = wheelRotDisplay = 0;
+  updateSlotUI();
   combatLog('Кликни по экрану, чтобы захватить мышь');
 }
 document.getElementById('btnHost').onclick = () => { readName(); startHost(); };
@@ -4053,6 +4237,9 @@ window.__debug = {
   get myGold() { return myGold; },
   get mySpells() { return mySpells; },
   get activeStandAction() { return activeStandAction; },
+  hostBuySpell, hostLevelUpSpell, openSkillTree, closeSkillTree, renderSkillTree,
+  get skillTreeOpen() { return skillTreeOpen; },
+  get wheelRotTarget() { return wheelRotTarget; }, get wheelRotDisplay() { return wheelRotDisplay; },
 };
 </script>
 </body>

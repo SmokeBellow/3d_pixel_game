@@ -1679,3 +1679,162 @@ Real multi-client test pending.
     ring; with 3, the active one (highlighted ring) sits on top and the
     other two spread evenly to the lower-left/lower-right, with the level
     badge ("ур.2") visible on a leveled spell — matches the intended layout.
+
+- **3 more asks: spell-switch key, goblin maze AI, shop consolidation.**
+  1. **Spell switching moved to Q** (cycles forward through equipped
+     spells), replacing the old Digit1/2/3 direct-select hotkeys, which are
+     removed entirely. Mouse wheel still cycles too (untouched, wasn't
+     asked to change).
+  2. **"Goblins in the maze only ever land a hit from point-blank, and act
+     like they're bumping into a portal that's already gone" — real root
+     cause, not a vague AI complaint.** `clampEnemyToArena()` has a
+     `SPAWN_SAFE_RADIUS` (6 units) "ward" around each zone's spawn point
+     that always existed to keep enemies off freshly-spawned players — it
+     made sense back when levels 1/2's spawn sat in a separate portal
+     antechamber, far from the arena. Since the antechamber was removed
+     for level 2 (see the earlier "spawn back inside the maze" fix), that
+     zone's spawn point is now the maze's own center CELL — and a maze
+     corridor is only ~7.3 units wide (buildMaze's 8-unit cells, 0.7 wall
+     thickness), *narrower* than the old 6-unit ward radius. Any goblin
+     chasing a player anywhere near their own spawn/portal was permanently
+     shoved back by the ward before ever reaching `ATTACK_RANGE` (2.6) —
+     the player only ever saw a goblin connect on the rare frame the chase
+     and ward forces briefly cancelled out near the boundary, which reads
+     exactly like "only attacks point-blank." The ward itself has no
+     visual, so once the portal mesh fades (see `updatePortal`), the
+     invisible collision volume outlives it — "bumping into a portal
+     that's already gone" is literally that ward. Fixed by shrinking the
+     ward to 2.5 for maze zones only (fits inside one corridor, still
+     protects the immediate spawn point) — non-maze zones (1, 3) keep the
+     original 6, untouched, since they weren't reported as buggy. Verified
+     live via `window.__debug`: placed a goblin one maze cell (8 units)
+     from a player parked exactly on the level-2 spawn point and stepped
+     `hostSimulate` — with the old code it locked at exactly distance 6.00
+     and never landed a hit; after the fix it closes to 2.50 and
+     `meleePending` fires (confirmed on a fresh page load — the first
+     re-test looked unchanged because the browser had served a *stale
+     cached copy* of `prototype.html` despite navigating; a hard reload
+     with a cache-busting query string fixed that and the corrected
+     behavior showed up immediately — worth remembering for future
+     re-tests in this environment).
+  3. **Shop consolidated onto one stand — "нет наставника у которого
+     повышать умения" / per-class skill tree.** The separate "buy" stand
+     (unlock tier-2 for a flat `SPELL2_COST` gold) and "mentor" stand
+     (level up whichever spell is active, gold + tier-1 XP gate) are now
+     ONE stand: the mentor stand's first offer is "unlock tier-2"; once
+     bought, it switches to the existing leveling flow for the active
+     slot's spell. This reads as a simple 2-node tree per class (unlock →
+     level) instead of two separately-triggered mechanics. Removed the
+     `shopBuyStand` object, its `#labelBuy` UI element, and every
+     reference to it; `hostBuySpell`/`requestBuySpell`/the `'buy'`
+     interact-kind are all unchanged internally, just now triggered from
+     `shopMentorStand`'s proximity instead of a separate pedestal.
+     Re-centered the remaining stand at the hub's old buy-stand+mentor-
+     stand midpoint. Verified: `hostBuySpell`'s exact logic (gold check,
+     `cloneSpell`, push) replicated directly against the real
+     `playerData` object via `window.__debug` — correctly added Огненный
+     шар and deducted 20 gold. The live UI switch (label/prompt text
+     changing once tier-2 is bought) could NOT be verified end-to-end this
+     time: the sandboxed browser's `requestAnimationFrame` loop was
+     completely stalled for this test (confirmed — `myGold`'s client-side
+     mirror, which only updates inside the `animate()` loop, never synced
+     even after 1.5 real seconds), so the reactive HUD update itself is
+     code-review-verified only, not live-rendered. Needs a real playtest
+     to confirm the label actually flips after a purchase.
+
+- **3 more asks: true circular wheel motion, a real skill-tree panel, Water damage.**
+  1. **Spell wheel now actually arcs around the circle instead of cutting
+     straight across it.** Root cause of the previous "wheel" not reading
+     as a wheel: each icon's position was set via `translate(x,y)` with a
+     CSS `transition: transform`, and CSS transitions interpolate x and y
+     *independently and linearly* — for anything more than a small step
+     that's a straight chord through the circle, not an arc along its
+     circumference (most visible switching between opposite-ish icons).
+     Replaced with real per-frame motion: `switchSlot(delta)` now takes a
+     step count (not an absolute index) and bumps an unbounded
+     `wheelRotTarget` by `delta * 2π/n` — unbounded so cycling past the
+     wrap (last slot back to slot 0) keeps spinning the same direction
+     instead of snapping backward the "short way." `updateSlotUI()` (runs
+     every frame) eases a separate `wheelRotDisplay` toward that target
+     with framerate-independent exponential smoothing, and computes every
+     icon's x/y from `sin`/`cos` of the swept angle each frame — so the
+     points genuinely travel along the ring. Removed the now-redundant CSS
+     transition on `.slot`'s transform (would've just added a second,
+     conflicting easing pass on top of the new JS-driven one).
+     `switchSlot(0)` used to mean "select slot 0 directly" (absolute
+     index) — since the signature is now a delta, `enterGame()`'s reset
+     call was changed to set `activeSlot`/both wheel-rotation vars
+     directly instead. Verified via `window.__debug`: `switchSlot(1)` with
+     2 spells equipped moves `activeSlot` 0→1 and `wheelRotTarget` 0→π
+     (matches `2π/2`); screenshot before/after confirms the highlighted
+     icon and the HUD's "active spell" name both actually swapped.
+  2. **Skill tree is now a real panel, not a one-line prompt** — a
+     paper-textured overlay (`#skillTreeOverlay`), Caveat handwriting font
+     from Google Fonts, opened at the mentor stand (E → "Открыть дерево
+     умений") instead of the stand directly executing a purchase. Pointer
+     lock is released on open (`document.exitPointerLock()`, needed since
+     the panel takes real mouse clicks) and best-effort re-requested on
+     close. Two branches drawn from a root node (tier-1, always known):
+     the tier-1 chain (levels 2→3→4, XP + gold gated, same rules as
+     before) and the tier-2 chain (unlock, then levels 2→3→4, gold only).
+     Per the user's "как рисунок на бумаге, где появляются новые точки" —
+     only OWNED nodes plus exactly one "next" node per branch are ever
+     drawn; buying/leveling a node makes the next one appear, rather than
+     showing a fully-drawn, mostly-locked tree upfront. Node states: known
+     (filled ink circle), available (pulsing outline, clickable, shows
+     cost), pending (tier-1's next level before its XP bar is full — shown
+     but not yet clickable, with a live "опыт X/8" readout instead of a
+     cost). Clicking an available node calls the same
+     `requestBuySpell()`/`requestLevelUpSpell()` used before, unchanged —
+     only the UI trigger moved. tier-2's displayed chain is capped at
+     `TIER1_MAX_LEVEL` for a tidy, finite-looking tree; `hostLevelUpSpell`
+     itself doesn't enforce that cap for tier-2 (only tier-1's XP gate
+     does) — a display-only simplification, not a stealth balance change,
+     called out in a code comment. Removed the now-dead
+     `flashInsufficientFunds`/`fundsErrorUntil` (insufficient-funds
+     feedback moved into the panel itself as `flashSkillTreeError`).
+     Verified live end-to-end via `window.__debug` (screenshots at each
+     step): opened the panel in the hub, bought Искра ур.2 (gold
+     100→70, a fresh "ур.3, опыт 0/8" node appeared), then unlocked
+     Огненный шар (gold 70→50, its own "ур.2, 30💰" node appeared under
+     it) — matches the intended "points appear as you invest" behavior
+     exactly. Closed via the ✕ button, confirmed `skillTreeOpen` flips
+     back to `false`.
+  3. **Water damage set to exactly 80% of Fire's, tier-for-tier** (per user
+     request — Water read as too weak a damage dealer even counting its
+     Wet/slow/freeze utility): Плеск 5→12 (15×0.8), Волна 13→25.6
+     (32×0.8). Every other Water mechanic (Wet duration/slow/freeze
+     scaling by tier-1 level, extinguish-on-burning) reads `spell.dmg`
+     directly, so this change flows through automatically — no other code
+     touched.
+
+- **Skill tree turned vertical** (per user request). Was two horizontal
+  rows growing right from a left-side root; now the root sits at the top
+  and two columns (tier-1 left, tier-2 right) grow downward —
+  `skillTreeNodeXY(col, rowIndex)` instead of `(row, colIndex)`, panel/SVG
+  reflowed from a 720×460 landscape box to a 460×680 portrait one
+  (`#skillTreePaper` now `min(480px,92vw)` × `min(680px,88vh)`). Verified
+  live via screenshot: root "Искра ур.1" at top-center with lines dropping
+  down-left to the tier-1 next-node and down-right to the tier-2 unlock
+  node.
+
+- **Lightning multi-hit had zero visual feedback — "нет анимации двойного
+  удара на втором уровне".** The extra strikes added for Разряд level 2/3
+  (see the earlier tier-1 mastery entry) only ever called
+  `hostApplyDamage()` — a bigger number on the HP bar was the only sign
+  anything extra happened; no bolt, no flash, nothing distinguishing it
+  from a single hit that happened to deal more damage. Fixed by giving
+  each extra strike its own bolt + impact-flash fx, reusing the primary
+  strike's exact `from`/`to`/color (Lightning tier-1 is always a hitscan
+  with real `msg.from`/`msg.to` — never routed through the null-from/to
+  projectile-resolution path, so these are always valid here) and staggering
+  them 110ms apart so multiple strikes read as distinct hits instead of
+  landing simultaneously/invisibly. Broadcasts to other clients AND spawns
+  locally (mirrors the existing pattern the primary hit's own impact fx
+  already uses), so it shows correctly regardless of whether the caster is
+  the host or a remote client. Verified via `window.__debug`: called
+  `hostResolveCast` directly with a level-2 spell against a live enemy —
+  damage landed immediately (26.88, matching 12×1.12×2, the expected
+  2-hit level-2 total) and the `fx` array grew by 2 entries over the
+  following 300ms as the staggered `setTimeout` callbacks fired on
+  schedule.

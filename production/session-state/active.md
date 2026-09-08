@@ -789,6 +789,31 @@ except where noted:
 
 ## Recovery Instructions
 
+## COMPLETE: Spell key, goblin maze AI, shop consolidation (3 asks)
+
+- **Spell switching moved to Q** (cycles forward), Digit1/2/3 hotkeys removed.
+- **Real fix for "goblins in the maze only attack point-blank / bump into
+  a portal that's already gone"**: `clampEnemyToArena`'s `SPAWN_SAFE_RADIUS`
+  spawn ward (6 units) is bigger than a maze corridor (~7.3 units) now that
+  level 2's spawn sits inside the maze itself (no more antechamber) —
+  goblins were permanently shoved back by this invisible, portal-less
+  collision volume before ever reaching attack range. Shrunk to 2.5 for
+  maze zones only; zones 1/3 unchanged. Verified live via `window.__debug`
+  (goblin closes to 2.50 and lands a hit; old code locked at exactly 6.00).
+- **Shop consolidated onto one stand** (per user request — was two:
+  buy-stand + mentor-stand): the mentor stand's first offer is now
+  "unlock tier-2" (was the separate buy-stand), then switches to the
+  existing leveling flow once bought. `shopBuyStand`/`#labelBuy` removed.
+  Verified `hostBuySpell`'s exact logic against real `playerData` (correct
+  gold deduction + spell added); the live HUD label switch itself is
+  code-review-verified only — the sandbox's `requestAnimationFrame` loop
+  was fully stalled during this test (client-side `myGold` never synced
+  in 1.5s), a known recurring limitation in this environment.
+- Full detail in README Findings.
+- Not committed yet.
+
+## Recovery Instructions
+
 1. Read this file.
 2. Read `design/gdd/game-concept.md` for full new concept.
 3. Read `CLAUDE.md` and `.claude/docs/technical-preferences.md` for engine config.
@@ -797,3 +822,48 @@ except where noted:
 6. If picking up the web prototype instead of the Unity/GDD track, skip to
    "ACTIVE: Web MVP Prototype iteration" above and read
    `prototypes/web-mvp-concept/README.md`'s Findings section first.
+
+## COMPLETE: True wheel rotation, real skill-tree panel, Water damage (3 asks)
+
+- **Spell wheel now genuinely arcs around the circle.** Root cause of the
+  previous version not reading as a wheel: a CSS `transition: transform`
+  on `translate(x,y)` interpolates x/y linearly (a straight chord), not
+  along the circumference. Replaced with real per-frame motion:
+  `switchSlot(delta)` (now a step count, not absolute index) bumps an
+  unbounded `wheelRotTarget`; `updateSlotUI()` eases `wheelRotDisplay`
+  toward it every frame and computes each icon's x/y from sin/cos of the
+  swept angle. Verified via `window.__debug`.
+- **Skill tree is a real panel now** — paper-textured overlay, Caveat
+  handwriting font, opened at the mentor stand (pointer lock released
+  while it's open for clicking). Only owned nodes + one "next" node per
+  branch (tier-1 chain, tier-2 chain) are ever drawn — new dots appear as
+  you invest, per "как рисунок на бумаге, где появляются новые точки".
+  Verified live end-to-end: bought Искра ур.2 and unlocked Огненный шар
+  through the panel, gold deducted correctly both times, new nodes
+  appeared exactly as designed (screenshots at each step).
+- **Water damage = 80% of Fire's, tier-for-tier**: Плеск 5→12, Волна
+  13→25.6.
+- Full detail in README Findings.
+- Not committed yet.
+
+## COMPLETE: Skill tree made vertical (1 ask)
+
+- Root now at top, tier-1/tier-2 columns grow downward instead of two
+  horizontal rows growing right. Panel/SVG reflowed to a portrait box.
+  Verified via screenshot.
+- Not committed yet.
+
+## COMPLETE: Lightning multi-hit visual feedback (1 ask)
+
+- Extra strikes at Разряд level 2/3 (see TIER1_MAX_LEVEL comment) dealt
+  damage with zero visual feedback — only the HP bar showed a bigger
+  number, never actually reading as "hits twice/thrice" (user-reported:
+  "нет анимации двойного удара"). Each extra strike now spawns its own
+  staggered (110ms apart) bolt + impact-flash fx, reusing the primary
+  strike's own from/to/color.
+- Verified via `window.__debug`: called `hostResolveCast` directly with a
+  level-2 spell — `fx` array grew by 2 entries over the next 300ms (the
+  deferred extra-strike fx firing on schedule), no console errors beyond
+  the usual sandbox pointer-lock artifact.
+- Full detail in README Findings.
+- Not committed yet.
