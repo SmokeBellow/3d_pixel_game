@@ -469,6 +469,16 @@ const GOBLIN_BURN_TINT = new THREE.Color(0xff5522);
 const GOBLIN_FROZEN_TINT = new THREE.Color(0xaeeeff); // Плеск mastery max level — see TIER1_MAX_LEVEL comment
 const BOSS_HP = 900;
 const BOSS_SCALE = 2.1;
+// How close a player must get before a boss notices them at all — see the
+// "Boss: always aggro'd" comment in hostSimulate for why this is a one-way
+// wake flag, not the regular patrol/chase/leash system.
+const BOSS_WAKE_RADIUS = 13;
+// How long the boss's slam-jump position tween takes — matches the real
+// "Jump Attack" clip's own duration (3.8s) so the code-driven displacement
+// and the (root-motion-stripped) visual leap animation stay in sync; see
+// jumpState in hostSimulate and the comment on loadSkeletonAssets'
+// attackClip stripping.
+const BOSS_JUMP_DURATION = 3.8;
 const BOSS_SLAM_RADIUS = 4.5;
 const BOSS_SLAM_DAMAGE = 22;
 const BOSS_SLAM_COOLDOWN = 4.5;
@@ -2353,8 +2363,8 @@ function makeEnemy(id, x, z, maxHp, isBoss, bossKind) {
            aiState: 'patrol', targetPeerId: null, attackCooldown: 0,
            attackAnimT: Infinity, justAttacked: false,
            meleePending: false, meleePendingT: 0, meleePendingTarget: null, // delayed melee hit — see MELEE_IMPACT_FRAC
-           isBoss: !!isBoss, bossKind: bossKind || null,
-           slamCooldown: BOSS_SLAM_COOLDOWN * 0.5, chargeCooldown: BOSS_CHARGE_COOLDOWN * 0.5, chargeState: null,
+           isBoss: !!isBoss, bossKind: bossKind || null, awakened: false, // see BOSS_WAKE_RADIUS
+           slamCooldown: BOSS_SLAM_COOLDOWN * 0.5, chargeCooldown: BOSS_CHARGE_COOLDOWN * 0.5, chargeState: null, jumpState: null,
            // BOSS2 (level 6, bossKind==='ranged') state — see the hostSimulate boss branch.
            boltCooldown: BOSS2_BOLT_COOLDOWN * 0.5, spikeCooldown: BOSS2_SPIKE_COOLDOWN * 0.4, pendingSpikes: [] };
 }
@@ -2706,7 +2716,7 @@ const SKELETON_ROTATION_OFFSET = Math.PI; // same forward-facing correction ever
 // world-y 7.14 once BOSS_SCALE was applied — noticeably higher than the
 // box-boss's own ≈5.04 — so this was brought down to match proportion.
 const SKELETON_HP_BAR_Y = 2.7;
-let skeletonTemplate = null; // { root, walkClip, attackClip }
+let skeletonTemplate = null; // { root, walkClip, attackClip, idleClip }
 (function loadSkeletonAssets() {
   const loader = new FBXLoader();
   const texLoader = new THREE.TextureLoader();
@@ -2716,18 +2726,44 @@ let skeletonTemplate = null; // { root, walkClip, attackClip }
   Promise.all([
     loadOne(MODEL_BASE_SKELETON + 'skeleton_rigged.fbx'),
     loadOne(MODEL_BASE_SKELETON + 'jump_attack.fbx'),
+    loadOne(MODEL_BASE_SKELETON + 'idle.fbx'), // "Standing W/Briefcase Idle" — motion-only, same deal as jump_attack.fbx
     loadTex(TEX_BASE + 'BaseColor.png'),
     loadTex(TEX_BASE + 'Normal.png'),
     loadTex(TEX_BASE + 'Roughness.png'),
     loadTex(TEX_BASE + 'Metallic.png'),
     loadTex(TEX_BASE + 'Emissive.png'),
-  ]).then(([rootObj, attackObj, baseColor, normalMap, roughnessMap, metalnessMap, emissiveMap]) => {
+  ]).then(([rootObj, attackObj, idleObj, baseColor, normalMap, roughnessMap, metalnessMap, emissiveMap]) => {
     baseColor.colorSpace = THREE.SRGBColorSpace;
     emissiveMap.colorSpace = THREE.SRGBColorSpace;
     const walkClip = rootObj.animations[0]; // "Sad Walk", baked in by the Auto-Rigger download
     stripHorizontalRootMotion(walkClip);
+    // "Jump Attack" is a real leap — its Hips track travels ~516 raw units
+    // forward (measured: rangeZ ~[-2,514]), not a stationary swing.
+    // Originally left un-stripped so the leap would render "for free" via
+    // the normal scene graph — fixed the earlier foot-sliding bug, but
+    // traded it for a worse one (user report: "скелет постоянно
+    // телепортируется"): the leap only ever existed inside the skinned
+    // clone's LOCAL space, invisible to `e.mesh.position` (the boss's
+    // real, gameplay/AoE-authoritative position) — so every time the
+    // attack finished and crossfended back to idle (whose Hips sits back
+    // near origin), the ~7-unit visual offset snapped away instantly,
+    // reading as a teleport. And per the user's actual ask ("при прыжке
+    // он должен приземляться и оставаться в той точке, которая была
+    // целью на момент начала прыжка"), a purely-visual leap was never
+    // going to be right anyway — the boss needs to REALLY move there.
+    // Stripped again — same as walk/idle — and the real displacement is
+    // now driven by code instead (see `jumpState` in hostSimulate's boss
+    // branch): `e.mesh.position` itself tweens from the boss's position
+    // at cast time to the target's position at cast time, over this same
+    // clip's own duration, so the character's legs/pose still play the
+    // real leap animation but the net displacement is authoritative and
+    // matches exactly where gameplay says it should land — no drift
+    // either way, and it stays there once landed instead of ever
+    // snapping back.
     const attackClip = attackObj.animations[0]; // "Jump Attack", motion-only
     stripHorizontalRootMotion(attackClip);
+    const idleClip = idleObj.animations[0]; // "Standing Idle", motion-only — replaces the earlier frozen-walk-frame placeholder
+    stripHorizontalRootMotion(idleClip);
     // All 18 SK_* meshes share one material ("Material.001mat", confirmed
     // via inspector) — set the real PBR maps on it once here；
     // makeSkeletonBossModel() clones it per instance below, same as the
@@ -2741,7 +2777,7 @@ let skeletonTemplate = null; // { root, walkClip, attackClip }
         m.needsUpdate = true;
       }
     });
-    skeletonTemplate = { root: rootObj, walkClip, attackClip };
+    skeletonTemplate = { root: rootObj, walkClip, attackClip, idleClip };
     // Same shader-compile warmup fix as loadGoblinAssets above (see its
     // comment for the full lag-report backstory) — one real instance,
     // parked off-map, so this pays its first-render compile cost during
@@ -2767,19 +2803,14 @@ function makeSkeletonBossModel() {
     }
   });
   const mixer = new THREE.AnimationMixer(clone);
-  // No dedicated idle clip (only Sad Walk + Jump Attack exist) — freeze
-  // the walk clip's own first frame as a static idle pose, same trick
-  // makeGoblinModel() already uses for the identical reason.
-  const idleClip = tmpl.walkClip.clone();
   const actions = {
-    idle: mixer.clipAction(idleClip),
+    idle: mixer.clipAction(tmpl.idleClip),
     run: mixer.clipAction(tmpl.walkClip),
     attack: mixer.clipAction(tmpl.attackClip),
   };
   actions.attack.setLoop(THREE.LoopOnce, 1);
   actions.attack.clampWhenFinished = true;
-  actions.idle.play();
-  actions.idle.paused = true; // frozen at time 0 — see the idleClip comment above
+  actions.idle.play(); // real looping idle clip now — plays normally, not frozen
   mixer.update(0);
   return { object: clone, mixer, actions, current: 'idle' };
 }
@@ -4288,10 +4319,26 @@ function hostSimulate(dt) {
       // area-denial ground spikes.
       if (e.isBoss) {
         const alive = players.filter(p => !p.downed);
-        let target = null;
+        let nearest = null;
         for (const p of alive) {
-          if (!target || e.mesh.position.distanceTo(p.pos) < e.mesh.position.distanceTo(target.pos)) target = p;
+          if (!nearest || e.mesh.position.distanceTo(p.pos) < e.mesh.position.distanceTo(nearest.pos)) nearest = p;
         }
+        // Wake gate (per user request — don't aggro until a player is
+        // actually close, but explicitly NOT the same mechanic regular
+        // enemies use: no patrol/leash, no re-checking AGGRO_RADIUS every
+        // tick, no losing aggro if the target backs off). `awakened` is a
+        // one-way flip, set once and never cleared — once a boss notices
+        // someone it's engaged for the rest of the fight, same as the
+        // "Boss: always aggro'd" behavior below always was, just gated
+        // behind an initial proximity check instead of firing the instant
+        // the level loads. `target` stays null (every branch below already
+        // handles that — same `if (target)` guards the patrol/chase state
+        // machine already relies on) until the boss wakes.
+        if (!e.awakened && nearest && e.mesh.position.distanceTo(nearest.pos) <= BOSS_WAKE_RADIUS) {
+          e.awakened = true;
+          hostLog('💀 Босс пробудился!');
+        }
+        const target = e.awakened ? nearest : null;
         if (e.bossKind === 'ranged') {
           if (e.boltCooldown > 0) e.boltCooldown -= dt;
           if (e.spikeCooldown > 0) e.spikeCooldown -= dt;
@@ -4359,7 +4406,25 @@ function hostSimulate(dt) {
         }
         if (e.slamCooldown > 0) e.slamCooldown -= dt;
         if (e.chargeCooldown > 0) e.chargeCooldown -= dt;
-        if (target) {
+        // Slam-jump: a code-driven position tween, not animation root
+        // motion (see the long comment on attackClip in loadSkeletonAssets
+        // for why) — checked before `target` so an in-flight jump always
+        // finishes at its committed landing spot even if `target` itself
+        // goes stale (player disconnects, downed, etc.) mid-flight; per
+        // user request, the boss commits to wherever the target WAS at
+        // the moment it jumped, not a moving point it tracks in the air.
+        if (e.jumpState) {
+          const js = e.jumpState;
+          js.t += dt;
+          const frac = Math.min(1, js.t / js.duration);
+          e.mesh.position.lerpVectors(js.from, js.to, frac);
+          if (frac >= 1) {
+            let hitCount = 0;
+            for (const p of alive) if (e.mesh.position.distanceTo(p.pos) < BOSS_SLAM_RADIUS) { hostDamagePlayer(p.pid, BOSS_SLAM_DAMAGE); hitCount++; }
+            hostLog(`🌋 Босс приземлился и ударил волной! (задето: ${hitCount})`);
+            e.jumpState = null; // lands and stays here — no further drift until the next trigger
+          }
+        } else if (target) {
           if (e.chargeState) {
             e.mesh.position.addScaledVector(e.chargeState.dir, BOSS_CHARGE_SPEED * dt);
             e.chargeState.t += dt;
@@ -4377,9 +4442,10 @@ function hostSimulate(dt) {
             if (e.slamCooldown <= 0 && dist < BOSS_SLAM_RADIUS * 1.3) {
               e.slamCooldown = BOSS_SLAM_COOLDOWN;
               e.attackAnimT = 0; e.justAttacked = true;
-              let hitCount = 0;
-              for (const p of alive) if (e.mesh.position.distanceTo(p.pos) < BOSS_SLAM_RADIUS) { hostDamagePlayer(p.pid, BOSS_SLAM_DAMAGE); hitCount++; }
-              hostLog(`🌋 Босс: удар волной! (задето: ${hitCount})`);
+              // Commit NOW to wherever the target currently is — the jump
+              // itself doesn't home in on them once airborne.
+              e.jumpState = { from: e.mesh.position.clone(), to: target.pos.clone(), t: 0, duration: BOSS_JUMP_DURATION };
+              hostLog('🦴 Босс прыгает в атаку!');
             } else if (e.chargeCooldown <= 0 && dist > BOSS_SLAM_RADIUS) {
               e.chargeCooldown = BOSS_CHARGE_COOLDOWN;
               e.chargeState = { dir: toTarget.normalize(), t: 0, hit: new Set() };

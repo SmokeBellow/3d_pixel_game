@@ -1230,3 +1230,63 @@ old ring removed entirely.
   playtested for real pacing/camera-angle feel.
 - Full detail in README Findings.
 - Not committed yet.
+
+## COMPLETE: Real skeleton boss idle animation (1 ask)
+
+- Replaced the frozen-walk-frame placeholder idle with a real stock
+  Mixamo clip user supplied ("Standing W/Briefcase Idle.fbx") — motion-
+  only, retargets onto the already-rigged skeleton with zero extra code.
+  Copied in as `models/skeleton/idle.fbx`. `makeSkeletonBossModel()` now
+  just plays it normally instead of pausing a cloned walk-clip frame.
+- Verified live: idle action reports isRunning/not-paused with a real
+  14.3s clip duration; screenshot shows a natural standing pose.
+- Full detail in README Findings.
+- Not committed yet.
+
+## COMPLETE: Boss jump-attack slide fix + proximity-gated aggro (2 asks)
+
+- Jump Attack slide: root-caused via direct measurement — the clip is a
+  real ~7.2-world-unit leap, and stripping its root motion (same as walk/
+  idle correctly need) left the torso frozen while legs animated a full
+  leaping stride, i.e. classic foot-sliding. Fix: stopped stripping root
+  motion for the attack clip only — the Hips bone's own real translation
+  now carries the leap correctly via the normal scene graph, no manual
+  sync code needed. Slam's actual AoE origin/balance unchanged.
+  Verified live by sampling the actual `mixamorigHips` bone (not the
+  SkinnedMesh's own transform — mistakenly sampled that first, always
+  stays at bind pose regardless of animation) across real
+  `mixer.update(dt)` calls: Z-offset climbed smoothly to ≈7.16 units,
+  matching the calculated ≈7.2 prediction.
+- Aggro gate: bosses previously targeted the nearest player unconditionally
+  every tick regardless of distance ("Boss: always aggro'd, no patrol/
+  leash"). Added `BOSS_WAKE_RADIUS=13` + a one-way `e.awakened` flag,
+  checked only while false, never reset once true — explicitly not the
+  regular-enemy patrol/leash system per user's own caveat. Applies to
+  both bosses. Verified live via direct `hostSimulate(dt)` calls: stayed
+  asleep/motionless at 30 units, woke within `BOSS_WAKE_RADIUS`, stayed
+  awake and kept closing distance after the player retreated back to 30
+  units (no de-aggro).
+- Full detail in README Findings.
+- Not committed yet.
+
+## COMPLETE: Fixed boss teleporting — real jump-to-landing-point instead of visual-only root motion
+
+- The previous session's jump-slide fix (letting the Hips bone carry its
+  own root motion) traded sliding for teleporting: that motion only
+  existed inside the mesh's local space, invisible to `e.mesh.position`,
+  so it vanished (teleport) the instant the attack crossfaded back to
+  idle. User also specified the actual desired design: jump to and land
+  at the target's position at cast time, then stay there.
+  Re-stripped the attack clip's root motion and added `jumpState` (same
+  pattern as the existing `chargeState`): on trigger, captures `from`/`to`
+  (target's position AT THAT MOMENT, not tracked live) and tweens
+  `e.mesh.position` via `lerpVectors` over `BOSS_JUMP_DURATION=3.8`
+  (matches the clip's own length). AoE damage now resolves on landing,
+  not on cast. `jumpState` is checked before `target` so an in-flight
+  jump always finishes even if `target` goes stale mid-air.
+- Verified live via `hostSimulate(dt)`: landing position exactly matches
+  the captured target position; zero drift measured over 1 full second
+  after landing (previously this is where the teleport happened); combat
+  log shows the expected jump → land-and-hit sequence.
+- Full detail in README Findings.
+- Not committed yet.

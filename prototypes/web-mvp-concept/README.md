@@ -2729,3 +2729,134 @@ mirror-portal Findings entry.
   native ~3.8s duration feel right against `BOSS_SLAM_COOLDOWN`'s 4.5s),
   and whether `SKELETON_ROTATION_OFFSET`/scale hold up from other camera
   angles — worth a real playtest pass.
+
+- **Real idle animation, replacing the frozen-frame placeholder.** The
+  boss previously had no dedicated idle clip (only Sad Walk + Jump
+  Attack existed), so `makeSkeletonBossModel()` faked one by cloning the
+  walk clip and pausing it at frame 0 — same trick `makeGoblinModel()`
+  already used for the identical reason. User supplied a proper stock
+  Mixamo idle ("Standing W/Briefcase Idle.fbx") — confirmed motion-only
+  (no `Deformer` data) via the same binary-string check used for every
+  other clip this session, so it retargets onto the already-rigged
+  skeleton with zero extra code, exactly like `jump_attack.fbx` did.
+  Copied in as `models/skeleton/idle.fbx`, loaded alongside the other two
+  clips in `loadSkeletonAssets()`'s `Promise.all`, root motion stripped
+  the same way. `makeSkeletonBossModel()` now just plays it directly
+  (`actions.idle.play()`, no `.paused = true` hack) — the frozen-frame
+  code and its explanatory comment are gone entirely, not just papered
+  over. Verified live: `startLevel(3)` boss's idle action reports
+  `isRunning: true`, `paused: false`, a real 14.3s clip duration (not a
+  single frame); screenshot confirms a natural standing pose, distinct
+  from the previous frozen Sad-Walk-frame-0 stance.
+
+- **Fixed the skeleton boss's "sliding" during Jump Attack, and gated its
+  aggro behind proximity.** (1) "Почему босс скользит после прыжка?" —
+  root-caused by measuring the clip's Hips position track directly:
+  `jump_attack.fbx` is a real leap, not a stationary swing — its root
+  travels ~516 raw units (rangeZ ≈ [-2, 514], plus ~38 units of sideways
+  drift) over the clip's 3.8s, which at this model's scale
+  (`SKELETON_SCALE × BOSS_SCALE`) works out to ≈7.2 world units of actual
+  forward travel. `loadSkeletonAssets()` was stripping that root motion
+  the same way walk/idle correctly need it stripped (freezing the Hips
+  position track to its frame-0 value) — but unlike walk/idle, nothing
+  ever compensated by moving `e.mesh.position` to match, so the torso
+  stayed rooted in place while the legs/feet kept animating a full
+  leaping stride underneath it — a textbook foot-slide/skate artifact.
+  Fix: stopped stripping root motion for `attackClip` specifically (walk
+  and idle keep the strip — they're meant to be stationary loops).
+  Since the Hips bone lives inside the skinned clone, itself a child of
+  `group`, letting it carry its own real translation means the leap
+  renders in the correct world direction automatically via the normal
+  scene graph — no manual position-sync code needed, and hit detection
+  stays correct regardless since raycasts test the meshes' actual world
+  transforms either way. `e.mesh.position` (the slam AoE's actual origin)
+  is untouched, so the ability's balance/radius/cooldown didn't change —
+  only the character now visibly leaps forward as the animation always
+  intended, instead of sliding.
+  Verified live: sampled the actual `mixamorigHips` BONE's (not the
+  SkinnedMesh's own transform, which stays at bind pose regardless of
+  animation — a real mistake made and caught mid-verification, see below)
+  world position across the clip via real incremental `mixer.update(dt)`
+  calls — Z-offset from `e.mesh.position` climbed smoothly from 0 to
+  ≈7.16 world units and held near there through the clip's end, matching
+  the calculated ≈7.2 prediction almost exactly. (First verification
+  attempt sampled `SK_Spine`, a `SkinnedMesh`, and saw zero movement at
+  every timestamp — worth noting as a real gotcha: a `SkinnedMesh`'s own
+  `Object3D` transform is its static bind-pose placement; animated motion
+  only shows up on the actual `Bone` objects, not the mesh nodes skinned
+  to them.)
+
+  (2) "Сделай так, чтобы он не агрился на игроков пока они не подойдут
+  ближе (но не делай механику разагривания, как у обычных противников)"
+  — the boss AI comment literally said "Boss: always aggro'd, no patrol/
+  leash" — `target` was picked as the nearest player unconditionally,
+  every tick, regardless of distance, so a boss would start charging/
+  bolting the instant a level loaded even from across the whole arena.
+  Added `BOSS_WAKE_RADIUS = 13` and a one-way `e.awakened` flag (defaults
+  `false` in `makeEnemy`'s returned object) — checked once per tick only
+  while `false`; the instant any player comes within `BOSS_WAKE_RADIUS`
+  it flips to `true` permanently and is never reset. Explicitly NOT the
+  regular-enemy patrol/chase/leash system per the user's own caveat — no
+  `AGGRO_RADIUS` re-checking, no `PATROL_LEASH_RADIUS` give-up-and-return-
+  to-patrol, no losing aggro if the target retreats; once woken, `target`
+  reverts to the exact same unconditional-nearest-player selection the
+  boss already used, permanently, matching "always aggro'd" for the rest
+  of the fight. Applies to both bosses uniformly (the `if (e.isBoss)`
+  block wraps both the melee and `bossKind==='ranged'` branches) — no
+  reason given to treat them differently, and BOSS2's instant-kiting from
+  across the room had the exact same "aggros immediately" issue.
+  Verified live by calling `hostSimulate(dt)` directly (bypassing the
+  normal `isHost`-gated render loop, which this debug session doesn't run
+  under) with the player parked 30 units away: `awakened` stayed `false`
+  and the boss didn't move for a full simulated second. Moved the player
+  to 8 units (inside `BOSS_WAKE_RADIUS`): `awakened` flipped `true`
+  within a few ticks, plus the new `hostLog('💀 Босс пробудился!')`
+  visibly appeared in the in-game combat log. Moved the player back out
+  to 30 units and kept simulating: `awakened` stayed `true` and the boss
+  kept closing distance (measured real position movement over half a
+  simulated second) — confirming no de-aggro, exactly as asked.
+
+- **The jump-attack fix above traded one bug for a worse one — reverted
+  and re-fixed properly.** User report: "Скелет постоянно
+  телепортируется" — letting the Hips bone carry its own real root
+  motion (the previous fix) meant that ~7-unit leap only ever existed
+  inside the skinned clone's LOCAL space, completely invisible to
+  `e.mesh.position` (the boss's real, gameplay/AoE-authoritative
+  position, untouched the whole time). Every time the attack finished
+  and crossfaded back to idle — whose Hips sits back near origin — the
+  local offset vanished in the 0.1s blend, reading as a teleport. And per
+  the user's actual design ask in the same message ("при прыжке он
+  должен приземляться и оставаться в той точке, которая была целью на
+  момент начала прыжка") a purely-visual leap was never going to satisfy
+  this anyway — the real gameplay position needs to end up there, not
+  just the mesh's internal pose.
+  Real fix: stripped the attack clip's root motion again (back to how
+  walk/idle already need it — the clip's legs/pose still play the full
+  leap animation, just without silently translating the mesh internally)
+  and replaced the slam's old instant-damage-on-trigger with a
+  `jumpState` position tween, the same pattern `chargeState` already
+  uses for the charge dash: on trigger, capture `from` (boss's current
+  position) and `to` (**the target's position AT THAT MOMENT, not a
+  live-tracked reference** — per the user's explicit ask, the boss
+  commits to a fixed landing spot and doesn't home in on a moving target
+  mid-air) into `e.jumpState`, then `lerpVectors(from, to, t/duration)`
+  every tick over `BOSS_JUMP_DURATION=3.8` (matching the clip's own
+  duration so the leg animation and the code-driven displacement finish
+  together). The AoE damage check itself moved from cast-time to
+  landing-time (`frac>=1`) — the natural consequence of "jump attack" now
+  actually meaning the boss jumps to where the hit lands, rather than
+  hitting instantly from wherever it started. `jumpState` is checked
+  *before* `target` each tick specifically so an in-flight jump always
+  finishes at its committed spot even if `target` goes stale mid-air
+  (player disconnects, gets downed, etc.) — it doesn't need `target`
+  again once launched.
+  Verified live via direct `hostSimulate(dt)` calls: triggered a slam,
+  confirmed `jumpState.to` exactly matched the target's captured position
+  and `e.mesh.position` was correctly interpolated partway through
+  (matched the expected lerp fraction to 2 decimal places); ran it to
+  completion and confirmed the boss's final position exactly equals
+  `jumpState.to`; ran 60 more ticks (1 full simulated second) after
+  landing and measured **zero** further drift (`distanceTo` == 0.000) —
+  the teleport-on-crossfade is gone. Combat log shows the expected
+  "🦴 Босс прыгает в атаку!" → "🌋 Босс приземлился и ударил волной!
+  (задето: N)" sequence per attack, confirmed on screen.
