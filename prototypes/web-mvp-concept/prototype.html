@@ -222,7 +222,7 @@
   <div id="labelMentor" class="worldLabel"></div>
   <div id="labelPassiveA" class="worldLabel"></div>
   <div id="labelPassiveB" class="worldLabel"></div>
-  <div id="labelContinue" class="worldLabel"></div>
+  <div id="labelMirror" class="worldLabel"></div>
   <div id="interactPrompt"></div>
   <div id="status"></div>
   <div id="cheatHint">L — вкл/выкл затемнение · K — убить всех врагов · V — вид от 3-го лица (дебаг)</div>
@@ -397,16 +397,39 @@ const SYNERGY_MULT = 3;           // health-damage-system.md synergy_damage_mult
 // enemy arena itself — antechamber floor spans
 // [half+1, half+1+PORTAL_ROOM_DEPTH] past the zone center, so its middle
 // is half+1+PORTAL_ROOM_DEPTH/2. See buildPortalRoom() near buildArena().
+// Level 3 is the boss floor — the run ends there now (per user request,
+// finite levels, no more looping back to 1 — see the hub mirror-portal
+// system's "broken forever" comment near hubLevelMirrors). Declared up
+// here (moved from its old spot near startLevel/closeShopAndAdvance)
+// since the hub's level-portal mirrors, built further down but BEFORE
+// that code runs at module load, need it too.
+const MAX_LEVEL = 3;
+// Highest level number actually cleared so far this run — drives which
+// hub mirror is 'active' vs 'broken' (see hubLevelMirrors/updateHubMirrors).
+// Host-authoritative; synced to clients via the periodic 'state' broadcast.
+let highestClearedLevel = 0;
 const ZONES = {
   1:   { cx: 0, cz: 0,    half: ARENA_HALF, spawn: [0, ARENA_HALF + 1 + PORTAL_ROOM_DEPTH / 2] },
   2:   { cx: 0, cz: -70,  half: 28,         spawn: [0, -70 + 28 + 1 + PORTAL_ROOM_DEPTH / 2] },
   3:   { cx: 0, cz: -160, half: 15,         spawn: [0, -160 + 11] },
-  hub: { cx: 0, cz: -230, half: 10,         spawn: [0, -230] },
+  // half is a generous OUTER bound only (the real containment is the
+  // multi-room hub's own wall list — see ZONE_MAZE['hub'] near buildHubRoom);
+  // 25 comfortably covers every spoke room's farthest extent (24, the library).
+  hub: { cx: 0, cz: -230, half: 25,         spawn: [0, -230] },
 };
 let currentZone = 1; // 1 | 2 | 3 | 'hub' — drives clamping, spawn point and enemy placement
 function zoneOf(id) { return ZONES[id]; }
 const ZONE_PILLARS = {}; // filled by buildArena() per zone — absolute world [x,z] pairs
 const ELEMENT_COLOR = { Fire: 0xff5533, Water: 0x2288ee, Lightning: 0xffdd33 };
+// The room's shared portal shows the same look for every player
+// regardless of their own class (user request) — keyed by zone, not by
+// whoever happens to be looking at it. Only Lightning's asset exists so
+// far, so every zone defaults to it for now ("жёлтый" — yellow — for
+// level 1, per the request); add Fire/Water entries here once those
+// files land instead of changing anything else. Moved up here (from its
+// old spot near the portal asset loader) since the hub's level-portal
+// mirrors, built further down but before that code runs, need it too.
+const ZONE_PORTAL_ELEMENT = { 1: 'Lightning', 2: 'Lightning', hub: 'Lightning' };
 const XP_PER_KILL = 20;
 const GOLD_PER_KILL_MIN = 5, GOLD_PER_KILL_MAX = 15; // hostOnEnemyKilled rolls in this range
 const LEVEL1_ENEMY_COUNT = 5; // must match computeSpawnsForLevel(1)'s count
@@ -1050,25 +1073,498 @@ buildMaze(2, ZONES[2].cx, ZONES[2].cz, 7, 7, 8, 0.7, 4);
 }
 // Level 3 — open boss arena, just corner pillars so the boss has room to charge.
 buildArena(3, ZONES[3].cx, ZONES[3].cz, ZONES[3].half, [[-10, -10], [10, -10], [-10, 10], [10, 10]]);
-// Hub — the progression room between sessions. Distinct warm mortar tone so
-// it reads as a different place, not just another dungeon floor. No enemies
-// ever spawn here (see buildLevelEnemies) so no maze/pillars are needed.
-buildArena('hub', ZONES.hub.cx, ZONES.hub.cz, ZONES.hub.half, [], 0x2a1a12);
-// Extra warm ambient glow so the hub reads as a clearly different, calmer
-// place than the dungeon's cold torchlit dark — not just a reused arena
-// with a different mortar color.
-{
-  const hubGlow = new THREE.PointLight(0xffaa55, 1.1, ZONES.hub.half * 2.5, 1.5);
-  hubGlow.position.set(ZONES.hub.cx, 3.5, ZONES.hub.cz);
-  scene.add(hubGlow);
-  registerZoneLight('hub', hubGlow);
+// ============================================================
+// Hub — a full multi-room waystation between dungeon runs (per user
+// request — "Хогвартс / библиотека / Круглый стол"), not one square room.
+// A "+"-shaped complex: Main Hall in the middle, four spokes off it —
+// Library (mentor, north), and one themed room per school — Fire (west),
+// Water (east), Lightning (south) — each linked by a short corridor.
+//
+//              [Library]
+//                 |
+// [Fire] —— [Main Hall] —— [Water]
+//                 |
+//            [Lightning]
+//
+// No enemies ever spawn in the hub (see buildLevelEnemies), so this only
+// needs PLAYER collision, not the full maze/pillar apparatus that levels
+// use — the wall list built here is stashed straight into
+// ZONE_MAZE['hub'].walls purely so the movement code's existing
+// `if (maze) resolveCircleWallCollision(...)` (already wired for any zone
+// with a ZONE_MAZE entry) picks it up for free.
+// ============================================================
+const HUB_H = 5.5; // taller than the dungeon's 4-unit walls — reads as a real hall
+const HUB_DOOR = 4;
+const HUB_CORRIDOR_LEN = 3;
+const HCX = ZONES.hub.cx, HCZ = ZONES.hub.cz;
+const hubWalls = [];
+function hubWallSeg(x, z, w, d, wallHex, mortarHex) {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, HUB_H, d), stoneMaterial(wallHex, mortarHex, Math.max(w, d) / 3, HUB_H / 3));
+  mesh.position.set(x, HUB_H / 2, z);
+  scene.add(mesh);
+  hubWalls.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2 });
 }
+// Wooden floor (per user request — "деревянные полы", makes the hub read
+// as lived-in/cozy instead of bare dungeon stone). Same canvas-texture
+// approach as the stone/dirt/bookshelf textures elsewhere: vertical planks
+// with a subtle per-plank shade variance and a couple of curved grain
+// lines each, tiled across the room.
+function makeWoodTexture(baseHex) {
+  const size = 256;
+  const cnv = document.createElement('canvas');
+  cnv.width = cnv.height = size;
+  const ctx = cnv.getContext('2d');
+  const base = new THREE.Color(baseHex);
+  ctx.fillStyle = '#' + base.getHexString();
+  ctx.fillRect(0, 0, size, size);
+  const planks = 6, plankW = size / planks;
+  for (let i = 0; i < planks; i++) {
+    const shade = 0.82 + Math.random() * 0.32;
+    ctx.fillStyle = '#' + base.clone().multiplyScalar(shade).getHexString();
+    ctx.fillRect(i * plankW, 0, plankW - 2, size);
+    for (let n = 0; n < 5; n++) {
+      ctx.strokeStyle = `rgba(0,0,0,${(0.05 + Math.random() * 0.1).toFixed(2)})`;
+      const gy = Math.random() * size;
+      ctx.beginPath();
+      ctx.moveTo(i * plankW + 2, gy);
+      ctx.bezierCurveTo(i * plankW + plankW * 0.3, gy + 10, i * plankW + plankW * 0.7, gy - 10, i * plankW + plankW - 2, gy);
+      ctx.stroke();
+    }
+  }
+  const tex = new THREE.CanvasTexture(cnv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.NearestFilter;
+  return tex;
+}
+function woodMaterial(baseHex, repeatX, repeatY) {
+  const tex = makeWoodTexture(baseHex);
+  tex.repeat.set(repeatX, repeatY);
+  return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 });
+}
+function hubFloorCeil(cx, cz, w, d, floorHex, mortarHex) {
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(w, d), woodMaterial(floorHex, w / 2, d / 2));
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.set(cx, 0, cz);
+  scene.add(floor);
+  const ceil = new THREE.Mesh(new THREE.PlaneGeometry(w, d), stoneMaterial(0x2a2018, mortarHex, w / 2, d / 2));
+  ceil.rotation.x = Math.PI / 2;
+  ceil.position.set(cx, HUB_H, cz);
+  scene.add(ceil);
+}
+// A wall segment along X at a fixed z, spanning cx+xMinRel..cx+xMaxRel.
+function hubWallSpanX(z, xMinRel, xMaxRel, wallHex, mortarHex, cx) {
+  hubWallSeg(cx + (xMinRel + xMaxRel) / 2, z, xMaxRel - xMinRel, 1, wallHex, mortarHex);
+}
+// A wall segment along Z at a fixed x, spanning cz+zMinRel..cz+zMaxRel.
+function hubWallSpanZ(x, zMinRel, zMaxRel, wallHex, mortarHex, cz) {
+  hubWallSeg(x, cz + (zMinRel + zMaxRel) / 2, 1, zMaxRel - zMinRel, wallHex, mortarHex);
+}
+// gaps: {N,S,E,W} -> door width on that side, or falsy for a solid wall.
+function buildHubRoom(cx, cz, halfW, halfD, floorHex, wallHex, mortarHex, gaps) {
+  hubFloorCeil(cx, cz, halfW * 2, halfD * 2, floorHex, mortarHex);
+  const g = gaps || {};
+  // EXT: half the wall thickness. Solid wall segments are extended this far
+  // PAST the room's nominal corner so they fully overlap the perpendicular
+  // wall's own thickness band there — without it, each wall stops exactly
+  // at the corner point and leaves a small unsealed notch (the "внутренние
+  // углы" the user reported: two walls visibly not meeting, a diagonal gap
+  // players could even see/clip through). A gapped wall's OUTER end (away
+  // from the door) still gets this extension; its INNER end stays exactly
+  // at the gap boundary — extending that side would just wall off the door.
+  const EXT = 0.5;
+  if (g.N) { hubWallSpanX(cz + halfD, -halfW - EXT, -g.N / 2, wallHex, mortarHex, cx); hubWallSpanX(cz + halfD, g.N / 2, halfW + EXT, wallHex, mortarHex, cx); }
+  else hubWallSpanX(cz + halfD, -halfW - EXT, halfW + EXT, wallHex, mortarHex, cx);
+  if (g.S) { hubWallSpanX(cz - halfD, -halfW - EXT, -g.S / 2, wallHex, mortarHex, cx); hubWallSpanX(cz - halfD, g.S / 2, halfW + EXT, wallHex, mortarHex, cx); }
+  else hubWallSpanX(cz - halfD, -halfW - EXT, halfW + EXT, wallHex, mortarHex, cx);
+  if (g.E) { hubWallSpanZ(cx + halfW, -halfD - EXT, -g.E / 2, wallHex, mortarHex, cz); hubWallSpanZ(cx + halfW, g.E / 2, halfD + EXT, wallHex, mortarHex, cz); }
+  else hubWallSpanZ(cx + halfW, -halfD - EXT, halfD + EXT, wallHex, mortarHex, cz);
+  if (g.W) { hubWallSpanZ(cx - halfW, -halfD - EXT, -g.W / 2, wallHex, mortarHex, cz); hubWallSpanZ(cx - halfW, g.W / 2, halfD + EXT, wallHex, mortarHex, cz); }
+  else hubWallSpanZ(cx - halfW, -halfD - EXT, halfD + EXT, wallHex, mortarHex, cz);
+}
+function buildHubCorridorNS(cx, z0, z1, wallHex, mortarHex) {
+  const len = z1 - z0, midZ = (z0 + z1) / 2;
+  hubWallSeg(cx - HUB_DOOR / 2, midZ, 1, len, wallHex, mortarHex);
+  hubWallSeg(cx + HUB_DOOR / 2, midZ, 1, len, wallHex, mortarHex);
+  hubFloorCeil(cx, midZ, HUB_DOOR, len, 0x795028, mortarHex);
+}
+function buildHubCorridorEW(cz, x0, x1, wallHex, mortarHex) {
+  const len = x1 - x0, midX = (x0 + x1) / 2;
+  hubWallSeg(midX, cz - HUB_DOOR / 2, len, 1, wallHex, mortarHex);
+  hubWallSeg(midX, cz + HUB_DOOR / 2, len, 1, wallHex, mortarHex);
+  hubFloorCeil(midX, cz, len, HUB_DOOR, 0x795028, mortarHex);
+}
+const HUB_MAIN_HALF = 9, HUB_LIB_HALF = 6, HUB_CLASS_HALF = 5;
+const hMainX = HCX, hMainZ = HCZ;
+const hLibX = HCX, hLibZ = HCZ + HUB_MAIN_HALF + HUB_CORRIDOR_LEN + HUB_LIB_HALF;
+const hFireX = HCX - (HUB_MAIN_HALF + HUB_CORRIDOR_LEN + HUB_CLASS_HALF), hFireZ = HCZ;
+const hWaterX = HCX + (HUB_MAIN_HALF + HUB_CORRIDOR_LEN + HUB_CLASS_HALF), hWaterZ = HCZ;
+const hLightX = HCX, hLightZ = HCZ - (HUB_MAIN_HALF + HUB_CORRIDOR_LEN + HUB_CLASS_HALF);
+
+// floorHex is now a WOOD tint (see hubFloorCeil/woodMaterial) — warm
+// honey-oak for the shared rooms, each class room's own floor tinted
+// slightly toward its element without losing the "still wood" read.
+buildHubRoom(hMainX, hMainZ, HUB_MAIN_HALF, HUB_MAIN_HALF, 0x8a5a30, 0x3a3542, 0x2a1a12, { N: HUB_DOOR, S: HUB_DOOR, E: HUB_DOOR, W: HUB_DOOR });
+buildHubRoom(hLibX, hLibZ, HUB_LIB_HALF, HUB_LIB_HALF, 0x6a4526, 0x342418, 0x1e140a, { S: HUB_DOOR });
+buildHubRoom(hFireX, hFireZ, HUB_CLASS_HALF, HUB_CLASS_HALF, 0x7a4a28, 0x4a241a, 0x2a1008, { E: HUB_DOOR });
+buildHubRoom(hWaterX, hWaterZ, HUB_CLASS_HALF, HUB_CLASS_HALF, 0x5a4a38, 0x1a3040, 0x08182a, { W: HUB_DOOR });
+buildHubRoom(hLightX, hLightZ, HUB_CLASS_HALF, HUB_CLASS_HALF, 0x6a5530, 0x3a3018, 0x201a08, { N: HUB_DOOR });
+
+buildHubCorridorNS(HCX, HCZ + HUB_MAIN_HALF, hLibZ - HUB_LIB_HALF, 0x342418, 0x1e140a);
+buildHubCorridorNS(HCX, hLightZ + HUB_CLASS_HALF, HCZ - HUB_MAIN_HALF, 0x3a3018, 0x201a08);
+buildHubCorridorEW(HCZ, hFireX + HUB_CLASS_HALF, HCX - HUB_MAIN_HALF, 0x4a241a, 0x2a1008);
+buildHubCorridorEW(HCZ, HCX + HUB_MAIN_HALF, hWaterX - HUB_CLASS_HALF, 0x1a3040, 0x08182a);
+
+ZONE_MAZE['hub'] = { walls: hubWalls };
+
+// One warm ambient glow per room — a big space like this shouldn't rely
+// purely on point-fixture lights (candles/orbs) for base visibility.
+function hubAmbient(x, z, colorHex, radius) {
+  const l = new THREE.PointLight(colorHex, 0.9, radius, 1.6);
+  l.position.set(x, HUB_H - 1, z);
+  scene.add(l);
+  registerZoneLight('hub', l);
+}
+hubAmbient(hMainX, hMainZ, 0xffaa55, HUB_MAIN_HALF * 2.4);
+hubAmbient(hLibX, hLibZ, 0xffbb66, HUB_LIB_HALF * 2.4);
+hubAmbient(hFireX, hFireZ, 0xff7744, HUB_CLASS_HALF * 2.4);
+hubAmbient(hWaterX, hWaterZ, 0x4499dd, HUB_CLASS_HALF * 2.4);
+hubAmbient(hLightX, hLightZ, 0xddbb44, HUB_CLASS_HALF * 2.4);
+
+// ------------------------------------------------------------
+// Hub decor — bookshelves, curtains, rugs, banners, furniture. All purely
+// visual (no collision of their own, same as the existing shop stands/
+// torches) — placed clear of doorway thresholds so PLAYER_RADIUS never
+// needs to path around them specifically.
+// ------------------------------------------------------------
+function makeBookshelfTexture() {
+  const size = 256;
+  const cnv = document.createElement('canvas');
+  cnv.width = cnv.height = size;
+  const ctx = cnv.getContext('2d');
+  ctx.fillStyle = '#3a2617';
+  ctx.fillRect(0, 0, size, size);
+  const rows = 5, rowH = size / rows;
+  const spineColors = ['#7a2e2e', '#2e4a7a', '#3a6b3a', '#7a5a2e', '#5a2e6b', '#2e6b6b', '#8a3a1e', '#6b6b2e'];
+  for (let row = 0; row < rows; row++) {
+    let x = 3;
+    const y0 = row * rowH + 5, bookH = rowH - 10;
+    while (x < size - 3) {
+      const bw = 6 + Math.random() * 9;
+      const c = new THREE.Color(spineColors[Math.floor(Math.random() * spineColors.length)]);
+      ctx.fillStyle = '#' + c.clone().multiplyScalar(0.75 + Math.random() * 0.4).getHexString();
+      ctx.fillRect(x, y0, bw, bookH);
+      ctx.fillStyle = 'rgba(230,200,140,0.6)';
+      ctx.fillRect(x + bw * 0.25, y0 + bookH * 0.12, Math.max(1, bw * 0.2), bookH * 0.06);
+      x += bw + 1.5;
+    }
+    ctx.fillStyle = '#1a0f07';
+    ctx.fillRect(0, row * rowH + rowH - 4, size, 4);
+  }
+  const tex = new THREE.CanvasTexture(cnv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.NearestFilter;
+  return tex;
+}
+const bookshelfTexBase = makeBookshelfTexture(); // one shared canvas — each shelf just clones it with its own repeat, not a fresh canvas per shelf
+function makeBookshelf(x, z, rotY, width, height) {
+  height = height || 2.6;
+  const tex = bookshelfTexBase.clone();
+  tex.needsUpdate = true;
+  tex.repeat.set(Math.max(1, Math.round(width / 1.1)), Math.max(1, Math.round(height / 0.85)));
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, height, 0.45), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9 }));
+  mesh.position.set(x, height / 2, z);
+  mesh.rotation.y = rotY;
+  scene.add(mesh);
+}
+function makeCurtainTexture(colorHex) {
+  const size = 64;
+  const cnv = document.createElement('canvas');
+  cnv.width = size; cnv.height = size;
+  const ctx = cnv.getContext('2d');
+  const base = new THREE.Color(colorHex);
+  for (let x = 0; x < size; x++) {
+    const fold = 0.7 + 0.3 * Math.sin((x / size) * Math.PI * 8);
+    ctx.fillStyle = '#' + base.clone().multiplyScalar(fold).getHexString();
+    ctx.fillRect(x, 0, 1, size);
+  }
+  const tex = new THREE.CanvasTexture(cnv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+function makeCurtain(x, y, z, rotY, width, height, colorHex) {
+  const mat = new THREE.MeshStandardMaterial({ map: makeCurtainTexture(colorHex), roughness: 1, side: THREE.DoubleSide });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), mat);
+  mesh.position.set(x, y, z);
+  mesh.rotation.y = rotY;
+  scene.add(mesh);
+  const rod = new THREE.Mesh(new THREE.BoxGeometry(width + 0.3, 0.07, 0.07), new THREE.MeshStandardMaterial({ color: 0x2a1c10 }));
+  rod.position.set(x, y + height / 2 + 0.08, z);
+  rod.rotation.y = rotY;
+  scene.add(rod);
+}
+function makeRugTexture(colorHex) {
+  const size = 256;
+  const cnv = document.createElement('canvas');
+  cnv.width = cnv.height = size;
+  const ctx = cnv.getContext('2d');
+  const base = new THREE.Color(colorHex);
+  ctx.fillStyle = '#' + base.getHexString();
+  ctx.fillRect(0, 0, size, size);
+  ctx.strokeStyle = '#' + base.clone().multiplyScalar(1.5).getHexString();
+  ctx.lineWidth = 12;
+  ctx.strokeRect(16, 16, size - 32, size - 32);
+  ctx.lineWidth = 4;
+  ctx.strokeRect(34, 34, size - 68, size - 68);
+  ctx.fillStyle = '#' + base.clone().multiplyScalar(1.3).getHexString();
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, 30, 0, Math.PI * 2);
+  ctx.fill();
+  return new THREE.CanvasTexture(cnv);
+}
+function makeRug(x, z, w, d, colorHex) {
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshStandardMaterial({ map: makeRugTexture(colorHex), roughness: 1 }));
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(x, 0.02, z); // lifted off the floor — coplanar geometry z-fights (see the portal-flicker Findings entry)
+  scene.add(mesh);
+}
+function makeArmchair(x, z, rotY, colorHex) {
+  const group = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: colorHex, roughness: 0.9 });
+  const seat = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.16, 0.7), mat);
+  seat.position.y = 0.42; group.add(seat);
+  const back = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.13), mat);
+  back.position.set(0, 0.76, -0.28); group.add(back);
+  const armGeo = new THREE.BoxGeometry(0.13, 0.35, 0.7);
+  const armL = new THREE.Mesh(armGeo, mat); armL.position.set(-0.29, 0.58, 0); group.add(armL);
+  const armR = new THREE.Mesh(armGeo, mat); armR.position.set(0.29, 0.58, 0); group.add(armR);
+  const legMat = new THREE.MeshStandardMaterial({ color: 0x2a1c10 });
+  for (const [lx, lz] of [[-0.27, -0.27], [0.27, -0.27], [-0.27, 0.27], [0.27, 0.27]]) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.4, 6), legMat);
+    leg.position.set(lx, 0.2, lz); group.add(leg);
+  }
+  group.position.set(x, 0, z);
+  group.rotation.y = rotY;
+  scene.add(group);
+}
+function makeBannerTexture(emoji, colorHex) {
+  const w = 128, h = 220;
+  const cnv = document.createElement('canvas');
+  cnv.width = w; cnv.height = h;
+  const ctx = cnv.getContext('2d');
+  const base = new THREE.Color(colorHex);
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, '#' + base.clone().multiplyScalar(0.85).getHexString());
+  grad.addColorStop(1, '#' + base.clone().multiplyScalar(0.5).getHexString());
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = '#' + base.clone().multiplyScalar(1.7).getHexString();
+  ctx.lineWidth = 5;
+  ctx.strokeRect(7, 7, w - 14, h - 14);
+  ctx.font = '64px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(emoji, w / 2, h * 0.42);
+  return new THREE.CanvasTexture(cnv);
+}
+function makeBanner(x, y, z, rotY, emoji, colorHex) {
+  const mat = new THREE.MeshStandardMaterial({ map: makeBannerTexture(emoji, colorHex), roughness: 1, side: THREE.DoubleSide });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.15, 2), mat);
+  mesh.position.set(x, y, z);
+  mesh.rotation.y = rotY;
+  scene.add(mesh);
+}
+function makeReadingTable(x, z, rotY) {
+  const group = new THREE.Group();
+  const wood = new THREE.MeshStandardMaterial({ color: 0x4a3018, roughness: 0.85 });
+  const top = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.1, 0.9), wood);
+  top.position.y = 0.75; group.add(top);
+  for (const [lx, lz] of [[-0.7, -0.35], [0.7, -0.35], [-0.7, 0.35], [0.7, 0.35]]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.75, 0.08), wood);
+    leg.position.set(lx, 0.375, lz); group.add(leg);
+  }
+  const candle = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.045, 0.25, 8), new THREE.MeshStandardMaterial({ color: 0xe8dcc0 }));
+  candle.position.set(0.5, 0.925, 0); group.add(candle);
+  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.14, 6), new THREE.MeshBasicMaterial({ color: 0xffcc66, transparent: true, opacity: 0.9 }));
+  flame.position.set(0.5, 1.1, 0); group.add(flame);
+  const light = new THREE.PointLight(0xffbb55, 1.1, 5, 2);
+  light.position.set(0.5, 1.12, 0); group.add(light);
+  group.position.set(x, 0, z);
+  group.rotation.y = rotY || 0;
+  scene.add(group);
+  registerZoneLight('hub', light);
+}
+// Fireplace (per user request — "камин" for a cozier hub) — a stone
+// surround set against a wall, logs + a live flame (reuses the shared
+// torch flicker loop, same trick as makeBrazier below), a wooden mantel.
+function makeFireplace(x, y, z, rotY) {
+  const group = new THREE.Group();
+  const surround = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2.6, 0.6), stoneMaterial(0x3a3542, 0x18161e, 1, 1));
+  surround.position.set(0, 1.3, 0); group.add(surround);
+  const opening = new THREE.Mesh(new THREE.BoxGeometry(1.3, 1.5, 0.32), new THREE.MeshStandardMaterial({ color: 0x0a0605 }));
+  opening.position.set(0, 0.9, 0.2); group.add(opening);
+  const logMat = new THREE.MeshStandardMaterial({ color: 0x2a1810 });
+  for (const [lx, lr] of [[-0.25, 0.08], [0.1, 0.07], [-0.05, 0.09]]) {
+    const log = new THREE.Mesh(new THREE.CylinderGeometry(lr, lr, 0.9, 6), logMat);
+    log.rotation.z = Math.PI / 2;
+    log.position.set(lx, 0.35, 0.25); group.add(log);
+  }
+  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.35, 0.7, 8), new THREE.MeshBasicMaterial({ color: 0xff8822, transparent: true, opacity: 0.85 }));
+  flame.position.set(0, 0.75, 0.25); group.add(flame);
+  const light = new THREE.PointLight(0xff6622, 1.8, 8, 2);
+  light.position.set(0, 0.9, 0.6); group.add(light);
+  const mantel = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.15, 0.7), new THREE.MeshStandardMaterial({ color: 0x4a3018, roughness: 0.8 }));
+  mantel.position.set(0, 2.15, 0.1); group.add(mantel);
+  group.position.set(x, y, z);
+  group.rotation.y = rotY;
+  scene.add(group);
+  registerZoneLight('hub', light);
+  torches.push({ flame, light, phase: Math.random() * 10, baseIntensity: 1.8 });
+}
+// Wall tapestries (per user request — "гобелены на стенах") — bigger,
+// generic woven-pattern hangings for the shared rooms, distinct from the
+// small per-class emblem banners (makeBanner) used inside each school's
+// own room.
+function makeTapestryTexture(colorHex) {
+  const w = 96, h = 160;
+  const cnv = document.createElement('canvas');
+  cnv.width = w; cnv.height = h;
+  const ctx = cnv.getContext('2d');
+  const base = new THREE.Color(colorHex);
+  ctx.fillStyle = '#' + base.clone().multiplyScalar(0.7).getHexString();
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = '#' + base.clone().multiplyScalar(1.4).getHexString();
+  ctx.lineWidth = 2;
+  const step = 20;
+  for (let y = -step; y < h + step; y += step) {
+    ctx.beginPath();
+    for (let x = 0; x <= w; x += step) {
+      const off = (x / step) % 2 ? step / 2 : 0;
+      ctx.moveTo(x, y + off);
+      ctx.lineTo(x + step / 2, y + step / 2 + off);
+    }
+    ctx.stroke();
+  }
+  ctx.strokeStyle = '#' + base.clone().multiplyScalar(1.8).getHexString();
+  ctx.lineWidth = 4;
+  ctx.strokeRect(6, 6, w - 12, h - 12);
+  return new THREE.CanvasTexture(cnv);
+}
+function makeTapestry(x, y, z, rotY, colorHex, width, height) {
+  width = width || 1.4; height = height || 2.4;
+  const mat = new THREE.MeshStandardMaterial({ map: makeTapestryTexture(colorHex), roughness: 1, side: THREE.DoubleSide });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), mat);
+  mesh.position.set(x, y, z);
+  mesh.rotation.y = rotY;
+  scene.add(mesh);
+  const rod = new THREE.Mesh(new THREE.BoxGeometry(width + 0.25, 0.06, 0.06), new THREE.MeshStandardMaterial({ color: 0x3a2a10 }));
+  rod.position.set(x, y + height / 2 + 0.06, z);
+  rod.rotation.y = rotY;
+  scene.add(rod);
+}
+// Class-room centerpieces — one small "signature" prop per school so each
+// room reads distinct at a glance, not just a recolored copy of the others.
+function makeBrazier(x, z) {
+  const group = new THREE.Group();
+  const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.3, 0.5, 10), pillarMat);
+  bowl.position.y = 0.7; group.add(bowl);
+  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.32, 0.7, 10), new THREE.MeshBasicMaterial({ color: 0xff8822, transparent: true, opacity: 0.85 }));
+  flame.position.y = 1.15; group.add(flame);
+  const light = new THREE.PointLight(0xff6622, 2, 8, 2);
+  light.position.y = 1.2; group.add(light);
+  group.position.set(x, 0, z);
+  scene.add(group);
+  registerZoneLight('hub', light);
+  torches.push({ flame, light, phase: Math.random() * 10, baseIntensity: 2 }); // reuses the shared torch flicker loop
+}
+function makeFountain(x, z) {
+  const group = new THREE.Group();
+  const basin = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.75, 0.4, 16), pillarMat);
+  basin.position.y = 0.2; group.add(basin);
+  const water = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 0.04, 16),
+    new THREE.MeshStandardMaterial({ color: 0x2288cc, emissive: 0x2288cc, emissiveIntensity: 0.4, transparent: true, opacity: 0.85 }));
+  water.position.y = 0.41; group.add(water);
+  const light = new THREE.PointLight(0x44aaee, 1, 6);
+  light.position.y = 0.6; group.add(light);
+  group.position.set(x, 0, z);
+  scene.add(group);
+  registerZoneLight('hub', light);
+}
+function makeStormOrb(x, z) {
+  const group = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: 0xffe14d, emissive: 0xffdd33, emissiveIntensity: 0.9, roughness: 0.3 });
+  const orb = new THREE.Mesh(new THREE.IcosahedronGeometry(0.4, 1), mat);
+  orb.position.y = 1.3; group.add(orb);
+  const light = new THREE.PointLight(0xffdd33, 1.6, 7);
+  light.position.y = 1.3; group.add(light);
+  group.position.set(x, 0, z);
+  scene.add(group);
+  registerZoneLight('hub', light);
+}
+// Shared furnishing template for the 3 class rooms: bookshelf + banner on
+// the wall opposite the door, curtains on the two side walls, a signature
+// centerpiece prop in the middle. gapSide is where THIS room's own door
+// is (toward the main hall), so the decorated wall is always the opposite one.
+function furnishClassRoom(x, z, gapSide, emoji, colorHex, centerpieceFn) {
+  const half = HUB_CLASS_HALF;
+  if (gapSide === 'E') {
+    makeBookshelf(x - half + 0.25, z, Math.PI / 2, half * 1.6);
+    makeBanner(x - half + 0.3, HUB_H - 1.3, z, Math.PI / 2, emoji, colorHex);
+    makeCurtain(x, 3, z + half - 0.1, 0, 2.6, 2.8, colorHex);
+    makeCurtain(x, 3, z - half + 0.1, Math.PI, 2.6, 2.8, colorHex);
+  } else if (gapSide === 'W') {
+    makeBookshelf(x + half - 0.25, z, -Math.PI / 2, half * 1.6);
+    makeBanner(x + half - 0.3, HUB_H - 1.3, z, -Math.PI / 2, emoji, colorHex);
+    makeCurtain(x, 3, z + half - 0.1, 0, 2.6, 2.8, colorHex);
+    makeCurtain(x, 3, z - half + 0.1, Math.PI, 2.6, 2.8, colorHex);
+  } else if (gapSide === 'N') {
+    makeBookshelf(x, z - half + 0.25, 0, half * 1.6);
+    makeBanner(x, HUB_H - 1.3, z - half + 0.3, 0, emoji, colorHex);
+    makeCurtain(x + half - 0.1, 3, z, Math.PI / 2, 2.6, 2.8, colorHex);
+    makeCurtain(x - half + 0.1, 3, z, -Math.PI / 2, 2.6, 2.8, colorHex);
+  } else {
+    makeBookshelf(x, z + half - 0.25, Math.PI, half * 1.6);
+    makeBanner(x, HUB_H - 1.3, z + half - 0.3, Math.PI, emoji, colorHex);
+    makeCurtain(x + half - 0.1, 3, z, Math.PI / 2, 2.6, 2.8, colorHex);
+    makeCurtain(x - half + 0.1, 3, z, -Math.PI / 2, 2.6, 2.8, colorHex);
+  }
+  if (centerpieceFn) centerpieceFn(x, z);
+}
+furnishClassRoom(hFireX, hFireZ, 'E', '🔥', 0xff5533, makeBrazier);
+furnishClassRoom(hWaterX, hWaterZ, 'W', '💧', 0x2288ee, makeFountain);
+furnishClassRoom(hLightX, hLightZ, 'N', '⚡', 0xffdd33, makeStormOrb);
+
+// Library — dense with bookshelves on the 3 walls that AREN'T the door,
+// a reading table + candle at the center, mentor stand just south of it.
+makeReadingTable(hLibX, hLibZ, 0);
+makeBookshelf(hLibX, hLibZ + HUB_LIB_HALF - 0.25, 0, 10);
+makeBookshelf(hLibX - HUB_LIB_HALF + 0.25, hLibZ, Math.PI / 2, 10);
+makeBookshelf(hLibX + HUB_LIB_HALF - 0.25, hLibZ, Math.PI / 2, 10);
+makeBanner(hLibX, HUB_H - 1.3, hLibZ + HUB_LIB_HALF - 0.3, 0, '📖', 0xffbb66);
+makeRug(hLibX, hLibZ, 5, 5, 0x4a3018);
+makeArmchair(hLibX - 4, hLibZ - 4, Math.PI * 0.6, 0x5a3a2a);
+
+// Main Hall — arrival + rest area. Mirror + a small reading nook tucked
+// into the south-west corner (well clear of the south wall's Lightning-
+// corridor door gap at x=0 — see the mirror's own placement comment), a
+// rug under it, 2 bookshelves flanking the library corridor's mouth for a
+// "grand entrance" feel.
+makeRug(hMainX - 5.5, hMainZ - 6, 4, 4, 0x5a2a1a);
+makeArmchair(hMainX - 7.5, hMainZ - 6, Math.PI * 0.15, 0x6b3a2a);
+makeArmchair(hMainX - 3.5, hMainZ - 6, -Math.PI * 0.15, 0x6b3a2a);
+makeBookshelf(hMainX - 4, hMainZ + HUB_MAIN_HALF - 0.25, 0, 3);
+makeBookshelf(hMainX + 4, hMainZ + HUB_MAIN_HALF - 0.25, 0, 3);
+// Fireplace on the west wall's solid segment (north of the Fire corridor
+// gap), and 2 tapestries on the east wall's solid segments — a cozier,
+// less "reused dungeon stone" read for the room everyone spawns into.
+makeFireplace(hMainX - HUB_MAIN_HALF + 0.35, 0, hMainZ + 5, Math.PI / 2);
+makeTapestry(hMainX + HUB_MAIN_HALF - 0.05, 2.4, hMainZ + 5, -Math.PI / 2, 0x6b2a2a);
+makeTapestry(hMainX + HUB_MAIN_HALF - 0.05, 2.4, hMainZ - 5, -Math.PI / 2, 0x2a4a6b);
 
 // ============================================================
 // Physical shop stands — per user request, buying/leveling spells is a
-// world interaction (walk up, press E), not a modal dialog. Positions are
-// relative to the hub's center; each stand is a pedestal + glowing orb, and
-// its price tag is an HTML label projected from its 3D position every frame.
+// world interaction (walk up, press E), not a modal dialog. Each stand is
+// a pedestal + glowing orb, and its price tag is an HTML label projected
+// from its 3D position every frame.
 // ============================================================
 const INTERACT_RANGE = 2.3;
 function makeShopStand(x, z, colorHex) {
@@ -1088,30 +1584,19 @@ function makeShopStand(x, z, colorHex) {
   registerZoneLight('hub', light);
   return { group, orb, x, z, labelY: 1.85 };
 }
-function makeContinuePortal(x, z) {
-  const group = new THREE.Group();
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(1.1, 0.12, 8, 24), new THREE.MeshBasicMaterial({ color: 0x66ffcc }));
-  ring.position.y = 1.3;
-  group.add(ring);
-  const light = new THREE.PointLight(0x66ffcc, 1.3, 6);
-  light.position.y = 1.3;
-  group.add(light);
-  group.position.set(x, 0, z);
-  scene.add(group);
-  registerZoneLight('hub', light);
-  return { group, ring, x, z, labelY: 2.5 };
-}
 // Single mentor stand handles the whole per-class skill tree now (per user
 // request — "убираем покупку через кристалл, теперь покупка у наставника"):
 // unlocking tier-2 used to be its own separate "buy" stand paid in gold: now
 // it's just the first node of the same tree, offered at THIS stand until
 // bought, after which the stand switches to leveling whichever spell is in
 // the active hotbar slot (existing tier-1 XP-gated / tier-2 gold-only
-// leveling — see updateShopStands' mentor block).
-const shopMentorStand = makeShopStand(ZONES.hub.cx, ZONES.hub.cz - 3, 0x66aaff);
-const shopPassiveStandA = makeShopStand(ZONES.hub.cx - 3, ZONES.hub.cz + 2, 0xcc88ff);
-const shopPassiveStandB = makeShopStand(ZONES.hub.cx + 3, ZONES.hub.cz + 2, 0xcc88ff);
-const shopContinuePortal = makeContinuePortal(ZONES.hub.cx, ZONES.hub.cz + 7);
+// leveling — see updateShopStands' mentor block). Lives in the Library now
+// (see buildHubRoom above), not the main hall.
+const shopMentorStand = makeShopStand(hLibX, hLibZ - 3.2, 0x66aaff);
+// Passive stands stay in the Main Hall, tucked into corners the corridors
+// don't pass through.
+const shopPassiveStandA = makeShopStand(hMainX - 5, hMainZ + 5, 0xcc88ff);
+const shopPassiveStandB = makeShopStand(hMainX + 5, hMainZ - 5, 0xcc88ff);
 
 // A real wall mirror in the hub (the room between dungeon runs) so players
 // can actually see their own class model. The FP camera never renders your
@@ -1125,6 +1610,52 @@ const shopContinuePortal = makeContinuePortal(ZONES.hub.cx, ZONES.hub.cz + 7);
 // direction: `camera` itself is added to `scene` (see the FP-arms comment
 // near makeFpArm), so Reflector's internal scene traversal would otherwise
 // render them floating at the reflected camera position too.
+// Ornate gold frame (per user request — "рама из золота с красивой каймой"):
+// the same 4-bar border as before, now gilded, plus a thinner inset trim
+// line and 4 small corner ornaments for a proper "beautiful border" instead
+// of a plain box outline. Shared by the self-view mirror AND the level
+// portal-mirrors below, so every mirror in the hub reads as part of one
+// consistent, expensive-looking set. Bars are pushed slightly IN FRONT of
+// whatever glass/portal plane sits at the same x/y/z (a frame placed
+// exactly behind it — the first attempt, seasons ago — ended up flush
+// with/inside the wall and never actually rendered).
+function makeGoldFrame(x, y, z, rotY, width, height) {
+  const frameGroup = new THREE.Group();
+  frameGroup.position.set(x, y, z);
+  frameGroup.rotation.y = rotY;
+  scene.add(frameGroup);
+  const goldMat = new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.85, roughness: 0.28, emissive: 0x3a2c05, emissiveIntensity: 0.15 });
+  const barThick = 0.16, barDepth = 0.08, overlap = 0.16, pushForward = 0.045;
+  function bar(w, h, lx, ly) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, barDepth), goldMat);
+    m.position.set(lx, ly, pushForward);
+    frameGroup.add(m);
+  }
+  bar(width + overlap * 2, barThick, 0, height / 2 + barThick / 2);      // top
+  bar(width + overlap * 2, barThick, 0, -(height / 2 + barThick / 2));   // bottom
+  bar(barThick, height + overlap * 2, -(width / 2 + barThick / 2), 0);   // left
+  bar(barThick, height + overlap * 2, width / 2 + barThick / 2, 0);      // right
+  // Thin inset trim, just inside the glass edge — the "кайма" (border
+  // detail) beyond a plain outline.
+  const trimMat = new THREE.MeshStandardMaterial({ color: 0xf0d878, metalness: 0.7, roughness: 0.35 });
+  function trim(w, h, lx, ly) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.03), trimMat);
+    m.position.set(lx, ly, pushForward + 0.05);
+    frameGroup.add(m);
+  }
+  trim(width - 0.1, 0.045, 0, height / 2 - 0.16);
+  trim(width - 0.1, 0.045, 0, -(height / 2 - 0.16));
+  trim(0.045, height - 0.1, -(width / 2 - 0.16), 0);
+  trim(0.045, height - 0.1, width / 2 - 0.16, 0);
+  // Corner ornaments — small gilt spheres, the classic ornate-frame touch.
+  const ornMat = new THREE.MeshStandardMaterial({ color: 0xf0d060, metalness: 0.9, roughness: 0.2 });
+  for (const [sx, sy] of [[-1, 1], [1, 1], [-1, -1], [1, -1]]) {
+    const orn = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 8), ornMat);
+    orn.position.set(sx * (width / 2 + overlap), sy * (height / 2 + overlap), pushForward + 0.02);
+    frameGroup.add(orn);
+  }
+  return frameGroup;
+}
 function makeMirror(x, y, z, rotY, width, height) {
   const mirror = new Reflector(new THREE.PlaneGeometry(width, height), {
     color: 0x8a97a0,
@@ -1145,34 +1676,197 @@ function makeMirror(x, y, z, rotY, width, height) {
     fpArmR.visible = !debugThirdPerson;
   };
   scene.add(mirror);
-  // Frame: 4 bars forming a border around the glass, pushed slightly IN
-  // FRONT of the reflective plane (toward the room) so they're guaranteed
-  // visible overlapping the glass's edge — a single box placed behind the
-  // plane (the first attempt) ended up flush with/inside the wall itself
-  // and never actually rendered. A Group at the mirror's own position/
-  // rotation lets each bar just use local offsets instead of hand-rolling
-  // the rotated-normal trig.
-  const frameGroup = new THREE.Group();
-  frameGroup.position.set(x, y, z);
-  frameGroup.rotation.y = rotY;
-  scene.add(frameGroup);
-  const frameMat = new THREE.MeshStandardMaterial({ color: 0x2a2233, roughness: 0.6 });
-  const barThick = 0.16, barDepth = 0.08, overlap = 0.16, pushForward = 0.04;
-  function addFrameBar(w, h, lx, ly) {
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(w, h, barDepth), frameMat);
-    bar.position.set(lx, ly, pushForward);
-    frameGroup.add(bar);
-  }
-  addFrameBar(width + overlap * 2, barThick, 0, height / 2 + barThick / 2);      // top
-  addFrameBar(width + overlap * 2, barThick, 0, -(height / 2 + barThick / 2));   // bottom
-  addFrameBar(barThick, height + overlap * 2, -(width / 2 + barThick / 2), 0);   // left
-  addFrameBar(barThick, height + overlap * 2, width / 2 + barThick / 2, 0);      // right
+  makeGoldFrame(x, y, z, rotY, width, height);
   return mirror;
 }
-// Mounted on the hub's west wall, facing into the room (+X). Wall's inner
-// face sits at cx-(half+1)+0.5 (see buildArena's w2/wall-thickness math);
-// nudged a hair further in to avoid z-fighting with the wall itself.
-makeMirror(ZONES.hub.cx - (ZONES.hub.half + 1) + 0.56, 1.35, ZONES.hub.cz, Math.PI / 2, 3, 2.6);
+// Mounted on the Main Hall's south wall, offset well clear of the
+// Lightning corridor's door gap (which sits centered on this wall, x=0 —
+// the mirror used to sit exactly there too, which is why walking up to
+// "just look in the mirror" could put you right in the Lightning doorway;
+// user-reported as "вход в молнию почему-то через зеркало"). Now off to
+// the side, in its own alcove with the 2 reading-nook armchairs (see
+// below), well clear of the gap.
+const HUB_MIRROR_X = hMainX - 5.5;
+makeMirror(HUB_MIRROR_X, 1.35, hMainZ - HUB_MAIN_HALF + 0.56, 0, 2.6, 2.4);
+
+// ============================================================
+// Level portal-mirrors (per user request — "переход между локациями через
+// зеркала... вход в хабе через зеркало"): replaces the old single
+// "continue" ring. One gold-framed mirror per dungeon level, standing in
+// the Main Hall. Only ONE is ever 'active' (interactable) at a time — the
+// one matching `highestClearedLevel + 1`, i.e. whichever level is actually
+// next. Levels already cleared show 'broken' (shattered glass) — per the
+// user's explicit answer, this is PERMANENT (levels don't loop/repeat, so
+// a broken mirror never needs to un-break); levels not yet reached show
+// 'dormant' (dark, inert glass, not interactable). The glass itself is a
+// stylized glowing/swirling surface when active, not a live reflection —
+// 3 more Reflectors on top of the self-view one would be real render cost
+// for no benefit, and a "broken" mirror showing a clean live reflection
+// would read wrong anyway (also per the user's explicit answer).
+// ============================================================
+function makeSwirlTexture(colorHex) {
+  const size = 128;
+  const cnv = document.createElement('canvas');
+  cnv.width = cnv.height = size;
+  const ctx = cnv.getContext('2d');
+  const base = new THREE.Color(colorHex);
+  ctx.fillStyle = '#120a18';
+  ctx.fillRect(0, 0, size, size);
+  const cx = size / 2, cy = size / 2;
+  for (let r = 4; r < size / 2; r += 4) {
+    ctx.strokeStyle = '#' + base.clone().multiplyScalar(0.5 + 0.5 * Math.sin(r * 0.3)).getHexString();
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    for (let t = 0; t <= 1; t += 0.02) {
+      const ang = t * Math.PI * 4 + r * 0.35, rad = r * t;
+      const x = cx + Math.cos(ang) * rad, y = cy + Math.sin(ang) * rad;
+      if (t === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  return new THREE.CanvasTexture(cnv);
+}
+function makeCrackedTexture() {
+  const size = 128;
+  const cnv = document.createElement('canvas');
+  cnv.width = cnv.height = size;
+  const ctx = cnv.getContext('2d');
+  ctx.fillStyle = '#2a2a30';
+  ctx.fillRect(0, 0, size, size);
+  for (let i = 0; i < 10; i++) {
+    ctx.fillStyle = `rgba(${180 + Math.random() * 40},${180 + Math.random() * 40},${190 + Math.random() * 40},0.5)`;
+    const cx0 = Math.random() * size, cy0 = Math.random() * size;
+    ctx.beginPath();
+    ctx.moveTo(cx0, cy0);
+    for (let j = 0; j < 5; j++) ctx.lineTo(cx0 + (Math.random() - 0.5) * 40, cy0 + (Math.random() - 0.5) * 40);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1.5;
+  const cx = size / 2, cy = size / 2;
+  for (let i = 0; i < 8; i++) {
+    const ang = (i / 8) * Math.PI * 2 + Math.random() * 0.3;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(ang) * size, cy + Math.sin(ang) * size);
+    ctx.stroke();
+  }
+  return new THREE.CanvasTexture(cnv);
+}
+function setMirrorLevelState(m, state, colorHex) {
+  m.state = state;
+  const mat = m.glass.material;
+  if (state === 'active') {
+    mat.map = makeSwirlTexture(colorHex);
+    mat.color.set(0xffffff);
+    mat.emissive.set(colorHex);
+    mat.emissiveIntensity = 0.55;
+    m.light.intensity = 1.4; m.light.color.set(colorHex);
+  } else if (state === 'broken') {
+    mat.map = makeCrackedTexture();
+    mat.color.set(0x888890);
+    mat.emissive.set(0x000000);
+    mat.emissiveIntensity = 0;
+    m.light.intensity = 0;
+  } else { // dormant
+    mat.map = null;
+    mat.color.set(0x141418);
+    mat.emissive.set(0x000000);
+    mat.emissiveIntensity = 0;
+    m.light.intensity = 0;
+  }
+  mat.needsUpdate = true;
+}
+function makeLevelMirror(level, x, z, rotY) {
+  makeGoldFrame(x, 1.5, z, rotY, 1.3, 2.4);
+  const glass = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 2.4), new THREE.MeshStandardMaterial({ color: 0x141418, roughness: 0.4, metalness: 0.25 }));
+  // Nudged toward the room a hair, along the frame's own facing direction
+  // (same coplanar z-fight lesson as the rugs/gold frame elsewhere).
+  glass.position.set(x + 0.02 * Math.sin(rotY), 1.5, z + 0.02 * Math.cos(rotY));
+  glass.rotation.y = rotY;
+  scene.add(glass);
+  const light = new THREE.PointLight(0xffffff, 0, 4.5);
+  light.position.set(x, 1.5, z);
+  scene.add(light);
+  registerZoneLight('hub', light);
+  const m = { level, glass, light, x, z, labelY: 2.7, state: 'dormant' };
+  setMirrorLevelState(m, 'dormant');
+  return m;
+}
+// Mounted flush against the Main Hall's south wall (per user request —
+// mirrors always sit against a real wall, not freestanding in the open
+// floor like the first pass had them), on the EAST solid segment of that
+// wall (x: 2..9.5, clear of the Lightning-corridor door gap at x:[-2,2]
+// and of the self-view mirror + reading nook on the WEST segment).
+const hubLevelMirrors = [];
+for (let lvl = 1; lvl <= MAX_LEVEL; lvl++) {
+  const mx = 3 + (lvl - 1) * 2.5;
+  hubLevelMirrors.push(makeLevelMirror(lvl, hMainX + mx, hMainZ - HUB_MAIN_HALF + 0.56, 0));
+}
+// Sets each mirror's state from `highestClearedLevel`; called once at
+// load and again whenever that value changes (host: right after a level
+// clears; clients: on receiving the synced value in the 'state' broadcast).
+function updateHubMirrors() {
+  for (const m of hubLevelMirrors) {
+    const colorHex = ELEMENT_COLOR[ZONE_PORTAL_ELEMENT[m.level] || 'Lightning'] || 0xffdd33;
+    if (m.level <= highestClearedLevel) setMirrorLevelState(m, 'broken', colorHex);
+    else if (m.level === highestClearedLevel + 1) setMirrorLevelState(m, 'active', colorHex);
+    else setMirrorLevelState(m, 'dormant', colorHex);
+  }
+}
+updateHubMirrors();
+
+// Level-side "you arrived via a mirror" flavor (per user request — "выход
+// в локации у зеркала, но зеркало разбитое"): a static broken mirror at
+// each dungeon level's own spawn point, reusing the same gold frame +
+// cracked-glass texture as the hub's level-portal mirrors. Purely
+// decorative — no interaction, no state; always broken, matching "you
+// fell through a shattered mirror to get here."
+function makeBrokenMirrorProp(x, z, rotY) {
+  makeGoldFrame(x, 1.5, z, rotY, 1.3, 2.4);
+  const glass = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 2.4),
+    new THREE.MeshStandardMaterial({ map: makeCrackedTexture(), color: 0x888890, roughness: 0.4, metalness: 0.25 }));
+  glass.position.set(x + 0.02 * Math.sin(rotY), 1.5, z + 0.02 * Math.cos(rotY));
+  glass.rotation.y = rotY;
+  scene.add(glass);
+}
+// Finds the wall box nearest (x,z) within maxDist and returns a flush
+// mount spot on its inner face (position + facing rotation) — mirrors
+// must always sit against a real wall, per user request, not float free
+// in open floor. Works for any axis-aligned wall list (antechamber walls,
+// maze walls, ...): picks whichever of the box's 4 faces the point is
+// actually nearest to, so it correctly handles corner boxes too.
+function nearestWallFlushSpot(walls, x, z, maxDist) {
+  let best = null, bestDist = maxDist;
+  for (const w of walls) {
+    const cx = Math.max(w.minX, Math.min(x, w.maxX));
+    const cz = Math.max(w.minZ, Math.min(z, w.maxZ));
+    const dist = Math.hypot(x - cx, z - cz);
+    if (dist < bestDist) { bestDist = dist; best = w; }
+  }
+  if (!best) return null;
+  const w = best;
+  const distToMinX = Math.abs(x - w.minX), distToMaxX = Math.abs(x - w.maxX);
+  const distToMinZ = Math.abs(z - w.minZ), distToMaxZ = Math.abs(z - w.maxZ);
+  const nearestFace = Math.min(distToMinX, distToMaxX, distToMinZ, distToMaxZ);
+  if (nearestFace === distToMaxZ) return { x: Math.max(w.minX + 0.7, Math.min(x, w.maxX - 0.7)), z: w.maxZ + 0.56, rotY: 0 };
+  if (nearestFace === distToMinZ) return { x: Math.max(w.minX + 0.7, Math.min(x, w.maxX - 0.7)), z: w.minZ - 0.56, rotY: Math.PI };
+  if (nearestFace === distToMaxX) return { x: w.maxX + 0.56, z: Math.max(w.minZ + 0.7, Math.min(z, w.maxZ - 0.7)), rotY: Math.PI / 2 };
+  return { x: w.minX - 0.56, z: Math.max(w.minZ + 0.7, Math.min(z, w.maxZ - 0.7)), rotY: -Math.PI / 2 };
+}
+function placeBrokenMirrorNear(walls, spawnX, spawnZ, fallbackRotY) {
+  const spot = walls && nearestWallFlushSpot(walls, spawnX, spawnZ, 12);
+  if (spot) makeBrokenMirrorProp(spot.x, spot.z, spot.rotY);
+  else makeBrokenMirrorProp(spawnX, spawnZ - 1.6, fallbackRotY); // no wall list available — old freestanding fallback
+}
+placeBrokenMirrorNear(ZONE_DOOR_WALLS[1], ZONES[1].spawn[0], ZONES[1].spawn[1], 0);
+placeBrokenMirrorNear(ZONE_MAZE[2] && ZONE_MAZE[2].walls, ZONES[2].spawn[0], ZONES[2].spawn[1], 0);
+// Level 3 (boss arena) walls aren't tracked in any queryable list (buildArena
+// doesn't push to one, unlike buildMaze/buildPortalRoom) — hand-placed
+// against the arena's own known north wall instead of adding wall-tracking
+// to buildArena just for this one decorative prop.
+makeBrokenMirrorProp(ZONES[3].cx, ZONES[3].cz + ZONES[3].half + 0.56, Math.PI);
 
 function distXZ(pos, stand) { return Math.hypot(pos.x - stand.x, pos.z - stand.z); }
 function positionLabel(el, stand) {
@@ -1187,9 +1881,9 @@ function updateShopStands() {
   const labelMentor = document.getElementById('labelMentor');
   const labelPassiveA = document.getElementById('labelPassiveA');
   const labelPassiveB = document.getElementById('labelPassiveB');
-  const labelContinue = document.getElementById('labelContinue');
+  const labelMirror = document.getElementById('labelMirror');
   if (!shopPhase) {
-    labelMentor.style.display = labelPassiveA.style.display = labelPassiveB.style.display = labelContinue.style.display = 'none';
+    labelMentor.style.display = labelPassiveA.style.display = labelPassiveB.style.display = labelMirror.style.display = 'none';
     activeStandAction = null;
     return;
   }
@@ -1230,12 +1924,16 @@ function updateShopStands() {
   shopPassiveStandA.group.visible = !!myPendingPassive;
   shopPassiveStandB.group.visible = !!myPendingPassive;
 
-  // Continue portal — always available, walk through/up to it and press E
-  if (positionLabel(labelContinue, shopContinuePortal)) {
-    labelContinue.style.display = 'block';
-    labelContinue.textContent = 'Пройти дальше';
-  } else labelContinue.style.display = 'none';
-  consider({ kind: 'continue', label: 'Пройти дальше' }, distXZ(playerPos, shopContinuePortal));
+  // Level portal-mirrors — replaces the old single "continue" ring (per
+  // user request). Only the ONE mirror matching the next uncleared level
+  // is ever 'active' (see updateHubMirrors()) — dormant/broken ones are
+  // pure set-dressing, not interactable.
+  const activeMirror = hubLevelMirrors.find(m => m.state === 'active');
+  if (activeMirror && positionLabel(labelMirror, activeMirror)) {
+    labelMirror.style.display = 'block';
+    labelMirror.textContent = `Войти — уровень ${activeMirror.level}`;
+  } else labelMirror.style.display = 'none';
+  if (activeMirror) consider({ kind: 'continue', label: `Войти — уровень ${activeMirror.level}` }, distXZ(playerPos, activeMirror));
 
   activeStandAction = nearest;
   // Insufficient-funds feedback moved into the skill tree panel itself
@@ -1320,30 +2018,22 @@ let myHp = PLAYER_MAX_HP, myDowned = false, wasDowned = false, myGold = 0;
 let mySpells = [];
 let myPendingPassive = null;
 let myMaxHp = PLAYER_MAX_HP;
-// One shared portal per room (user request — not one per player), fixed
-// at the zone's own spawn point rather than each player's jittered
-// position, so a full party arriving nearby all sees the same portal
-// instead of a small stack of identical copies. See refreshPortal()/
-// updatePortal() near loadGoblinAssets.
-let zonePortal = null;
-let zonePortalGen = 0; // discards a stale deferred refreshPortal() result if respawnLocalPlayer() is called again before the first one's (possibly async) load finishes
+// The old per-zone spawn/despawn portal ring (refreshPortal/updatePortal,
+// still defined below) is no longer used as a live gameplay object at all
+// (per user request — "убери портал через объект, оставь только
+// зеркала"): transitions are mirrors everywhere now — the hub's
+// hubLevelMirrors for entering a level, a static makeBrokenMirrorProp at
+// each level's own spawn point for "arriving." The loader/instantiate
+// functions themselves are kept (see ensurePortalTemplate/
+// instantiatePortal) since the same FBX pentagram asset is reused as a
+// purely decorative fixture in each elemental class room — see
+// makeElementPentagram near the hub build.
 function respawnLocalPlayer() {
   // Small random jitter within the spawn area so a full-party respawn doesn't
   // stack everyone on the exact same point, while still reading as "the same place".
   const spawn = ZONES[currentZone].spawn;
   const angle = Math.random() * Math.PI * 2, r = Math.random() * 1.0;
   playerPos.set(spawn[0] + Math.cos(angle) * r, 0, spawn[1] + Math.sin(angle) * r);
-  // A fresh portal opens wherever players just (re)appeared — every call
-  // to respawnLocalPlayer() is exactly that moment (initial level start
-  // or a post-death respawn), so hooking it here covers both without a
-  // separate "just spawned" flag. Fixed at the zone's own spawn point
-  // (not the jittered playerPos) since it's shared, not personal.
-  const gen = ++zonePortalGen;
-  const portalElement = ZONE_PORTAL_ELEMENT[currentZone] || 'Lightning';
-  refreshPortal(zonePortal, portalElement, spawn[0], spawn[1], p => {
-    if (gen === zonePortalGen) zonePortal = p;
-    else if (p) scene.remove(p.object); // superseded by a newer respawn before this (deferred) load finished
-  });
 }
 
 // ============================================================
@@ -1701,13 +2391,6 @@ let goblinTemplate = null; // { root, runClip, attackClip }
 // just means that element's players spawn without a visual, not a crash.
 const MODEL_BASE_PORTAL = 'models/portal/';
 const PORTAL_ELEMENT_FILE = { Fire: 'fire', Water: 'water', Lightning: 'lightning' };
-// The room's shared portal shows the same look for every player
-// regardless of their own class (user request) — keyed by zone, not by
-// whoever happens to be looking at it. Only Lightning's asset exists so
-// far, so every zone defaults to it for now ("жёлтый" — yellow — for
-// level 1, per the request); add Fire/Water entries here once those
-// files land instead of changing anything else.
-const ZONE_PORTAL_ELEMENT = { 1: 'Lightning', 2: 'Lightning', hub: 'Lightning' };
 // Source model measured at ~6.7m across/2.2m tall at scale 1 (see README
 // Findings) — scaled down to a walk-through-sized ring. First pass (0.4)
 // read as too small, then 0.6 (1.5x) still too small — user asked for
@@ -1855,6 +2538,42 @@ function updatePortal(portal, ownerX, ownerZ, dt) {
   }
   return portal;
 }
+// Decorative pentagram portal in each elemental class room (per user
+// request — reuse the real 3D portal asset files that already exist,
+// instead of only the procedural centerpieces). No despawn-on-distance
+// logic (unlike the old per-player zone portal) — these are permanent
+// room fixtures, just kept spinning via hubPentagrams in animate(). Only
+// Lightning's FBX/PNG exist so far (see PORTAL_ELEMENT_FILE) — every room
+// defaults to it for now, same fallback the old per-zone portals already
+// used; swap in Fire/Water's own assets here once those files land,
+// nothing else about this needs to change.
+// instantiatePortal always applies PORTAL_SCALE (1.2 — tuned for a
+// walk-through dungeon portal, ~8m across, per its own comment) — far too
+// big for a 10x10 class room decoration, so this overrides it back down
+// on the returned instance instead of touching the dungeon-portal sizing.
+const HUB_PENTAGRAM_SCALE = 0.35;
+const hubPentagrams = [];
+function makeElementPentagram(element, x, z) {
+  ensurePortalTemplate(element);
+  const place = () => {
+    if (!portalTemplates[element]) return;
+    const p = instantiatePortal(portalTemplates[element], x, z);
+    p.object.scale.setScalar(HUB_PENTAGRAM_SCALE);
+    hubPentagrams.push(p);
+  };
+  if (element in portalTemplates) place();
+  else (portalWaiters[element] || (portalWaiters[element] = [])).push(place);
+}
+// All 3 explicitly request 'Lightning' — same fallback the dungeon-level
+// spawn portals already used (ZONE_PORTAL_ELEMENT), matching the reality
+// that only portal_lightning.fbx/.png exist on disk right now. Asking for
+// 'Fire'/'Water' here would just throw 4 predictable 404s (ensurePortalTemplate
+// handles that gracefully — portalTemplates[el]=null, no crash — but
+// there's no reason to invite console noise for files that are known not
+// to exist yet).
+makeElementPentagram('Lightning', hFireX, hFireZ + 2.2);
+makeElementPentagram('Lightning', hWaterX, hWaterZ + 2.2);
+makeElementPentagram('Lightning', hLightX, hLightZ + 2.2);
 async function warmupAllElementPreviews() {
   ensureElementPreviews(); // builds each card's scene/camera + the shared renderer if not already
   for (const el of ELEMENTS) {
@@ -2703,6 +3422,10 @@ function onClientData(msg) {
       updateEnemyVisual(local);
     }
     partyLevel = msg.party.level; partyXp = msg.party.xp;
+    if (typeof msg.highestClearedLevel === 'number' && msg.highestClearedLevel !== highestClearedLevel) {
+      highestClearedLevel = msg.highestClearedLevel;
+      updateHubMirrors();
+    }
     const mine = msg.players[myPeerId];
     if (mine) {
       myHp = mine.hp; myDowned = !!mine.downed; myGold = mine.gold; mySpells = mine.spells;
@@ -3052,7 +3775,6 @@ function getPlayerPositions() {
 // ============================================================
 // Level / shop flow
 // ============================================================
-const MAX_LEVEL = 3; // level 3 is the boss floor — the dungeon loops back to level 1 after it's cleared
 function startLevel(level) {
   shopPhase = false;
   closeShopUI();
@@ -3069,14 +3791,21 @@ function startShopPhase() {
   currentZone = 'hub'; // teleport the whole party into the dedicated progression room
   setZoneLightsVisible(currentZone);
   respawnLocalPlayer();
-  if (currentLevel === MAX_LEVEL) hostLog('🏆 Босс повержен! Отряд возвращается в комнату прокачки.');
+  // The level just cleared breaks its hub mirror, permanently (per user
+  // request — finite levels, no loop back to 1, so a broken mirror never
+  // needs to un-break). `highestClearedLevel` is host-authoritative and
+  // rides along in the periodic 'state' broadcast for clients to mirror.
+  if (currentLevel > 0) highestClearedLevel = Math.max(highestClearedLevel, currentLevel);
+  updateHubMirrors();
+  if (currentLevel === MAX_LEVEL) hostLog('🏆 Босс повержен! Все уровни пройдены — отряд возвращается в комнату прокачки.');
   else hostLog('✨ Уровень зачищен! Отряд телепортирован в комнату прокачки.');
   broadcast({ t: 'shopOpen', zone: 'hub' });
   openShopUI();
 }
 function closeShopAndAdvance() {
+  const next = highestClearedLevel + 1;
+  if (next > MAX_LEVEL) return; // finite levels — nothing left; no mirror is ever 'active' to trigger this once true, this is just a safety guard
   broadcast({ t: 'shopClose' });
-  const next = currentLevel >= MAX_LEVEL ? 1 : currentLevel + 1;
   broadcast({ t: 'levelStart', level: next });
   startLevel(next);
 }
@@ -3283,6 +4012,7 @@ function hostSimulate(dt) {
     broadcast({
       t: 'state',
       party: { level: partyLevel, xp: partyXp },
+      highestClearedLevel, // drives which hub mirror is active/broken on clients too — see updateHubMirrors()
       players: outPlayers,
       enemies: enemies.map(e => {
         const out = { id: e.id, hp: e.hp, maxHp: e.maxHp, wet: e.wet, burning: e.burning, frozenT: e.frozenT, alive: e.alive, p: [e.mesh.position.x, 0, e.mesh.position.z], attacking: e.justAttacked };
@@ -3745,8 +4475,6 @@ function animate() {
       const doorWalls = ZONE_DOOR_WALLS[currentZone];
       if (doorWalls) resolveCircleWallCollision(playerPos, PLAYER_RADIUS, doorWalls);
     }
-    zonePortal = updatePortal(zonePortal, playerPos.x, playerPos.z, dt);
-
     // Arrow-key look (touchpad fallback) — scales with the same shared `sensitivity`
     const keyLookSpeed = LOOK_KEY_SPEED * (sensitivity / BASE_SENSITIVITY);
     if (keys['ArrowLeft'])  yaw += keyLookSpeed * dt;
@@ -3912,6 +4640,7 @@ function animate() {
   }
 
   updateTorches(clock.elapsedTime);
+  for (const p of hubPentagrams) p.mixer.update(dt); // decorative class-room portals — see makeElementPentagram
 
   // FX decay
   for (let i = fx.length - 1; i >= 0; i--) {
@@ -3958,7 +4687,7 @@ function openShopUI() {
   // and pressing E to interact is regular gameplay, not a UI takeover.
 }
 function closeShopUI() {
-  for (const id of ['labelMentor', 'labelPassiveA', 'labelPassiveB', 'labelContinue']) {
+  for (const id of ['labelMentor', 'labelPassiveA', 'labelPassiveB', 'labelMirror']) {
     document.getElementById(id).style.display = 'none';
   }
   document.getElementById('interactPrompt').style.display = 'none';
@@ -4240,6 +4969,9 @@ window.__debug = {
   hostBuySpell, hostLevelUpSpell, openSkillTree, closeSkillTree, renderSkillTree,
   get skillTreeOpen() { return skillTreeOpen; },
   get wheelRotTarget() { return wheelRotTarget; }, get wheelRotDisplay() { return wheelRotDisplay; },
+  get highestClearedLevel() { return highestClearedLevel; }, set highestClearedLevel(v) { highestClearedLevel = v; },
+  get hubLevelMirrors() { return hubLevelMirrors; }, updateHubMirrors, MAX_LEVEL,
+  get hubWalls() { return hubWalls; },
 };
 </script>
 </body>

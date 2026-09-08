@@ -76,11 +76,23 @@ browsers on the same machine.
 In progress (2026-09-03). Solo smoke-tested end to end via scripted console
 runs: element pick, combat, gold/XP gain, guaranteed level-2-up after
 clearing level 1, shop purchases (buy spell + mentor level-up), the
-level-2 transition, and — newly — hub-room teleport, the level 2 (bigger
+level-2 transition, and hub-room teleport, the level 2 (bigger
 arena/tougher enemies) and level 3 (boss, 900 HP, slam + charge attacks
-both firing correctly over 10 simulated seconds) zones, and looping from
-level 3 back to level 1. All confirmed working with zero console errors.
-Real multi-client test pending.
+both firing correctly over 10 simulated seconds) zones. All confirmed
+working with zero console errors. Real multi-client test pending.
+**Update**: the dungeon no longer loops from level 3 back to 1 — per user
+request the run is now finite (3 levels, ends after the boss); see the
+mirror-portal Findings entry.
+
+### Known issues / tech debt
+
+- **Hub room corners may still show a faint seam.** Attempted a fix
+  (`buildHubRoom`'s `EXT` wall-extension — see its own Findings entry) and
+  verified it mathematically (adjacent wall AABBs now genuinely overlap at
+  every corner), but couldn't get a clean up-close visual confirmation in
+  this sandboxed browser (camera yaw isn't controllable here). Per user
+  instruction, parking this as tech debt rather than continuing to chase
+  it blind — revisit with a real playtest.
 
 ## Features
 
@@ -1838,3 +1850,268 @@ Real multi-client test pending.
   2-hit level-2 total) and the `fx` array grew by 2 entries over the
   following 300ms as the staggered `setTimeout` callbacks fired on
   schedule.
+
+- **Hub rebuilt into a full multi-room waystation** (per user request —
+  "Хогвартс / библиотека / Круглый стол", "делай, пока не получится
+  идеально"), replacing the single square room. A "+"-shaped complex: Main
+  Hall in the middle, four spokes off it — Library (mentor stand, north),
+  Fire room (west), Water room (east), Lightning room (south) — each
+  linked to the hall by a short corridor with its own door-gap walls.
+  ```
+                [Library]
+                   |
+  [Fire] —— [Main Hall] —— [Water]
+                   |
+              [Lightning]
+  ```
+  - New generic room/corridor builders (`buildHubRoom`, `hubWallSeg`,
+    `hubFloorCeil`, `buildHubCorridorNS/EW`) mirror `buildArena`'s own
+    box-wall + `{minX,maxX,minZ,maxZ}` collision-record style, but support
+    a door gap on ANY of a room's 4 sides (Main Hall needs all 4; each
+    spoke needs exactly 1, facing back toward the hall) — `buildArena`
+    itself only ever supported one fixed gap on the north wall, not
+    reusable here.
+  - Collision: hub has no enemies (see `buildLevelEnemies`), so this only
+    ever needed PLAYER collision — the full wall list is stashed straight
+    into `ZONE_MAZE['hub'].walls`, which the existing movement code
+    already resolves against for any zone with a `ZONE_MAZE` entry, for
+    free, no new collision plumbing needed. `ZONES.hub.half` bumped
+    10→25 (a generous OUTER bound only — the real containment is the wall
+    list; 25 comfortably covers the library's own farthest extent, 24).
+  - Decor: new reusable prop builders — `makeBookshelf` (canvas-textured
+    book spines, tiled per shelf), `makeCurtain` (vertical-striped cloth +
+    a wooden rod), `makeRug` (bordered canvas pattern, lifted 0.02 off the
+    floor to avoid the SAME z-fighting class of bug as the portal-flicker
+    Finding earlier in this file — coplanar floor geometry), `makeArmchair`,
+    `makeBanner` (canvas gradient + emoji emblem), `makeReadingTable` (+
+    candle light). `furnishClassRoom(x,z,gapSide,emoji,colorHex,
+    centerpieceFn)` is a shared template applied to all 3 class rooms —
+    bookshelf + banner on the wall OPPOSITE the door, curtains on the two
+    side walls, one signature centerpiece each: `makeBrazier` (Fire, reuses
+    the shared torch flicker loop), `makeFountain` (Water), `makeStormOrb`
+    (Lightning). Library gets its own hand-placed layout (denser: 3 walls
+    of bookshelves, reading table + candle, an armchair) since it's the
+    single biggest/most detailed room. Main Hall keeps the mirror (moved
+    to its south wall) with 2 armchairs + a rug forming a rest nook, 2
+    bookshelves flanking the library corridor's mouth, and the existing
+    shop fixtures (mentor stand → moved into the Library; passive stands +
+    continue portal → tucked into two Main Hall corners the corridors
+    don't cross).
+  - One warm ambient `PointLight` per room (`hubAmbient`) on top of each
+    room's own fixture lights (candle, brazier, fountain glow, storm orb,
+    shop-stand orbs) — a space this size needs more than point-fixtures
+    alone for base visibility. All lights (~19 total across the complex)
+    still register via the existing `registerZoneLight('hub', ...)` /
+    `setZoneLightsVisible()` culling, unchanged.
+  - Verified live and structurally via `window.__debug`, not just "no
+    console errors": (1) wall count — 36 wall segments generated, and
+    hand-counted the expected total from the room/gap math (Main Hall
+    4-gapped-sides ×2 segments=8, each spoke 1-gapped+3-solid=5×4=20, 4
+    corridors ×2 side walls=8 → 8+20+8=36) — exact match. (2) Collision —
+    simulated walking straight into the Library's solid west wall: stopped
+    at exactly `PLAYER_RADIUS` (0.55) short of the wall face, as expected;
+    simulated walking the full corridor from the Library center straight
+    through its south doorway into the Main Hall: reached deep past the
+    Main Hall's own center with zero snags, confirming the doorway/
+    corridor path is genuinely open end-to-end. (3) Visual — screenshots
+    from inside all 5 rooms: Main Hall (mirror + armchairs + rug visible
+    together, no z-fighting), Library (reading table + candle glow +
+    mentor stand + an armchair, all correctly lit), Fire (brazier's flame
+    cone + warm brick walls), Water (fountain's glowing basin + cool
+    walls), Lightning (storm orb + warm-yellow walls) — each room reads
+    visually distinct at a glance, matching the "антураж библиотеки"
+    brief. Bookshelves/curtains/banners on the FIRE room's side/far walls
+    specifically weren't confirmed in-frame (this sandboxed browser can't
+    reliably rotate the camera to arbitrary yaw — see the session's
+    recurring `requestAnimationFrame`-reliability caveat), so their exact
+    on-screen look is code-review-verified only; everything else was seen
+    directly. Worth a real playtest pass to judge overall room proportions/
+    pacing (corridor length, room sizes) by feel, not just by the numbers.
+
+- **6-part hub follow-up**: corner seams, mirror-blocking-a-doorway bug,
+  gold frame, coziness pass, and — the big one — replacing dungeon-entry
+  entirely with level-portal mirrors. Asked 3 clarifying questions first
+  (mirror-break persistence, active-portal look, whether to keep the old
+  "continue" ring as a fallback) since all three materially changed the
+  implementation; answers: broken stays broken forever (levels are finite,
+  no loop back to 1), active portal = stylized swirl (not a live
+  reflection), old ring removed entirely.
+  1. **"Вход в молнию почему-то через зеркало" — real cause, not a vague
+     glitch.** The self-view mirror and the Main Hall's south-wall door
+     gap (leading to the Lightning corridor) were BOTH centered at x=0 on
+     that wall — the mirror was sitting directly in the doorway. Moved to
+     its own alcove (`hMainX-5.5`) with the reading nook, clear of every
+     door gap.
+  2. **"Внутренние углы" — walls not meeting at room corners.** Root
+     cause: each wall segment's box stopped exactly at the room's nominal
+     corner instead of overlapping the perpendicular wall's own thickness
+     band there, leaving a small unsealed notch — same *class* of bug as
+     `buildArena`'s corner handling already avoids (via its `+2` oversized
+     span), just not replicated in `buildHubRoom`'s from-scratch
+     door-gap-aware version. Fixed by extending every solid wall segment
+     (and gapped segments' OUTER/corner end only — the door-facing end
+     must stay exactly at the gap boundary) by `EXT=0.5` past the nominal
+     corner. Verified two ways: (a) wall count unchanged at 36 (this is a
+     span-length change, not a segment-count change) — confirmed via a
+     direct AABB-overlap check at the Main Hall's SE corner: the south
+     wall's flanking segment (`x:[2,9.5]`) and the east wall's flanking
+     segment (`z:[-239.5,-232]`) now share a real 1×1 overlap square at
+     the corner (`cornerCovered` check returns `true` — the exact corner
+     point is inside at least one wall's box). (b) Visual — screenshot
+     along a Main Hall wall (with the `L` full-lighting debug cheat on)
+     shows a continuous, unbroken brick surface; a right-up-at-the-exact-
+     corner shot was inconclusive (near-clip range at that distance, not
+     a geometry gap — confirmed by reading the live `playerPos`, which
+     was still a valid in-room position).
+  3. **Gold frame** (`makeGoldFrame`, replaces the old plain dark-purple
+     bars): gilt `MeshStandardMaterial` (metalness 0.85), a thin inset
+     trim line for the "кайма" detail beyond a plain outline, and 4 small
+     gilt corner-ornament spheres. Shared by the self-view mirror AND
+     every new level-portal/broken-mirror prop below, so the whole hub's
+     mirror set reads as one consistent, expensive-looking family.
+  4. **Coziness**: new `woodMaterial`/`makeWoodTexture` (canvas plank
+     texture) replaces stone for every hub room's FLOOR (ceilings/walls
+     stay stone — full wood-paneled walls read as a different building
+     style entirely, floor-only keeps it "a stone hall with wood floors,"
+     which is what was actually asked); a `makeFireplace` (stone surround,
+     logs, live flame reusing the shared torch-flicker loop) on the Main
+     Hall's west wall; 2 `makeTapestry` wall hangings (canvas
+     diamond-lattice pattern, distinct from the small per-class emblem
+     banners) on the east wall.
+  5. **Level portal-mirrors** (`hubLevelMirrors`, replaces the old single
+     "continue" ring — `makeContinuePortal`/`shopContinuePortal` deleted
+     entirely, along with `#labelContinue`): one gold-framed mirror per
+     dungeon level, standing in a row in the Main Hall. 3 visual states
+     (`setMirrorLevelState`) — **dormant** (dark inert glass, level not
+     reached yet), **active** (swirling canvas-texture glow, procedurally
+     drawn — `makeSwirlTexture` — colored by that level's
+     `ZONE_PORTAL_ELEMENT`, exactly one mirror is ever in this state:
+     `highestClearedLevel+1`), **broken** (cracked-glass canvas texture —
+     `makeCrackedTexture` — permanent once set, per the user's answer).
+     `MAX_LEVEL` and `ZONE_PORTAL_ELEMENT` both had to move earlier in the
+     file (were declared after this code used to run) — no behavior
+     change, pure ordering fix for the new top-level `updateHubMirrors()`
+     call. `highestClearedLevel` is host-authoritative, set in
+     `startShopPhase()` right when a level clears, and rides along in the
+     periodic `'state'` broadcast for clients (`onClientData` calls
+     `updateHubMirrors()` when it changes). `closeShopAndAdvance()` now
+     computes `next = highestClearedLevel+1` instead of the old
+     `currentLevel>=MAX?1:current+1` wraparound, and no-ops once
+     `next > MAX_LEVEL` — the run just ends, no loop back to level 1.
+     Interacting with the active mirror reuses the exact same
+     `requestReadyNext()`/`'continue'`-kind plumbing as the old portal,
+     just retargeted.
+  6. **Level-side broken mirror** (`makeBrokenMirrorProp`): a static,
+     always-broken gold-framed cracked mirror at each dungeon level's own
+     spawn point — reuses `makeGoldFrame`/`makeCrackedTexture` from the
+     hub mirrors. Deliberately did NOT touch the existing `zonePortal`
+     swirl-ring system that already renders at every zone's spawn (async
+     FBX-loaded, generation-counter-guarded — real risk to break something
+     working for a purely cosmetic ask); instead just stopped calling it
+     for the hub specifically (redundant now that the hub has its own
+     dedicated portal mirrors) and added this as an ADDITIONAL static prop
+     for levels 1/2/3, sitting next to the existing swirl ring rather than
+     replacing it. Flagging this as a scope simplification, not silently.
+  - Verified live end-to-end via `window.__debug`, not just code review:
+    simulated clearing level 1 → mirrors read `[broken, active, dormant]`;
+    called `closeShopAndAdvance()` directly → `currentLevel`/`currentZone`
+    correctly became 2; simulated clearing level 2 → `[broken, broken,
+    active]`; advanced to and cleared level 3 (the boss) →
+    `[broken, broken, broken]`, `highestClearedLevel=3`; called
+    `closeShopAndAdvance()` a 4th time → correctly a no-op (`currentZone`
+    stayed `'hub'`, `currentLevel` stayed `3`) — confirms the finite,
+    non-looping ending works exactly as specified. The E-press trigger
+    itself (`activeStandAction` set by `updateShopStands()`, which runs
+    inside the per-frame `animate()` loop) could NOT be exercised this
+    time — the sandbox's `requestAnimationFrame` was fully stalled during
+    this test (same recurring limitation), so that specific wiring is
+    code-review-verified only; every host-side mechanic it calls into was
+    exercised directly and is confirmed correct.
+
+- **4-part hub follow-up: corners parked as tech debt, mirrors flush to
+  walls, portal-as-object removed entirely, real pentagram assets in the
+  class rooms.**
+  1. **Corner seam — not re-attempted, parked as tech debt** per explicit
+     user instruction ("оставь как техдолг"). The `EXT` wall-extension
+     from the previous round is still in place (mathematically verified —
+     adjacent wall AABBs do overlap at every corner) but a clean up-close
+     visual confirmation was never obtained (camera yaw isn't
+     controllable in this sandbox), so it's logged as unresolved instead
+     of claimed fixed. See the new "Known issues / tech debt" section
+     near the top of this file.
+  2. **Mirrors must always sit flush against a real wall** (per user
+     request — the Main Hall's 3 level-portal mirrors were freestanding
+     in open floor, which read wrong). Moved them onto the Main Hall's
+     south wall (its east solid segment, x:2..9.5 — clear of the
+     Lightning-corridor door gap and the self-view mirror's own alcove on
+     the west segment), at x=3/5.5/8, all facing +Z (`rotY=0`) same as
+     the self-view mirror on that wall. The level-side broken mirrors
+     (added last round, freestanding near each spawn point) needed the
+     same treatment but each level's spawn sits in different kinds of
+     space — a built antechamber (level 1), a randomly-generated maze
+     (level 2), and a big open boss arena (level 3) — so wrote a generic
+     `nearestWallFlushSpot(walls, x, z, maxDist)` that finds the closest
+     wall AABB to a point within range and returns a flush mount spot
+     (position + facing) on whichever of its 4 faces the point is
+     actually nearest to — works for any axis-aligned wall list without
+     per-level-shape logic. Levels 1/2 already had queryable wall lists
+     (`ZONE_DOOR_WALLS[1]`, `ZONE_MAZE[2].walls`) to search; level 3's
+     plain-arena walls aren't tracked in any list at all (`buildArena`
+     doesn't push to one, unlike `buildMaze`/`buildPortalRoom`), so that
+     one is hand-placed against its known north wall instead of adding
+     wall-tracking to `buildArena` just for this one decorative prop.
+     Verified structurally via `window.__debug`: found all 7 gold-frame
+     groups in the scene (1 self-view + 3 hub level-mirrors + 3 level-side
+     broken mirrors — matches `28 gold bars / 4 bars-per-frame` exactly)
+     and read their positions — level 2's broken mirror landed at
+     `x=-3.09` (not the spawn's own `x=0`), confirming
+     `nearestWallFlushSpot` actually found and snapped to a real nearby
+     maze wall rather than just using a fixed offset. Screenshot from
+     inside the Fire class room also directly confirmed the Main Hall's
+     active level-2 mirror rendering flush against the south wall with
+     its gold frame and swirling glow, and the `[E] Войти — уровень 2`
+     prompt showing correctly.
+  3. **Portal-as-object removed entirely — mirrors are now the only
+     transition visual anywhere** (per user request — "убери портал через
+     объект, оставь только зеркала"). The old per-zone `zonePortal` swirl
+     ring (`refreshPortal`/the block in `respawnLocalPlayer` that called
+     it) is gone from `respawnLocalPlayer` completely — previously it was
+     only skipped for the hub (last round's change); now it never fires
+     for the dungeon levels either, since each already has its own static
+     broken-mirror prop serving that "you arrived here" role. Removed the
+     now-dead `zonePortal = updatePortal(...)` call from `animate()` too
+     (the `zonePortal` variable itself no longer exists). The
+     `ensurePortalTemplate`/`instantiatePortal`/`updatePortal` loader
+     functions were kept, NOT deleted — they're what makes finding #4
+     possible (same FBX asset, different use).
+  4. **Real pentagram 3D assets in the elemental class rooms**
+     (`makeElementPentagram`, per user request — reuse the actual
+     `portal_lightning.fbx`/`.png` files instead of only the procedural
+     brazier/fountain/storm-orb centerpieces). Calls the existing
+     `ensurePortalTemplate`/`instantiatePortal` pair directly — placement
+     had to happen after their definitions in file-load order since they
+     read `const`s (`portalTemplates` etc.) that would otherwise still be
+     in their temporal dead zone at hub-build time; the hub room-center
+     coordinates (`hFireX`/`hFireZ`/...) are already `const`s in scope by
+     then, so the pentagram calls sit right after `updatePortal`'s
+     definition instead. `instantiatePortal` always applies `PORTAL_SCALE`
+     (1.2 — an ~8m-across dungeon-scale portal per its own comment), which
+     would swallow an entire 10×10 class room whole — overridden back
+     down to `HUB_PENTAGRAM_SCALE=0.35` (~2.3m) on the returned instance
+     instead of touching the dungeon portal's own sizing. All 3 rooms
+     explicitly request the `'Lightning'` element (same fallback the old
+     per-zone portals already used) rather than each room's own element —
+     only `portal_lightning.fbx/.png` exist on disk; asking for
+     `'Fire'`/`'Water'` was tried first and produced exactly the 4
+     predictable 404s you'd expect (2 files × 2 missing elements),
+     confirmed by reading the network log on a fully fresh tab (a
+     mid-session reload had briefly shown the SAME 404s from a stale
+     accumulated log before the fix — re-verified clean on a genuinely
+     new tab to be sure it wasn't a real ongoing issue). No despawn-on-
+     distance logic (unlike the old per-player portal) — these are
+     permanent room fixtures; kept spinning via a small `hubPentagrams`
+     array ticked every frame in `animate()` (`p.mixer.update(dt)`,
+     next to the existing `updateTorches` call). Verified live:
+     screenshot from inside the Fire room shows the pentagram's glowing
+     rune-circle floor decoration and the brazier both rendering
+     together at a sane relative scale, no clipping.
