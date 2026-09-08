@@ -964,3 +964,124 @@ old ring removed entirely.
   shows the pentagram and brazier together at sane relative scale.
 - Full detail in README Findings.
 - Not committed yet.
+
+## COMPLETE: 3 new levels (4-6), harder mazes, BOSS2 (6 asks worth, 1 request)
+
+- `MAX_LEVEL` 3→6. Levels 3 AND 6 are boss floors now (`BOSS_LEVELS=[3,6]`,
+  replaces every hardcoded `level===3` check). New zones placed well south
+  of the hub (not just south of level 3) to avoid overlapping its
+  z:[-252,-206] footprint — cz -326/-440/-536.
+- **Level 4**: 9×9 maze @ 7.5u/cell (100 walls, 6.8-unit corridors).
+  **Level 5**: 11×11 @ 7u/cell (144 walls, 6.3-unit corridors) — both
+  harder than level 2's 7×7@8 (64 walls, 7.3-unit). Enemy count formula
+  generalized + bumped (`9+level+0..3`); HP scaling already generic
+  (`ENEMY_MAX_HP+(level-1)*35`), no change needed.
+- **Level 6 — BOSS2**: 1700 HP (vs level 3's 900), entirely different kit,
+  no melee at all — telegraphed ranged bolt (20 dmg, re-checks range at
+  impact) + area-denial ground spikes (26 dmg each, 2 per cast, red
+  warning ring telegraph) + kiting movement (holds range, never charges).
+  `makeEnemy` gained a `bossKind` param; `hostSimulate`'s boss branch
+  splits on it, level 3's original slam/charge boss untouched.
+- Hub: 6 level-portal mirrors now (levels 1-3 stayed on the south wall,
+  4-6 added to the east wall — its 2 tapestries moved into the library
+  corridor to make room). Level 4/5 got flush level-side broken mirrors
+  via the existing `nearestWallFlushSpot` helper; level 6 hand-placed
+  like level 3.
+- Verified live via `window.__debug`: stepped through all 6 levels
+  confirming enemy count/HP/boss-kind/maze-wall-count each; ran a full
+  clear-all-6 loop and confirmed `hubLevelMirrors` states progressed
+  correctly through every step, ending with all 6 broken and a 7th
+  advance-call correctly no-op'ing; stepped `hostSimulate` directly
+  against BOSS2 and confirmed exact damage numbers (20 per bolt, 52 for a
+  2-spike volley) match the constants precisely; screenshots confirm
+  BOSS2 and the new hub mirrors render correctly. No console errors.
+- Full detail in README Findings.
+- Not committed yet.
+
+## COMPLETE: Dormant hub mirrors now reflect players (1 ask)
+
+- Not-yet-reached level mirrors show a real live reflection (whole,
+  reflects players) instead of a dark inert plane; active still shows the
+  swirl, broken still shows cracked glass. Extracted the self-view
+  mirror's Reflector logic into `makeReflectiveGlass()`; each level
+  mirror now has both a reflective instance and the flat textured plane,
+  toggled via `.visible` in `setMirrorLevelState`.
+- Verified live: screenshot at a dormant mirror shows a real reflection
+  of the player's own mage model; re-checked the active mirror still
+  shows the swirl correctly (no regression).
+- Full detail in README Findings.
+- Not committed yet.
+
+## COMPLETE: Reverted dormant-mirror reflections — fixed lag (1 ask)
+
+- User reported severe lag after the above change. Root cause: up to 5
+  simultaneous `Reflector` instances (each a full extra scene re-render
+  per frame) for dormant mirrors early in a run. Removed `m.reflective`/
+  `makeReflectiveGlass` from `makeLevelMirror` entirely — level mirrors no
+  longer create a Reflector. `setMirrorLevelState`'s `'dormant'` branch
+  now reuses `makeSwirlTexture()` (same as `'active'`) tinted grey
+  (`0x888890`), dim emissive, light off — matches user's exact request:
+  "как доступный активный, но серого цвета."
+- Verified via `window.__debug`: exactly 1 `Reflector` left in the whole
+  scene (self-view mirror only, down from up to 6); confirmed dormant
+  mirrors have no `.reflective` prop, grey swirl map present, correct
+  color/emissive/light values; round-tripped `highestClearedLevel`
+  through `updateHubMirrors()` and confirmed state transitions still
+  correct.
+- Full detail in README Findings.
+- Not committed yet.
+
+## COMPLETE: Main menu redesign per reference concept art (1 ask)
+
+- Rebuilt the main menu to match a user-supplied concept image: dungeon
+  hall backdrop with 3 glowing elemental portal arches (fire/water/
+  lightning, CSS-only — no matching image asset exists), left-aligned
+  title "COVENANT OF MAGES" with flanking icons, pill-style buttons,
+  bottom tagline "Три стихии · одна цель". All existing functional
+  elements (`#panelMain`'s host/join buttons, name/code inputs, error/
+  hint text) kept their IDs and behavior, only restyled; lobby/waiting
+  panels kept their original centered card look.
+- Fixed one CSS specificity bug found while building this (`.menuPanel`
+  losing to the later `.panel` rule — scoped to `#panelMain.menuPanel`).
+- Verified live: screenshot matches reference composition; host button
+  still correctly transitions to the loading screen.
+- Full detail in README Findings.
+- Not committed yet.
+
+## COMPLETE: Menu buttons/text cleanup + bg placeholder, HUD minimap/quest/party (2 asks)
+
+- Menu: buttons now exactly Играть/Присоединиться/Настройки/Авторы/Выйти
+  (host/join keep their real IDs and behavior; the 3 new ones are
+  `disabled` with an explanatory tooltip — nothing to wire them to yet).
+  Removed the subtitle and instructional hint text. Swapped the CSS
+  portal-arch backdrop for a single placeholder layer
+  (`url('menu-bg.jpg')` over a dark gradient) — **drop the real art in as
+  `prototypes/web-mvp-concept/menu-bg.jpg`** when ready, no code change
+  needed, it picks it up automatically.
+- HUD: added a minimap (stylized compass, arrow rotates with real player
+  `yaw` — documented as a simplification, not a real top-down map), a
+  quest box (text derived from existing zone/level/shop state), and a
+  party panel showing OTHER players only (name, element, HP bar, spell-
+  count badge) built from data already flowing over the network. Nothing
+  else in the HUD touched, per explicit instruction.
+- Verified live via `window.__debug` (`enterGame()` + fake
+  `remotePlayers` entries) — confirmed correct HTML/colors/rotation
+  render organically through a real `requestAnimationFrame` tick this
+  session. Screenshots confirm both changes.
+- Full detail in README Findings.
+- Not committed yet.
+
+## COMPLETE: 3 follow-up tweaks (1 ask)
+
+- "Играть" → "Создать" on the host button (same handler).
+- Minimap gained a REAL top-down projection (walls/pillars/enemies near
+  the player, world-fixed, player-centered) instead of being compass-
+  only — user correctly called out the previous version as not being an
+  actual minimap. Built from data the game already has for collision
+  (`ZONE_DOOR_WALLS`/`ZONE_MAZE[*].walls`/`hubWalls`/`ZONE_PILLARS`), no
+  new geometry authored. Verified the exact coordinate math against zone
+  1's real pillar layout — matched precisely.
+- Quest objective text is now "Победить противников" on every dungeon
+  level (title still differs maze vs. boss); hub objective unchanged.
+- Full detail in README Findings.
+- Not committed yet.

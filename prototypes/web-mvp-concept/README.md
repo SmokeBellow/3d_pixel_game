@@ -2115,3 +2115,282 @@ mirror-portal Findings entry.
      screenshot from inside the Fire room shows the pentagram's glowing
      rune-circle floor decoration and the brazier both rendering
      together at a sane relative scale, no clipping.
+
+- **3 new dungeon levels (4, 5, 6) — harder mazes, tougher enemies, a
+  second boss.** `MAX_LEVEL` 3→6. Levels 3 and 6 are both boss floors now
+  (`BOSS_LEVELS = [3, 6]`, replacing every hardcoded `level === 3` check in
+  `computeSpawnsForLevel`/`buildLevelEnemies`/the shop-phase log message);
+  everything else (1/2/4/5) is a regular enemy floor.
+  - **Placement**: all 3 new zones sit well south of the hub complex
+    (which itself spans z:[-252,-206] — see `buildHubRoom`), not just
+    south of level 3, to avoid overlapping it in world space — every zone
+    coexists statically in the one scene, and every zone transition is a
+    teleport (mirrors), never a physical walk between zones, so world-
+    space placement only ever matters for avoiding geometry collisions,
+    not path layout. cz: level 4 -326, level 5 -440, level 6 -536 —
+    30-40+ unit gaps to every neighbor.
+  - **Levels 4/5 (mazes)**: same `buildMaze` used by level 2, just bigger
+    grids and (slightly) tighter cells — level 4: 9×9 @ 7.5 units/cell
+    (100 wall segments, 6.8-unit corridors); level 5: 11×11 @ 7 units/cell
+    (144 wall segments, 6.3-unit corridors) — vs level 2's 7×7 @ 8 (64
+    segments, 7.3-unit corridors). More cells means longer/more complex
+    paths; corridors stay comfortably walkable rather than punishing
+    (level 2 already proved 7.3 felt right, so 6.8/6.3 are only modestly
+    tighter). `ZONES[4/5].half` set to exactly `cols*cellSize/2` (33.75 /
+    38.5) so the outer wall lines up with the maze extent, same
+    convention level 2 already used. `computeSpawnsForLevel`'s maze
+    branch generalized from `level === 2` to `ZONE_MAZE[level]` (works for
+    any maze zone now) and its enemy count formula changed from a flat
+    9-14 to `9 + level + 0..3` (11-13 for level 2 same as before, up to
+    16-19 for level 5) — more enemies on top of the existing
+    `ENEMY_MAX_HP + (level-1)*35` HP scaling (already generic, no change
+    needed) for "stronger enemies," not just "more of the same."
+  - **Level 6 — BOSS2, a genuinely different fight** (per user request:
+    "снова один босс, но сильнее и с другими способностями"). Bigger HP
+    pool (1700 vs level 3's 900) and an entirely different kit — no
+    melee slam/charge at all:
+    - **Ranged bolt**: telegraphed (`BOSS2_BOLT_TELEGRAPH_S=0.6s` between
+      cast and impact — a real reaction window, same idea as
+      `MELEE_IMPACT_FRAC`), re-checks the target's range at impact (not
+      cast time) before applying `BOSS2_BOLT_DAMAGE=20`, up to
+      `BOSS2_BOLT_RANGE=16` away. Reuses the existing `spawnLightningBolt`
+      fx (tinted magenta) rather than inventing new visuals.
+    - **Ground spikes**: drops `BOSS2_SPIKE_COUNT=2` danger zones under
+      random players (`±2` unit jitter) with a `BOSS2_SPIKE_WARNING_S=1.3s`
+      telegraph (a new red ring fx, `spawnGroundSpikeWarning` — a static
+      `fx`-array entry, no growth needed, its existing decay curve already
+      reads as "steady, then flashes out right before it pops"), then an
+      AoE burst (`spawnGroundSpikeBurst`, just `spawnNovaFx` re-tinted red
+      — no need for a whole new effect) dealing `BOSS2_SPIKE_DAMAGE=26` to
+      anyone still standing in it.
+    - **Kiting movement**: tries to hold `BOSS2_KITE_RANGE=9` from its
+      target — backs away if closer, closes in if farther — instead of
+      level 3's boss charging straight at players. Never melees.
+    - Implementation: `makeEnemy` gained a `bossKind` parameter (`null`
+      for level 3's original boss, `'ranged'` for BOSS2); the
+      `hostSimulate` boss branch now computes `target`/`alive` once up
+      front, then splits into the BOSS2 branch (own `boltCooldown`/
+      `spikeCooldown`/`pendingBolt`/`pendingSpikes` state, all
+      initialized in `makeEnemy`'s return object) or falls through to the
+      original slam/charge branch unchanged. `BOSS_SCALE`/`BOSS2_SCALE`
+      picked in `makeEnemy` based on `bossKind`.
+  - **Hub integration**: `hubLevelMirrors` now holds 6 mirrors, not 3 —
+    levels 1-3 stayed on the Main Hall's south wall (unchanged), levels
+    4-6 added to the east wall's south solid segment (z:-9.5..-2, clear of
+    the Water-corridor door gap) — which required moving the 2 tapestries
+    that used to live there into the Library corridor's side walls
+    instead (still flush, still decorative, just relocated). Levels 4/5
+    each got a `placeBrokenMirrorNear`-flush level-side broken mirror
+    (found real nearby maze walls, same as level 2's); level 6 got a
+    hand-placed one against its own north wall, same reasoning as level
+    3's (its plain-arena walls aren't tracked in any queryable list).
+  - Verified live via `window.__debug`, structurally AND behaviorally:
+    (1) stepped through all 6 levels with `startLevel()`, confirming
+    `enemies.length`/HP/`bossKind`/maze-wall-count for each — levels 1-6
+    read exactly as designed (5/11/1-boss-900hp/15/16/1-boss2-1700hp-
+    ranged). (2) Ran a full clear-all-6-levels loop via
+    `startShopPhase()`/`closeShopAndAdvance()` and read `hubLevelMirrors`
+    after each — states progressed
+    `[active,dormant,dormant,dormant,dormant,dormant]` →
+    `[broken,active,dormant,...]` → ... →
+    `[broken,broken,broken,broken,broken,active]` →
+    `[broken,broken,broken,broken,broken,broken]`, and a 7th
+    `closeShopAndAdvance()` call after that correctly no-op'd (still
+    `currentZone:'hub'`, `currentLevel:6`) — the extended 6-level
+    progression works exactly like the earlier 3-level version did.
+    (3) Stepped `hostSimulate` directly against BOSS2 with a player in
+    range: confirmed a bolt cast resolves for exactly 20 damage and a
+    2-spike volley for exactly 52 (26×2) — matches the constants exactly,
+    not just "some damage happened." (4) Screenshots: BOSS2 itself
+    (bigger, red-eyed, full HP bar) with a leftover ground-spike warning
+    ring visible on the floor from the damage test; 2 broken mirrors
+    (cracked glass, gold frame) flush on the Main Hall's east wall after
+    the full clear-run. No console errors throughout.
+
+- **Dormant (not-yet-reached) hub mirrors now reflect players for real,
+  instead of sitting dark** (per user request — "целый и отражают
+  игроков"). Extracted the self-view mirror's Reflector-plus-"show my own
+  body just for this reflection" trick into a standalone
+  `makeReflectiveGlass(x,y,z,rotY,w,h)` (the original `makeMirror` is now
+  just that call plus `makeGoldFrame`, unchanged behavior). Every
+  `makeLevelMirror` now builds BOTH a live `m.reflective` (this) and the
+  existing flat `m.glass` (swirl/cracked texture) at the same spot;
+  `setMirrorLevelState` toggles `.visible` on whichever one the state
+  calls for — `'dormant'` shows the reflection, `'active'`/`'broken'`
+  show the textured flat plane, only ever one of the two at a time. Added
+  a `!mirror.visible` early-return inside the Reflector's own
+  `onBeforeRender` — belt-and-suspenders against paying for a full extra
+  scene re-render on a hidden mirror; in practice this is already how
+  three.js's own scene traversal works (an invisible object's
+  `onBeforeRender` is never even called), so it's a defensive no-op
+  rather than a fix for a measured cost, but early game can have up to 5
+  dormant mirrors on screen at once and it costs nothing to be sure.
+  Verified live: screenshot standing at level 3's mirror (dormant) shows
+  a real mirrored reflection of the player's own Fire mage model, gold
+  frame intact; re-checked level 2's mirror (active, just cleared level 1
+  in the same test) still shows the swirl + correct `[E] Войти — уровень
+  2` prompt, confirming no regression to the other two states.
+
+- **Reverted the above — live-reflection dormant mirrors caused severe
+  game-wide lag** (user report: "игра теперь сильно лагает"). Root cause:
+  a `Reflector` re-renders the *entire scene* from a virtual camera every
+  frame it's visible, and early-game has up to 5 dormant mirrors on
+  screen simultaneously — 5 extra full scene passes per frame, not a
+  theoretical cost. The earlier `!mirror.visible` early-return only
+  guarded the ones currently hidden; it did nothing for the 4-5 that are
+  dormant *and on screen* at once, which is the common case. Fix (per
+  user: "замени... на такой же вариант, как доступный активный, но
+  серого цвета"): removed `m.reflective`/`makeReflectiveGlass` entirely
+  from `makeLevelMirror` — level mirrors no longer instantiate a
+  Reflector at all, only the self-view mirror in the Main Hall still has
+  one (1 total in the scene now, down from up to 6). `setMirrorLevelState`'s
+  `'dormant'` branch now calls the same `makeSwirlTexture()` the
+  `'active'` branch uses, tinted grey (`0x888890`) with a dim 0.25
+  emissive (vs. active's 0.55) and no point-light glow — reads as "a real,
+  intact portal, just not the live one" at zero extra per-frame cost
+  (same static canvas-texture plane the other two states already use).
+  Verified via `window.__debug`: confirmed exactly 1 `Reflector` remains
+  in the whole scene (traversed and counted by constructor name); read
+  every `hubLevelMirror`'s material state directly — dormant mirrors have
+  no `.reflective` property at all, `glass.visible` always true,
+  `map` present (grey swirl), color `#ffffff`, emissive `#888890` @ 0.25,
+  light off; active mirror unchanged (yellow swirl, 0.55 emissive, light
+  on). Round-tripped `highestClearedLevel` through `updateHubMirrors()`
+  (0 → 2 → 0) and confirmed states relabel correctly each time
+  (`dormant`→`broken`/`active`/`dormant` as expected) with the new
+  material logic. `makeReflectiveGlass`/`makeMirror` themselves are
+  untouched — still used once, for the self-view mirror, which was never
+  reported as laggy.
+
+- **Main menu redesigned per user-supplied reference concept art** (a
+  dungeon hall with 3 glowing elemental portal arches, left-aligned title
+  "COVENANT OF MAGES" flanked by icons, pill-style menu buttons, bottom
+  tagline). No matching background image asset exists on disk (checked
+  `textures/`/`models/` — only particle sprites and the lightning portal
+  FBX), so the whole scene is built from CSS gradients/shapes instead —
+  same "procedurally generated" spirit as `makeSwirlTexture` and the
+  skill-tree paper background elsewhere in this file, not an image. New
+  `#menuScene`/`.portalArch` elements render 3 arch shapes tinted per
+  element (fire/water/lightning) with a pulsing inner border and radial
+  glow; `#menuLeftColumn` holds the restyled title block, the existing
+  functional `#panelMain` (all original IDs/behavior unchanged — host
+  name input, host/join buttons, join-code row, error text, hint text),
+  and the tagline. `panelLobby`/`panelWaitingClient` keep their original
+  centered card style (`.panelCentered`), now floating over the same
+  backdrop. Hit one real bug while building this: `.menuPanel`'s
+  background/border overrides were losing to the later `.panel` class
+  rule at equal CSS specificity (source-order tiebreak) — fixed by
+  scoping the override to `#panelMain.menuPanel` (ID beats class).
+  Verified live: screenshot confirms the portal arches, title, and pill
+  buttons render correctly and match the reference's composition; clicked
+  "Создать игру (хост)" and confirmed it still correctly transitions to
+  the asset-loading screen (the loading itself stalling at 0% here is the
+  known sandboxed-preview relative-path limitation, unrelated to this
+  change — `models/*.fbx` can't resolve from a `file://` path opened
+  outside the project root in this tool).
+
+- **Menu buttons swapped to the final 5-item set, decorative text removed,
+  background swapped for a drop-in placeholder** (follow-up to the above,
+  per user request). `btnHost`/`btnShowJoin` relabeled "Играть"/
+  "Присоединиться" (same IDs, same click handlers — host/join flow
+  unchanged); added `btnSettings`/`btnCredits`/`btnExit`, all `disabled`
+  with a `title="Недоступно в прототипе"` tooltip rather than silently
+  doing nothing on click — there's no settings/credits/exit system in this
+  prototype to wire them to, and a disabled-with-explanation button is
+  more honest than a dead click. Removed the "web MVP prototype — co-op
+  spell synergy" subtitle and the "Хост создаёт комнату…" instructional
+  paragraph entirely, per "убери все остальные комментарии" — only the
+  title, functional form, and the existing error text remain.
+  Replaced the CSS-drawn portal-arch backdrop with a single `#menuScene`
+  layer: `background: center/cover url('menu-bg.jpg'), <dark gradient>`.
+  No image exists yet (expected — user said they'll supply one later);
+  until then the gradient layer shows through on its own, since a failed
+  background-image layer just doesn't paint rather than breaking the
+  other layers. **To finish this: drop the final art in as
+  `prototypes/web-mvp-concept/menu-bg.jpg`** (same folder as
+  `prototype.html`) — no code change needed, it'll pick it up
+  automatically. Verified live: screenshot confirms exactly the 5
+  requested buttons in order, no leftover subtitle/hint text, and the
+  gradient placeholder rendering cleanly where the portal arches used to
+  be.
+
+- **HUD gained a minimap, quest/objective box, and a teammates-only party
+  panel**, per a second reference screenshot — explicitly scoped to just
+  those three additions ("остальное — не трогаем"); `#status`,
+  `#combatlog`, `#cheatHint`, the spell wheel, HP/XP bars, and everything
+  else are untouched. Party frames (`#partyFrames`, top-left, stacked
+  below `#status` so the two never overlap) show only OTHER players —
+  the local player's own HP stays exactly where it already was, bottom
+  left. Built from real, already-networked data, nothing fabricated: name/
+  element/HP/maxHp/downed already travel in the host's periodic `'state'`
+  broadcast (`buildEntry` in `hostSimulate`) and were already read by
+  clients for other purposes — just hadn't been surfaced in the HUD
+  before. Added `hp`/`maxHp`/`spellCount` fields to the `remotePlayers[pid]`
+  entries `makeRemotePlayer` creates, populated from `pdata.hp`/
+  `pdata.maxHp`/`pdata.spells.length` in `onClientData`'s `'state'`
+  handler. `renderPartyFrames()` branches on `isHost`: host reads directly
+  from its own authoritative `playerData`/`peerMeta`/`connections`, a
+  client reads from its (now-extended) `remotePlayers`. Each frame shows
+  the player's element icon (colored ring border), a small badge with
+  their unlocked-spell count, name, and an HP bar tinted via the same
+  `hpFracColor()` the local HP bar already uses. Full innerHTML rebuild
+  every call is safe here (unlike the old shop-stand DOM, which broke
+  real clicks when rebuilt every frame — see the playtest-bugs entry
+  above) since nothing inside a party frame is interactive.
+  The minimap (`#minimapWrap`, top-right) started as a compass-only
+  simplification — fixed N/E/S/W labels and an arrow rotating to the
+  local player's `yaw` — with no top-down geometry projection, since
+  wiring one up felt like more scope than "add a minimap" implied. The
+  user flagged this immediately as not being a real minimap; see the
+  follow-up entry below for the actual top-down projection that replaced
+  this gap the same session. The quest box (`#questBox`, below the minimap) derives
+  its text from existing `currentZone`/`currentLevel`/`shopPhase` state via
+  a small `questInfoFor()` helper (hub / maze-level / boss-level → 3
+  message pairs) — no new quest-tracking system, since the game doesn't
+  have quests beyond "clear this level."
+  Verified live via `window.__debug`: called `enterGame()` to show the
+  HUD without needing FBX assets to finish loading (they can't resolve
+  from this sandbox's `file://` path, as already documented), created two
+  fake `remotePlayers` entries via the exposed `makeRemotePlayer()` with
+  different HP fractions and one `downed:true`, and confirmed via
+  `requestAnimationFrame` actually ticking this time that `renderPartyFrames()`
+  ran organically and produced correct HTML (right icon/color/name/HP-bar-
+  width/HP-bar-color per player, downed one visibly dimmed via
+  `.pfDowned`) and that `updateMinimapAndQuest()` set a real
+  `rotate(...rad)` transform and correct quest text. Screenshot confirms
+  the full HUD composition matches the reference layout with the rest of
+  the HUD (status text, HP bar, crosshair, hint text) visibly unchanged.
+
+- **3 follow-up tweaks, all per direct user feedback.** (1) `btnHost`
+  relabeled "Играть" → "Создать" (still the same button/handler, host
+  flow unchanged). (2) The minimap gained an actual top-down projection
+  instead of being compass-only, per "в миникарте нет реальной
+  миникарты" — added `#minimapSvg` (an SVG layer inside `#minimapRing`,
+  clipped to the circle) and `renderMinimapGeometry()`, called every
+  frame from `updateMinimapAndQuest()`. It's a real, player-centered
+  projection built from data the game already has for collision, not
+  anything fabricated: every zone's outer walls live in
+  `ZONE_DOOR_WALLS[zoneId]` (`buildArena()` fills it for all 6 dungeon
+  zones), maze zones (2/4/5) additionally contribute
+  `ZONE_MAZE[zoneId].walls`, the hub uses its own flat `hubWalls` list,
+  and pillars come from `ZONE_PILLARS[zoneId]`. Enemies within
+  `MINIMAP_RADIUS` (16 world units) are drawn too, as red dots, from the
+  same `enemies` array the game loop already iterates — a small bonus
+  since the data was right there. Everything within radius is mapped
+  linearly onto the 100×100 SVG viewBox centered on the player
+  (`MINIMAP_SCALE = 46/16`); the map itself stays world-axis-fixed (N
+  always up, doesn't spin) — only the arrow rotates, exactly as before.
+  Verified live: placed the player at zone 1's center via
+  `window.__debug.playerPos.set(...)`, waited one real animation frame,
+  and read `#minimapSvg`'s actual rendered markup — got exactly 4
+  `<circle>` pillar markers at `(27,27)/(73,27)/(27,73)/(73,73)`, which
+  is precisely `50 ± 8×(46/16)` for zone 1's real pillar layout
+  (`[[-8,-8],[8,-8],[-8,8],[8,8]]` passed to `buildArena(1,...)`) — the
+  coordinate math checks out exactly, not just "something rendered."
+  (3) `questInfoFor()`'s objective text is now the same
+  "Победить противников" for every dungeon level regardless of
+  maze/boss, per "пока оставим на всех уровнях задание Победить
+  противников" — the title line (level number + Лабиринт/Бой с боссом)
+  still differs, only the objective line was flattened; hub's objective
+  text is untouched (still context-specific, since it was never part of
+  this ask).

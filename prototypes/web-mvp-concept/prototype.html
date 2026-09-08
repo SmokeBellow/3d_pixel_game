@@ -48,8 +48,74 @@
   #downedOverlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(80,0,0,0.35); color: #ffdede; font-size: 28px; font-weight: bold; text-shadow: 0 2px 6px #000; }
   #vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(circle at center, rgba(0,0,0,0) 30%, rgba(0,0,0,0.85) 100%); }
   #cheatHint { position: absolute; top: 12px; right: 12px; font-size: 11px; opacity: .5; text-shadow: 0 1px 2px #000; }
-  #menu { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
-  #menu { background: radial-gradient(circle at center, #1a1530, #0a0a0f); }
+  /* Party frames (teammates only — the local player's own HP stays in
+     #hpWrap, unchanged) — stacked below #status so the two never overlap. */
+  #partyFrames { position: absolute; top: 96px; left: 12px; display: flex; flex-direction: column; gap: 8px; width: 210px; }
+  .partyFrame { display: flex; align-items: center; gap: 8px; background: rgba(10,10,20,0.55); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 5px 8px; transition: opacity .2s; }
+  .partyFrame.pfDowned { opacity: .5; }
+  .pfIcon { position: relative; width: 32px; height: 32px; border-radius: 50%; background: rgba(0,0,0,0.5); border: 2px solid var(--pf-c, #888); display: flex; align-items: center; justify-content: center; font-size: 15px; flex: none; }
+  .pfBadge { position: absolute; left: -4px; bottom: -4px; background: #1a1a26; border: 1px solid var(--pf-c, #888); border-radius: 50%; width: 15px; height: 15px; font-size: 9px; line-height: 13px; text-align: center; }
+  .pfInfo { flex: 1; min-width: 0; }
+  .pfName { font-size: 12px; color: #eee; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 1px 2px #000; }
+  .pfHpBg { width: 100%; height: 8px; background: rgba(0,0,0,0.5); border: 1px solid #333; border-radius: 4px; overflow: hidden; }
+  .pfHpFill { height: 100%; transition: width .15s, background-color .2s; }
+  /* Minimap: a real, player-centered top-down projection of the current
+     zone's own wall/pillar/enemy data (see renderMinimapGeometry()) drawn
+     into #minimapSvg, plus a compass ring — the arrow shows the local
+     player's facing (from `yaw`); N/E/S/W are fixed labels, not a real
+     in-world "north" (this game world doesn't define one), and the map
+     itself is world-axis-fixed (doesn't spin with the player). See
+     README Findings for the exact scope. */
+  #minimapWrap { position: absolute; top: 40px; right: 12px; width: 116px; height: 116px; }
+  #minimapRing { position: relative; width: 100%; height: 100%; border-radius: 50%; overflow: hidden; background: radial-gradient(circle at 50% 40%, rgba(40,50,80,0.65), rgba(10,10,20,0.85)); border: 2px solid rgba(159,214,255,0.4); box-shadow: 0 0 18px rgba(80,120,200,0.25), inset 0 0 20px rgba(0,0,0,0.6); }
+  #minimapSvg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .mmDir { position: absolute; font-size: 11px; color: #9fd6ff; text-shadow: 0 1px 2px #000; }
+  .mmDir--n { top: 4px; left: 50%; transform: translateX(-50%); }
+  .mmDir--s { bottom: 4px; left: 50%; transform: translateX(-50%); }
+  .mmDir--e { right: 6px; top: 50%; transform: translateY(-50%); }
+  .mmDir--w { left: 6px; top: 50%; transform: translateY(-50%); }
+  #minimapArrow { position: absolute; left: 50%; top: 50%; font-size: 20px; color: #ffd76a; text-shadow: 0 0 8px rgba(255,215,100,0.7); transform-origin: 50% 50%; transform: translate(-50%, -50%) rotate(0deg); }
+  #questBox { position: absolute; top: 164px; right: 12px; width: 220px; background: rgba(10,10,20,0.55); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 8px 12px; text-align: right; }
+  #questTitle { font-size: 13px; color: #ffd76a; margin-bottom: 4px; text-shadow: 0 1px 2px #000; }
+  #questObjective { font-size: 12px; color: #cfd8e6; text-shadow: 0 1px 2px #000; }
+  #menu { position: fixed; inset: 0; overflow: hidden; background: #05040a; }
+  /* Main-menu backdrop: a placeholder gradient until a real background
+     image is supplied — drop it in as `menu-bg.jpg` next to this file and
+     it takes over automatically (a missing/failed background-image layer
+     just doesn't paint; the gradient layer underneath keeps showing until
+     then, so no code change is needed once the file exists). */
+  #menuScene {
+    position: absolute; inset: 0; z-index: 0;
+    background: center / cover no-repeat url('menu-bg.jpg'),
+      linear-gradient(180deg, #14121f 0%, #0a0912 55%, #05040a 100%);
+  }
+  #menuLeftColumn { position: absolute; left: 6vw; top: 6vh; bottom: 6vh; width: 380px; z-index: 1; display: flex; flex-direction: column; justify-content: space-between; }
+  .menuTitleRow { display: flex; align-items: center; gap: 14px; }
+  .menuIcon { font-size: 26px; filter: drop-shadow(0 0 8px currentColor); }
+  .menuIcon--fire { color: #ff7a3c; }
+  .menuIcon--lightning { color: #ffd23c; }
+  #menuTitle {
+    margin: 0; font-size: 38px; line-height: 1.08; font-weight: 700; letter-spacing: 2px;
+    text-transform: uppercase; color: #eaf1ff;
+    text-shadow: 0 0 22px rgba(140,190,255,0.55), 0 0 4px rgba(255,255,255,0.4);
+  }
+  .menuTagline { font-size: 12px; letter-spacing: 6px; text-transform: uppercase; color: #93a6bd; opacity: .85; }
+  /* #panelMain (ID) beats the later `.panel` class rule's box styling —
+     equal-specificity class rules would otherwise lose to source order. */
+  #panelMain.menuPanel { position: relative; z-index: 1; background: transparent; border: none; padding: 0; margin: 0; text-align: left; min-width: 0; max-width: none; width: 100%; }
+  .menuPanel input { background: rgba(10,14,26,0.55); border: 1px solid rgba(120,200,255,0.35); color: #cfe8ff; }
+  .menuPanel button {
+    position: relative; display: block; width: 100%; box-sizing: border-box; margin: 9px 0; padding: 13px 28px;
+    background: rgba(10,14,26,0.55); border: 1px solid rgba(120,200,255,0.5); border-radius: 6px;
+    color: #cfe8ff; font-size: 14px; letter-spacing: 3px; text-transform: uppercase; text-align: center;
+    cursor: pointer; transition: background .15s, border-color .15s, box-shadow .15s;
+  }
+  .menuPanel button:hover:not(:disabled) { background: rgba(40,70,110,0.55); border-color: #9fd6ff; box-shadow: 0 0 16px rgba(120,200,255,0.35); }
+  .menuPanel button::before, .menuPanel button::after { content: '◈'; position: absolute; top: 50%; transform: translateY(-50%); color: rgba(159,214,255,0.8); font-size: 11px; }
+  .menuPanel button::before { left: 10px; }
+  .menuPanel button::after { right: 10px; }
+  .menuPanel .hint { text-align: left; }
+  .panelCentered { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 2; }
   /* Full-screen class-selection screen: three cards, each with a live
      rotating 3D preview of the (currently shared) mage model tinted to
      that element's color, short lore, and its spell list. */
@@ -133,20 +199,31 @@
 </head>
 <body>
 <div id="menu">
-  <div class="panel" id="panelMain">
-    <h1>Covenant of Mages</h1>
-    <h2>web MVP prototype — co-op spell synergy</h2>
-    <input id="nameInput" maxlength="12" placeholder="Твоё имя" style="text-transform:none">
-    <button id="btnHost">Создать игру (хост)</button>
-    <button id="btnShowJoin">Присоединиться по коду</button>
-    <div id="joinRow" style="display:none">
-      <input id="codeInput" maxlength="4" placeholder="КОД">
-      <button id="btnJoin">Войти</button>
+  <div id="menuScene" aria-hidden="true"></div>
+  <div id="menuLeftColumn">
+    <div id="menuTitleBlock">
+      <div class="menuTitleRow">
+        <span class="menuIcon menuIcon--fire">🔥</span>
+        <h1 id="menuTitle">Covenant<br>of Mages</h1>
+        <span class="menuIcon menuIcon--lightning">⚡</span>
+      </div>
     </div>
-    <div class="err" id="menuErr"></div>
-    <div class="hint">Хост создаёт комнату и говорит друзьям код.<br>Друзья открывают этот же файл и вводят код.<br>Соединение — P2P (WebRTC), сервер не нужен.</div>
+    <div class="panel menuPanel" id="panelMain">
+      <input id="nameInput" maxlength="12" placeholder="Твоё имя" style="text-transform:none">
+      <button id="btnHost">Создать</button>
+      <button id="btnShowJoin">Присоединиться</button>
+      <div id="joinRow" style="display:none">
+        <input id="codeInput" maxlength="4" placeholder="КОД">
+        <button id="btnJoin">Войти</button>
+      </div>
+      <button id="btnSettings" disabled title="Недоступно в прототипе">Настройки</button>
+      <button id="btnCredits" disabled title="Недоступно в прототипе">Авторы</button>
+      <button id="btnExit" disabled title="Недоступно в прототипе">Выйти</button>
+      <div class="err" id="menuErr"></div>
+    </div>
+    <div class="menuTagline">Три стихии · одна цель</div>
   </div>
-  <div class="panel" id="panelLobby" style="display:none">
+  <div class="panel panelCentered" id="panelLobby" style="display:none">
     <h1>Комната создана</h1>
     <div>Код для друзей:</div>
     <div class="code" id="roomCode">----</div>
@@ -159,7 +236,7 @@
       <button id="lobbyChatSend">➤</button>
     </div>
   </div>
-  <div class="panel" id="panelWaitingClient" style="display:none">
+  <div class="panel panelCentered" id="panelWaitingClient" style="display:none">
     <h1>Ждём хоста…</h1>
     <h2>Хост запустит игру, когда все будут готовы</h2>
     <div id="waitingPlayers" style="margin:12px 0; color:#aaa"></div>
@@ -225,7 +302,22 @@
   <div id="labelMirror" class="worldLabel"></div>
   <div id="interactPrompt"></div>
   <div id="status"></div>
+  <div id="partyFrames"></div>
   <div id="cheatHint">L — вкл/выкл затемнение · K — убить всех врагов · V — вид от 3-го лица (дебаг)</div>
+  <div id="minimapWrap">
+    <div id="minimapRing">
+      <svg id="minimapSvg" viewBox="0 0 100 100"></svg>
+      <div class="mmDir mmDir--n">N</div>
+      <div class="mmDir mmDir--e">E</div>
+      <div class="mmDir mmDir--s">S</div>
+      <div class="mmDir mmDir--w">W</div>
+      <div id="minimapArrow">▲</div>
+    </div>
+  </div>
+  <div id="questBox">
+    <div id="questTitle"></div>
+    <div id="questObjective"></div>
+  </div>
   <div id="combatlog"></div>
   <div id="hpWrap">
     <div id="hpLabel"><span id="hpLabelText">HP</span><span id="goldLabel">💰 0</span></div>
@@ -382,6 +474,23 @@ const BOSS_SLAM_COOLDOWN = 4.5;
 const BOSS_CHARGE_SPEED = 7.5;
 const BOSS_CHARGE_DAMAGE = 16;
 const BOSS_CHARGE_COOLDOWN = 7;
+// BOSS2 (level 6, the new final boss — per user request, "снова один
+// босс, но сильнее и с другими способностями"): bigger HP pool, no
+// melee slam/charge at all — kites at range instead, alternating a
+// telegraphed single-target bolt with area-denial ground spikes. See the
+// `e.bossKind === 'ranged'` branch in hostSimulate.
+const BOSS2_HP = 1700;
+const BOSS2_SCALE = 2.4;
+const BOSS2_KITE_RANGE = 9; // tries to keep this much distance from its target, backing off if closer
+const BOSS2_BOLT_RANGE = 16;
+const BOSS2_BOLT_DAMAGE = 20;
+const BOSS2_BOLT_COOLDOWN = 3.2;
+const BOSS2_BOLT_TELEGRAPH_S = 0.6; // time between "casting" and the hit actually landing — a reaction window, same idea as MELEE_IMPACT_FRAC
+const BOSS2_SPIKE_COUNT = 2; // danger zones dropped per cast
+const BOSS2_SPIKE_RADIUS = 2.6;
+const BOSS2_SPIKE_DAMAGE = 26;
+const BOSS2_SPIKE_WARNING_S = 1.3; // telegraph time before a zone actually detonates
+const BOSS2_SPIKE_COOLDOWN = 7.5;
 const PLAYER_MAX_HP = 100;
 const PLAYER_RESPAWN_S = 4;
 const REGEN_DELAY_S = 5; // seconds since the last hit before out-of-combat regen kicks in
@@ -397,17 +506,25 @@ const SYNERGY_MULT = 3;           // health-damage-system.md synergy_damage_mult
 // enemy arena itself — antechamber floor spans
 // [half+1, half+1+PORTAL_ROOM_DEPTH] past the zone center, so its middle
 // is half+1+PORTAL_ROOM_DEPTH/2. See buildPortalRoom() near buildArena().
-// Level 3 is the boss floor — the run ends there now (per user request,
-// finite levels, no more looping back to 1 — see the hub mirror-portal
-// system's "broken forever" comment near hubLevelMirrors). Declared up
-// here (moved from its old spot near startLevel/closeShopAndAdvance)
-// since the hub's level-portal mirrors, built further down but BEFORE
-// that code runs at module load, need it too.
-const MAX_LEVEL = 3;
+// Level 6 is now the (second, stronger) boss floor — the run ends there
+// (per user request, finite levels, no looping back to 1 — see the hub
+// mirror-portal system's "broken forever" comment near hubLevelMirrors).
+// Declared up here (moved from its old spot near startLevel/
+// closeShopAndAdvance) since the hub's level-portal mirrors, built
+// further down but BEFORE that code runs at module load, need it too.
+const MAX_LEVEL = 6;
+const BOSS_LEVELS = [3, 6]; // level 3: original slam/charge boss. Level 6: BOSS2 — ranged bolt + ground-spike kiting instead (see the hostSimulate boss branch).
 // Highest level number actually cleared so far this run — drives which
 // hub mirror is 'active' vs 'broken' (see hubLevelMirrors/updateHubMirrors).
 // Host-authoritative; synced to clients via the periodic 'state' broadcast.
 let highestClearedLevel = 0;
+// Levels 4/5 (harder mazes) and 6 (BOSS2 arena) placed well south of the
+// hub complex (which itself spans roughly z:[-252,-206], x:[-22,22] — see
+// buildHubRoom) to avoid overlapping it in world space; all zones coexist
+// statically in the one scene (see the "Zones" comment further down), so
+// this spacing is purely about not intersecting geometry, not about any
+// walking path — every zone transition is a teleport (mirrors), not a
+// physical walk between zones.
 const ZONES = {
   1:   { cx: 0, cz: 0,    half: ARENA_HALF, spawn: [0, ARENA_HALF + 1 + PORTAL_ROOM_DEPTH / 2] },
   2:   { cx: 0, cz: -70,  half: 28,         spawn: [0, -70 + 28 + 1 + PORTAL_ROOM_DEPTH / 2] },
@@ -416,6 +533,13 @@ const ZONES = {
   // multi-room hub's own wall list — see ZONE_MAZE['hub'] near buildHubRoom);
   // 25 comfortably covers every spoke room's farthest extent (24, the library).
   hub: { cx: 0, cz: -230, half: 25,         spawn: [0, -230] },
+  // Maze spawn (like level 2's) gets overwritten with the real center-cell
+  // coordinate right after buildMaze() runs — placeholder here only. half
+  // must exactly match cols*cellSize/2 (see buildMaze calls below), same
+  // convention as level 2, so the outer wall lines up with the maze extent.
+  4:   { cx: 0, cz: -326, half: 33.75,      spawn: [0, -326] },
+  5:   { cx: 0, cz: -440, half: 38.5,       spawn: [0, -440] },
+  6:   { cx: 0, cz: -536, half: 18,         spawn: [0, -536 + 14] },
 };
 let currentZone = 1; // 1 | 2 | 3 | 'hub' — drives clamping, spawn point and enemy placement
 function zoneOf(id) { return ZONES[id]; }
@@ -1073,6 +1197,34 @@ buildMaze(2, ZONES[2].cx, ZONES[2].cz, 7, 7, 8, 0.7, 4);
 }
 // Level 3 — open boss arena, just corner pillars so the boss has room to charge.
 buildArena(3, ZONES[3].cx, ZONES[3].cz, ZONES[3].half, [[-10, -10], [10, -10], [-10, 10], [10, 10]]);
+// Levels 4 & 5 — harder mazes than level 2's (per user request: "более
+// сложные лабиринты и сильные противники"), placed well south of the hub
+// complex (see the ZONES comment). More cells = longer/more complex paths;
+// corridors stay wide enough to not feel unfair (6.8/6.3 units, vs level
+// 2's 7.3 — level 2 already proved 7.3 was comfortable, so these are only
+// modestly tighter, not punishing). Same no-antechamber, spawn-in-the-
+// maze treatment as level 2.
+buildArena(4, ZONES[4].cx, ZONES[4].cz, ZONES[4].half, []);
+buildMaze(4, ZONES[4].cx, ZONES[4].cz, 9, 9, 7.5, 0.7, 4);
+{
+  const m4 = ZONE_MAZE[4];
+  const [sr, sc] = mazeCellAt(m4, ZONES[4].cx, ZONES[4].cz) || [Math.floor(m4.rows / 2), Math.floor(m4.cols / 2)];
+  ZONES[4].spawn = mazeCellCenter(m4, sr, sc);
+}
+buildArena(5, ZONES[5].cx, ZONES[5].cz, ZONES[5].half, []);
+buildMaze(5, ZONES[5].cx, ZONES[5].cz, 11, 11, 7, 0.7, 4);
+{
+  const m5 = ZONE_MAZE[5];
+  const [sr, sc] = mazeCellAt(m5, ZONES[5].cx, ZONES[5].cz) || [Math.floor(m5.rows / 2), Math.floor(m5.cols / 2)];
+  ZONES[5].spawn = mazeCellCenter(m5, sr, sc);
+}
+// Level 6 — BOSS2's arena. Bigger than level 3's (half 18 vs 15) and no
+// pillars at all (kept deliberately open) — this boss fights at range and
+// drops area-denial ground spikes (see the hostSimulate boss branch),
+// both of which want clear sightlines/floor space, unlike level 3's
+// charge-dash boss which used corner pillars as a size reference more
+// than an obstacle.
+buildArena(6, ZONES[6].cx, ZONES[6].cz, ZONES[6].half, []);
 // ============================================================
 // Hub — a full multi-room waystation between dungeon runs (per user
 // request — "Хогвартс / библиотека / Круглый стол"), not one square room.
@@ -1554,11 +1706,17 @@ makeArmchair(hMainX - 3.5, hMainZ - 6, -Math.PI * 0.15, 0x6b3a2a);
 makeBookshelf(hMainX - 4, hMainZ + HUB_MAIN_HALF - 0.25, 0, 3);
 makeBookshelf(hMainX + 4, hMainZ + HUB_MAIN_HALF - 0.25, 0, 3);
 // Fireplace on the west wall's solid segment (north of the Fire corridor
-// gap), and 2 tapestries on the east wall's solid segments — a cozier,
-// less "reused dungeon stone" read for the room everyone spawns into.
+// gap) — a cozier, less "reused dungeon stone" read for the room
+// everyone spawns into.
 makeFireplace(hMainX - HUB_MAIN_HALF + 0.35, 0, hMainZ + 5, Math.PI / 2);
-makeTapestry(hMainX + HUB_MAIN_HALF - 0.05, 2.4, hMainZ + 5, -Math.PI / 2, 0x6b2a2a);
-makeTapestry(hMainX + HUB_MAIN_HALF - 0.05, 2.4, hMainZ - 5, -Math.PI / 2, 0x2a4a6b);
+// 2 tapestries moved into the Library corridor's side walls (were on the
+// Main Hall's east wall — that whole wall is now the level 4/5/6 mirror
+// row instead, see hubLevelMirrors below).
+{
+  const corrZ = (HCZ + HUB_MAIN_HALF + hLibZ - HUB_LIB_HALF) / 2;
+  makeTapestry(HCX - HUB_DOOR / 2 + 0.05, 2.4, corrZ, Math.PI / 2, 0x6b2a2a, 1.2, 2.2);
+  makeTapestry(HCX + HUB_DOOR / 2 - 0.05, 2.4, corrZ, -Math.PI / 2, 0x2a4a6b, 1.2, 2.2);
+}
 
 // ============================================================
 // Physical shop stands — per user request, buying/leveling spells is a
@@ -1656,7 +1814,12 @@ function makeGoldFrame(x, y, z, rotY, width, height) {
   }
   return frameGroup;
 }
-function makeMirror(x, y, z, rotY, width, height) {
+// Real live reflection (a Reflector), with the same "show the local
+// player's own body just for this reflection pass" trick the original
+// self-view mirror used — reused as-is by the level-portal mirrors below
+// for their 'dormant' (not-yet-reached, per user request: "целый и
+// отражают игроков") state, not just the dedicated self-view mirror.
+function makeReflectiveGlass(x, y, z, rotY, width, height) {
   const mirror = new Reflector(new THREE.PlaneGeometry(width, height), {
     color: 0x8a97a0,
     textureWidth: 512 * (window.devicePixelRatio || 1),
@@ -1666,6 +1829,7 @@ function makeMirror(x, y, z, rotY, width, height) {
   mirror.rotation.y = rotY;
   const baseOnBeforeRender = mirror.onBeforeRender.bind(mirror);
   mirror.onBeforeRender = function (renderer, sc, cam, geometry, material, group) {
+    if (!mirror.visible) return; // hidden reflective glass (see setMirrorLevelState) shouldn't still pay for a full scene re-render every frame
     const bodyWasVisible = debugOwnBody ? debugOwnBody.mesh.visible : false;
     if (debugOwnBody) debugOwnBody.mesh.visible = true;
     fpArmL.visible = false;
@@ -1676,6 +1840,10 @@ function makeMirror(x, y, z, rotY, width, height) {
     fpArmR.visible = !debugThirdPerson;
   };
   scene.add(mirror);
+  return mirror;
+}
+function makeMirror(x, y, z, rotY, width, height) {
+  const mirror = makeReflectiveGlass(x, y, z, rotY, width, height);
   makeGoldFrame(x, y, z, rotY, width, height);
   return mirror;
 }
@@ -1754,6 +1922,21 @@ function makeCrackedTexture() {
   }
   return new THREE.CanvasTexture(cnv);
 }
+// Dormant mirrors briefly showed a real live reflection (a Reflector) —
+// reverted (per user report: "игра теперь сильно лагает"). Up to 5
+// dormant mirrors can be on screen at once (everything past the current
+// active level), and a Reflector re-renders the ENTIRE scene from a
+// virtual camera every frame it's visible — 5 of those simultaneously is
+// real, measured cost, not a theoretical one; the `!mirror.visible`
+// early-return in makeReflectiveGlass only helped for the ones currently
+// hidden, not the 4-5 dormant ones actually on screen at once. Dormant
+// now reuses the exact same swirl texture as 'active' (same
+// makeSwirlTexture call), just tinted a flat grey instead of the level's
+// element color and with no point-light glow — reads as "a real,
+// intact portal, just not the one that's live right now" per user
+// request, at zero extra render cost (same static canvas-texture plane
+// active/broken already use, nothing per-frame).
+const MIRROR_DORMANT_COLOR = 0x888890;
 function setMirrorLevelState(m, state, colorHex) {
   m.state = state;
   const mat = m.glass.material;
@@ -1770,10 +1953,10 @@ function setMirrorLevelState(m, state, colorHex) {
     mat.emissiveIntensity = 0;
     m.light.intensity = 0;
   } else { // dormant
-    mat.map = null;
-    mat.color.set(0x141418);
-    mat.emissive.set(0x000000);
-    mat.emissiveIntensity = 0;
+    mat.map = makeSwirlTexture(MIRROR_DORMANT_COLOR);
+    mat.color.set(0xffffff);
+    mat.emissive.set(MIRROR_DORMANT_COLOR);
+    mat.emissiveIntensity = 0.25; // dimmer than active's 0.55 — reads as "real but not live"
     m.light.intensity = 0;
   }
   mat.needsUpdate = true;
@@ -1794,15 +1977,22 @@ function makeLevelMirror(level, x, z, rotY) {
   setMirrorLevelState(m, 'dormant');
   return m;
 }
-// Mounted flush against the Main Hall's south wall (per user request —
-// mirrors always sit against a real wall, not freestanding in the open
-// floor like the first pass had them), on the EAST solid segment of that
-// wall (x: 2..9.5, clear of the Lightning-corridor door gap at x:[-2,2]
-// and of the self-view mirror + reading nook on the WEST segment).
+// Mounted flush against real walls (per user request — mirrors always
+// sit against a wall, not freestanding in the open floor like the first
+// pass had them). Levels 1-3 on the Main Hall's south wall, east solid
+// segment (x: 2..9.5, clear of the Lightning-corridor door gap at x:[-2,2]
+// and of the self-view mirror + reading nook on the west segment). Levels
+// 4-6 on the east wall's south solid segment (z: -9.5..-2, clear of the
+// Water-corridor gap at z:[-2,2]) — that wall's tapestries moved into the
+// library corridor to make room (see above).
 const hubLevelMirrors = [];
-for (let lvl = 1; lvl <= MAX_LEVEL; lvl++) {
+for (let lvl = 1; lvl <= 3; lvl++) {
   const mx = 3 + (lvl - 1) * 2.5;
   hubLevelMirrors.push(makeLevelMirror(lvl, hMainX + mx, hMainZ - HUB_MAIN_HALF + 0.56, 0));
+}
+for (let lvl = 4; lvl <= MAX_LEVEL; lvl++) {
+  const mz = -3 - (lvl - 4) * 2.5;
+  hubLevelMirrors.push(makeLevelMirror(lvl, hMainX + HUB_MAIN_HALF - 0.56, hMainZ + mz, -Math.PI / 2));
 }
 // Sets each mirror's state from `highestClearedLevel`; called once at
 // load and again whenever that value changes (host: right after a level
@@ -1867,6 +2057,10 @@ placeBrokenMirrorNear(ZONE_MAZE[2] && ZONE_MAZE[2].walls, ZONES[2].spawn[0], ZON
 // against the arena's own known north wall instead of adding wall-tracking
 // to buildArena just for this one decorative prop.
 makeBrokenMirrorProp(ZONES[3].cx, ZONES[3].cz + ZONES[3].half + 0.56, Math.PI);
+placeBrokenMirrorNear(ZONE_MAZE[4] && ZONE_MAZE[4].walls, ZONES[4].spawn[0], ZONES[4].spawn[1], 0);
+placeBrokenMirrorNear(ZONE_MAZE[5] && ZONE_MAZE[5].walls, ZONES[5].spawn[0], ZONES[5].spawn[1], 0);
+// Level 6 (BOSS2 arena), same reasoning as level 3 above — hand-placed.
+makeBrokenMirrorProp(ZONES[6].cx, ZONES[6].cz + ZONES[6].half + 0.56, Math.PI);
 
 function distXZ(pos, stand) { return Math.hypot(pos.x - stand.x, pos.z - stand.z); }
 function positionLabel(el, stand) {
@@ -2045,7 +2239,7 @@ const SKIN_WET = 0x4d79c9, CLOTH_WET = 0x33507a;
 const SKIN_BURN = 0xdd5522, CLOTH_BURN = 0x992211;
 const SKIN_FROZEN = 0xaeeeff, CLOTH_FROZEN = 0x7fb8cc;
 let enemies = [];
-function makeEnemy(id, x, z, maxHp, isBoss) {
+function makeEnemy(id, x, z, maxHp, isBoss, bossKind) {
   const group = new THREE.Group();
   let parts = [], skinMat = null, clothMat = null, materials = null, limbs = null, mixer = null, actions = null, current = null;
   const isGoblin = !isBoss && !!goblinTemplate;
@@ -2108,7 +2302,7 @@ function makeEnemy(id, x, z, maxHp, isBoss) {
   bar.position.set(-BAR_WIDTH / 2, barY, 0);
   group.add(bar);
   group.position.set(x, 0, z);
-  if (isBoss) group.scale.setScalar(BOSS_SCALE);
+  if (isBoss) group.scale.setScalar(bossKind === 'ranged' ? BOSS2_SCALE : BOSS_SCALE);
   scene.add(group);
   return { id, mesh: group, parts, skinMat, clothMat, materials, mixer, actions, current, isGoblin,
            hpBar: bar, hp: maxHp, maxHp, wet: 0, alive: true,
@@ -2120,19 +2314,23 @@ function makeEnemy(id, x, z, maxHp, isBoss) {
            aiState: 'patrol', targetPeerId: null, attackCooldown: 0,
            attackAnimT: Infinity, justAttacked: false,
            meleePending: false, meleePendingT: 0, meleePendingTarget: null, // delayed melee hit — see MELEE_IMPACT_FRAC
-           isBoss: !!isBoss, slamCooldown: BOSS_SLAM_COOLDOWN * 0.5, chargeCooldown: BOSS_CHARGE_COOLDOWN * 0.5,
-           chargeState: null };
+           isBoss: !!isBoss, bossKind: bossKind || null,
+           slamCooldown: BOSS_SLAM_COOLDOWN * 0.5, chargeCooldown: BOSS_CHARGE_COOLDOWN * 0.5, chargeState: null,
+           // BOSS2 (level 6, bossKind==='ranged') state — see the hostSimulate boss branch.
+           boltCooldown: BOSS2_BOLT_COOLDOWN * 0.5, spikeCooldown: BOSS2_SPIKE_COOLDOWN * 0.4, pendingSpikes: [] };
 }
 // Each level's enemy layout is zone-specific: level 1 keeps the original
-// ring formation; level 2 scatters enemies across random open maze cells
-// (a ring formula would land them inside walls); level 3 is a single boss
-// standing at the arena center.
+// ring formation; levels 2/4/5 (mazes) scatter enemies across random open
+// maze cells (a ring formula would land them inside walls); levels 3/6
+// (BOSS_LEVELS) are a single boss standing at the arena center.
 function computeSpawnsForLevel(level) {
   const z = ZONES[level];
-  if (level === 3) return [[z.cx, z.cz]]; // boss spawns dead center
-  if (level === 2 && ZONE_MAZE[2]) {
-    const maze = ZONE_MAZE[2];
-    const count = Math.min(9 + Math.floor(Math.random() * 3), 14);
+  if (BOSS_LEVELS.includes(level)) return [[z.cx, z.cz]]; // boss spawns dead center
+  if (ZONE_MAZE[level]) {
+    const maze = ZONE_MAZE[level];
+    // A bigger maze (levels 4/5) gets more enemies too, not just tougher
+    // ones — same +level scaling idea as the non-maze count formula below.
+    const count = Math.min(9 + level + Math.floor(Math.random() * 3), 20);
     const cellList = [];
     for (let r = 0; r < maze.rows; r++) for (let c = 0; c < maze.cols; c++) cellList.push([r, c]);
     const spawns = [];
@@ -2156,11 +2354,13 @@ function computeSpawnsForLevel(level) {
 function buildLevelEnemies(level) {
   for (const e of enemies) scene.remove(e.mesh);
   enemies = [];
-  if (level === 3) {
-    enemies.push(makeEnemy(0, ZONES[3].cx, ZONES[3].cz, BOSS_HP, true));
+  if (BOSS_LEVELS.includes(level)) {
+    const z = ZONES[level];
+    if (level === 6) enemies.push(makeEnemy(0, z.cx, z.cz, BOSS2_HP, true, 'ranged'));
+    else enemies.push(makeEnemy(0, z.cx, z.cz, BOSS_HP, true));
     return;
   }
-  const maxHp = ENEMY_MAX_HP + (level - 1) * 35; // level 2 enemies noticeably tankier, per user request
+  const maxHp = ENEMY_MAX_HP + (level - 1) * 35; // each level noticeably tankier than the last, per user request
   computeSpawnsForLevel(level).forEach(([x, z], i) => enemies.push(makeEnemy(i, x, z, maxHp)));
 }
 // Shared green/yellow/red HP color coding (per user request) — same
@@ -2733,7 +2933,8 @@ function makeRemotePlayer(name, element) {
   // "Remote player interpolation" block in animate().
   const rp = { mesh: group, target: { p: [0, 0, 0], ry: 0 }, downed: false, wasDowned: false,
            mixer: model.mixer, actions: model.actions, current: model.current, lastPos: new THREE.Vector3(),
-           placed: false }; // placed=false: snap to the first real position instead of lerping from world origin
+           placed: false, // placed=false: snap to the first real position instead of lerping from world origin
+           name, element, hp: 0, maxHp: 0, spellCount: 0 }; // HUD party-frame fields, kept updated by onClientData's 'state' handler
   return rp;
 }
 
@@ -3208,6 +3409,24 @@ function spawnNovaFx(centerPos, radius, colorHex) {
     { count: 30, texture: PARTICLE_TEX.glow, color: colorHex, speed: radius * 2.2, size: 0.3, life: 0.4, upBias: 0.8, gravity: 6 });
 }
 
+// BOSS2's ground-spike area-denial attack (level 6 — see hostSimulate's
+// `bossKind === 'ranged'` branch): a red warning ring that sits on the
+// floor for BOSS2_SPIKE_WARNING_S before the real hit lands, then a burst
+// (just spawnNovaFx re-tinted red — no need for a whole new effect, an
+// expanding ring already reads fine as "ground eruption" too).
+function spawnGroundSpikeWarning(pos, radius) {
+  const mesh = new THREE.Mesh(
+    new THREE.RingGeometry(radius * 0.85, radius, 32),
+    new THREE.MeshBasicMaterial({ color: 0xff2244, transparent: true, opacity: 0.55, side: THREE.DoubleSide }));
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(pos.x, 0.05, pos.z);
+  scene.add(mesh);
+  fx.push({ obj: mesh, life: BOSS2_SPIKE_WARNING_S, maxLife: BOSS2_SPIKE_WARNING_S });
+}
+function spawnGroundSpikeBurst(pos, radius) {
+  spawnNovaFx(pos, radius, 0xff2244);
+}
+
 // ============================================================
 // Combat log HUD
 // ============================================================
@@ -3438,6 +3657,8 @@ function onClientData(msg) {
       if (!remotePlayers[pid]) remotePlayers[pid] = makeRemotePlayer(pdata.name, pdata.element);
       remotePlayers[pid].target = { p: pdata.p, ry: pdata.ry };
       remotePlayers[pid].downed = !!pdata.downed;
+      remotePlayers[pid].hp = pdata.hp; remotePlayers[pid].maxHp = pdata.maxHp;
+      remotePlayers[pid].spellCount = (pdata.spells || []).length;
     }
     for (const pid of Object.keys(remotePlayers)) {
       if (!msg.players[pid]) {
@@ -3798,6 +4019,7 @@ function startShopPhase() {
   if (currentLevel > 0) highestClearedLevel = Math.max(highestClearedLevel, currentLevel);
   updateHubMirrors();
   if (currentLevel === MAX_LEVEL) hostLog('🏆 Босс повержен! Все уровни пройдены — отряд возвращается в комнату прокачки.');
+  else if (BOSS_LEVELS.includes(currentLevel)) hostLog('🏆 Босс повержен! Отряд возвращается в комнату прокачки.');
   else hostLog('✨ Уровень зачищен! Отряд телепортирован в комнату прокачки.');
   broadcast({ t: 'shopOpen', zone: 'hub' });
   openShopUI();
@@ -3858,17 +4080,86 @@ function hostSimulate(dt) {
         }
       }
 
-      // Boss (level 3): always aggro'd, no patrol/leash — alternates between a
-      // point-blank slam AoE and a telegraphed charge dash instead of the
-      // regular enemies' single melee-lunge attack.
+      // Boss: always aggro'd, no patrol/leash. Two different kits now (per
+      // user request — level 6's boss needed to feel like a genuinely
+      // different fight, not a reskin): the original level-3 boss (below)
+      // alternates a point-blank slam AoE with a telegraphed charge dash;
+      // BOSS2 (level 6, e.bossKind==='ranged', see further down) never
+      // melees at all — it kites at range with a telegraphed bolt and
+      // area-denial ground spikes.
       if (e.isBoss) {
-        if (e.slamCooldown > 0) e.slamCooldown -= dt;
-        if (e.chargeCooldown > 0) e.chargeCooldown -= dt;
         const alive = players.filter(p => !p.downed);
         let target = null;
         for (const p of alive) {
           if (!target || e.mesh.position.distanceTo(p.pos) < e.mesh.position.distanceTo(target.pos)) target = p;
         }
+        if (e.bossKind === 'ranged') {
+          if (e.boltCooldown > 0) e.boltCooldown -= dt;
+          if (e.spikeCooldown > 0) e.spikeCooldown -= dt;
+          if (e.pendingBolt) {
+            e.pendingBolt.t += dt;
+            if (e.pendingBolt.t >= BOSS2_BOLT_TELEGRAPH_S) {
+              const tp = alive.find(p => p.pid === e.pendingBolt.pid);
+              // Re-check range at impact, not at cast start — same "don't
+              // punish a player who reacted" idea as MELEE_IMPACT_FRAC.
+              if (tp && tp.pos.distanceTo(e.mesh.position) <= BOSS2_BOLT_RANGE + 1.5) {
+                hostDamagePlayer(tp.pid, BOSS2_BOLT_DAMAGE);
+                hostLog(`⚡ Босс: болт поразил ${nameFor(tp.pid)}`);
+              }
+              e.pendingBolt = null;
+            }
+          }
+          for (let si = e.pendingSpikes.length - 1; si >= 0; si--) {
+            const sp = e.pendingSpikes[si];
+            sp.t += dt;
+            if (sp.t >= BOSS2_SPIKE_WARNING_S) {
+              let hitCount = 0;
+              for (const p of alive) if (Math.hypot(p.pos.x - sp.x, p.pos.z - sp.z) < BOSS2_SPIKE_RADIUS) { hostDamagePlayer(p.pid, BOSS2_SPIKE_DAMAGE); hitCount++; }
+              const burstPos = [sp.x, 0, sp.z];
+              broadcast({ t: 'fx', kind: 'spikeBurst', pos: burstPos, radius: BOSS2_SPIKE_RADIUS });
+              spawnGroundSpikeBurst(new THREE.Vector3().fromArray(burstPos), BOSS2_SPIKE_RADIUS);
+              if (hitCount > 0) hostLog(`🔺 Шипы задели ${hitCount}`);
+              e.pendingSpikes.splice(si, 1);
+            }
+          }
+          if (target) {
+            const toTarget = target.pos.clone().sub(e.mesh.position).setY(0);
+            const dist = toTarget.length();
+            // Kiting: back off if the target got too close, close the gap
+            // if they're out of bolt range, otherwise hold position — this
+            // boss never wants to be at melee range.
+            if (dist < BOSS2_KITE_RANGE - 1) {
+              e.mesh.position.addScaledVector(toTarget.clone().normalize(), -ENEMY_CHASE_SPEED * 0.7 * dt);
+            } else if (dist > BOSS2_KITE_RANGE + 1 && dist > STOP_RANGE) {
+              e.mesh.position.addScaledVector(toTarget.clone().normalize(), ENEMY_CHASE_SPEED * 0.7 * dt);
+            }
+            if (e.boltCooldown <= 0 && !e.pendingBolt && dist <= BOSS2_BOLT_RANGE) {
+              e.boltCooldown = BOSS2_BOLT_COOLDOWN;
+              e.pendingBolt = { pid: target.pid, t: 0 };
+              e.attackAnimT = 0; e.justAttacked = true;
+              const from = [e.mesh.position.x, 1.8, e.mesh.position.z], to = [target.pos.x, 1.1, target.pos.z];
+              broadcast({ t: 'fx', kind: 'bolt', from, to, color: 0xff44ff, big: true });
+              spawnLightningBolt(from, to, 0xff44ff, true);
+              hostLog(`⚡ Босс готовит болт по ${nameFor(target.pid)}!`);
+            } else if (e.spikeCooldown <= 0 && e.pendingSpikes.length === 0) {
+              e.spikeCooldown = BOSS2_SPIKE_COOLDOWN;
+              const pool = alive.length ? alive : [target];
+              for (let i = 0; i < BOSS2_SPIKE_COUNT; i++) {
+                const tp = pool[Math.floor(Math.random() * pool.length)];
+                const sx = tp.pos.x + (Math.random() - 0.5) * 2, sz = tp.pos.z + (Math.random() - 0.5) * 2;
+                e.pendingSpikes.push({ x: sx, z: sz, t: 0 });
+                const pos = [sx, 0, sz];
+                broadcast({ t: 'fx', kind: 'spikeWarn', pos, radius: BOSS2_SPIKE_RADIUS });
+                spawnGroundSpikeWarning(new THREE.Vector3().fromArray(pos), BOSS2_SPIKE_RADIUS);
+              }
+              hostLog('🔺 Босс: шипы из земли!');
+            }
+          }
+          clampEnemyToArena(e, currentLevel);
+          continue;
+        }
+        if (e.slamCooldown > 0) e.slamCooldown -= dt;
+        if (e.chargeCooldown > 0) e.chargeCooldown -= dt;
         if (target) {
           if (e.chargeState) {
             e.mesh.position.addScaledVector(e.chargeState.dir, BOSS_CHARGE_SPEED * dt);
@@ -4220,6 +4511,8 @@ function handleFx(msg) {
   else if (msg.kind === 'explosion') spawnExplosionFx(new THREE.Vector3().fromArray(msg.pos), msg.color, msg.radius);
   else if (msg.kind === 'nova') spawnNovaFx(new THREE.Vector3().fromArray(msg.pos), msg.radius, msg.color);
   else if (msg.kind === 'impact') spawnImpactFx(new THREE.Vector3().fromArray(msg.pos), msg.color);
+  else if (msg.kind === 'spikeWarn') spawnGroundSpikeWarning(new THREE.Vector3().fromArray(msg.pos), msg.radius);
+  else if (msg.kind === 'spikeBurst') spawnGroundSpikeBurst(new THREE.Vector3().fromArray(msg.pos), msg.radius);
   if (msg.pid && msg.pid !== myPeerId) triggerRemoteCast(msg.pid, msg.tier);
 }
 let castLockedUntil = 0; // performance.now() timestamp — no spell (any slot) can be cast again until the cast animation finishes
@@ -4380,6 +4673,86 @@ function tryCast() {
 // ============================================================
 // Main loop
 // ============================================================
+// Party frames (HUD, teammates only): rebuilds the whole panel from
+// current state every call. No click handlers live inside it (unlike the
+// old shop-stand DOM, which broke real clicks when rebuilt every frame —
+// see README Findings), so a full innerHTML replace every frame is safe.
+function renderPartyFrames() {
+  const wrap = document.getElementById('partyFrames');
+  const entries = isHost
+    ? connections.map(c => {
+        const pd = playerData[c.peer], meta = peerMeta[c.peer];
+        if (!pd || !meta) return null;
+        return { name: meta.name, element: pd.element, hp: pd.hp, maxHp: maxHpFor(c.peer), downed: pd.respawnTimer > 0, spellCount: pd.spells.length };
+      }).filter(Boolean)
+    : Object.values(remotePlayers).map(rp => ({ name: rp.name, element: rp.element, hp: rp.hp, maxHp: rp.maxHp, downed: rp.downed, spellCount: rp.spellCount }));
+  wrap.innerHTML = entries.map(p => {
+    const frac = p.maxHp > 0 ? Math.max(0, p.hp / p.maxHp) : 0;
+    const hpColor = '#' + hpFracColor(frac).toString(16).padStart(6, '0');
+    const elColor = '#' + (ELEMENT_COLOR[p.element] || 0xaaaaaa).toString(16).padStart(6, '0');
+    return `<div class="partyFrame${p.downed ? ' pfDowned' : ''}">
+      <div class="pfIcon" style="--pf-c:${elColor}"><span>${elementEmoji(p.element)}</span><span class="pfBadge">${p.spellCount}</span></div>
+      <div class="pfInfo">
+        <div class="pfName">${escapeHtml(p.name)}</div>
+        <div class="pfHpBg"><div class="pfHpFill" style="width:${(frac * 100).toFixed(0)}%;background:${hpColor}"></div></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+// Minimap + quest box: see the #minimapWrap CSS comment for the scope call
+// (stylized facing compass, not a real top-down map). Quest text is
+// derived from existing zone/level state, no separate quest-tracking
+// system needed for what's just "find the exit" / "beat the boss" today.
+function questInfoFor(zone, level, inShop) {
+  if (zone === 'hub') return { title: 'Хаб', objective: inShop ? 'Прокачайтесь и выберите портал' : 'Выберите портал следующего уровня' };
+  const isBoss = BOSS_LEVELS.includes(level);
+  // Per user request, every dungeon level shares one objective for now
+  // ("Пока оставим на всех уровнях задание Победить противников") — the
+  // maze/boss title distinction stays, only the objective line was
+  // flattened.
+  return { title: `Уровень ${level}: ${isBoss ? 'Бой с боссом' : 'Лабиринт'}`, objective: 'Победить противников' };
+}
+const MINIMAP_RADIUS = 16; // world units shown across the minimap
+const MINIMAP_SCALE = 46 / MINIMAP_RADIUS; // world units -> svg units (viewBox is 0..100, circle radius ~50)
+// Real top-down projection of the current zone's own collision/pillar
+// data (already built for gameplay, not fabricated for this) — every
+// zone's outer walls live in ZONE_DOOR_WALLS[zoneId] (buildArena() fills
+// it for every zone 1-6), maze zones additionally have ZONE_MAZE[zoneId]
+// .walls for the inner maze, and the hub has its own flat hubWalls list.
+// Player-centered, world-axis-fixed (doesn't spin) — only the arrow
+// rotates to show facing.
+function renderMinimapGeometry() {
+  const px = playerPos.x, pz = playerPos.z;
+  const walls = currentZone === 'hub' ? hubWalls
+    : [...(ZONE_DOOR_WALLS[currentZone] || []), ...((ZONE_MAZE[currentZone] && ZONE_MAZE[currentZone].walls) || [])];
+  const pillars = currentZone === 'hub' ? [] : (ZONE_PILLARS[currentZone] || []);
+  let svg = '';
+  for (const w of walls) {
+    const cx = (w.minX + w.maxX) / 2, cz = (w.minZ + w.maxZ) / 2;
+    if (Math.hypot(cx - px, cz - pz) > MINIMAP_RADIUS * 1.3) continue;
+    const x = 50 + (w.minX - px) * MINIMAP_SCALE, y = 50 + (w.minZ - pz) * MINIMAP_SCALE;
+    const w2 = Math.max(1, (w.maxX - w.minX) * MINIMAP_SCALE), h2 = Math.max(1, (w.maxZ - w.minZ) * MINIMAP_SCALE);
+    svg += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w2.toFixed(1)}" height="${h2.toFixed(1)}" fill="rgba(159,214,255,0.55)"/>`;
+  }
+  for (const [wx, wz] of pillars) {
+    if (Math.hypot(wx - px, wz - pz) > MINIMAP_RADIUS) continue;
+    svg += `<circle cx="${(50 + (wx - px) * MINIMAP_SCALE).toFixed(1)}" cy="${(50 + (wz - pz) * MINIMAP_SCALE).toFixed(1)}" r="2.2" fill="rgba(130,150,180,0.6)"/>`;
+  }
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    const ex = e.mesh.position.x, ez = e.mesh.position.z;
+    if (Math.hypot(ex - px, ez - pz) > MINIMAP_RADIUS) continue;
+    svg += `<circle cx="${(50 + (ex - px) * MINIMAP_SCALE).toFixed(1)}" cy="${(50 + (ez - pz) * MINIMAP_SCALE).toFixed(1)}" r="2.4" fill="#ff4444"/>`;
+  }
+  document.getElementById('minimapSvg').innerHTML = svg;
+}
+function updateMinimapAndQuest() {
+  document.getElementById('minimapArrow').style.transform = `translate(-50%, -50%) rotate(${-yaw}rad)`;
+  renderMinimapGeometry();
+  const q = questInfoFor(currentZone, currentLevel, shopPhase);
+  document.getElementById('questTitle').textContent = q.title;
+  document.getElementById('questObjective').textContent = q.objective;
+}
 const clock = new THREE.Clock();
 function fovKickOffset(t) { // two-phase linear envelope from camera-system.md
   if (t < KICK_ATTACK) return KICK_PEAK * (t / KICK_ATTACK);
@@ -4637,6 +5010,8 @@ function animate() {
       `${myName} · ${conn}\n${spellLabel}` +
       (cooldowns[activeSlot] > 0 ? ' (кд...)' : ' — готово') +
       `\n💡 Вода → Молния = CHAIN SHOCK x${SYNERGY_MULT}\nУровень подземелья: ${currentLevel}`;
+    renderPartyFrames();
+    updateMinimapAndQuest();
   }
 
   updateTorches(clock.elapsedTime);
