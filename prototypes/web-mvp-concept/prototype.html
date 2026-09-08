@@ -61,20 +61,21 @@
   .pfHpFill { height: 100%; transition: width .15s, background-color .2s; }
   /* Minimap: a real, player-centered top-down projection of the current
      zone's own wall/pillar/enemy data (see renderMinimapGeometry()) drawn
-     into #minimapSvg, plus a compass ring — the arrow shows the local
-     player's facing (from `yaw`); N/E/S/W are fixed labels, not a real
-     in-world "north" (this game world doesn't define one), and the map
-     itself is world-axis-fixed (doesn't spin with the player). See
+     into #minimapSvg, plus a compass ring — the dot+dart player marker
+     (also drawn in #minimapSvg, redrawn every frame) rotates to show the
+     local player's facing (from `yaw`); N/E/S/W are fixed labels, not a
+     real in-world "north" (this game world doesn't define one), and the
+     map itself is world-axis-fixed (doesn't spin with the player). See
      README Findings for the exact scope. */
   #minimapWrap { position: absolute; top: 40px; right: 12px; width: 116px; height: 116px; }
   #minimapRing { position: relative; width: 100%; height: 100%; border-radius: 50%; overflow: hidden; background: radial-gradient(circle at 50% 40%, rgba(40,50,80,0.65), rgba(10,10,20,0.85)); border: 2px solid rgba(159,214,255,0.4); box-shadow: 0 0 18px rgba(80,120,200,0.25), inset 0 0 20px rgba(0,0,0,0.6); }
   #minimapSvg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #minimapFog { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   .mmDir { position: absolute; font-size: 11px; color: #9fd6ff; text-shadow: 0 1px 2px #000; }
   .mmDir--n { top: 4px; left: 50%; transform: translateX(-50%); }
   .mmDir--s { bottom: 4px; left: 50%; transform: translateX(-50%); }
   .mmDir--e { right: 6px; top: 50%; transform: translateY(-50%); }
   .mmDir--w { left: 6px; top: 50%; transform: translateY(-50%); }
-  #minimapArrow { position: absolute; left: 50%; top: 50%; font-size: 20px; color: #ffd76a; text-shadow: 0 0 8px rgba(255,215,100,0.7); transform-origin: 50% 50%; transform: translate(-50%, -50%) rotate(0deg); }
   #questBox { position: absolute; top: 164px; right: 12px; width: 220px; background: rgba(10,10,20,0.55); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 8px 12px; text-align: right; }
   #questTitle { font-size: 13px; color: #ffd76a; margin-bottom: 4px; text-shadow: 0 1px 2px #000; }
   #questObjective { font-size: 12px; color: #cfd8e6; text-shadow: 0 1px 2px #000; }
@@ -307,11 +308,11 @@
   <div id="minimapWrap">
     <div id="minimapRing">
       <svg id="minimapSvg" viewBox="0 0 100 100"></svg>
+      <canvas id="minimapFog" width="100" height="100"></canvas>
       <div class="mmDir mmDir--n">N</div>
       <div class="mmDir mmDir--e">E</div>
       <div class="mmDir mmDir--s">S</div>
       <div class="mmDir mmDir--w">W</div>
-      <div id="minimapArrow">▲</div>
     </div>
   </div>
   <div id="questBox">
@@ -832,8 +833,21 @@ function buildArena(zoneId, cx, cz, half, relPillars, mortarHex, doorGapWidth) {
       const segW = (w - doorGapWidth) / 2;
       for (const side of [-1, 1]) {
         const wall = new THREE.Mesh(new THREE.BoxGeometry(segW, 4, d), stoneMaterial(0x3a3542, mortarHex, Math.max(segW, d) / 3, 2));
-        wall.position.set(cx + side * (doorGapWidth / 2 + segW / 2), 2, cz + z);
+        const wx = cx + side * (doorGapWidth / 2 + segW / 2), wz = cz + z;
+        wall.position.set(wx, 2, wz);
         scene.add(wall);
+        // BUG FIX (user report: could walk out through this solid segment
+        // going one direction and not back — see the long comment on the
+        // movement clamp below). These flanking segments never had real
+        // collision at all; the player was only ever kept out by a plain
+        // z<=half positional clamp, which — being a single directional
+        // bound, not an actual wall — couldn't represent "solid here,
+        // open there" and had no way to block movement going the OTHER
+        // way once already past it. Giving them a real AABB, resolved the
+        // same way every other wall in the file is, fixes both directions
+        // at once and lets the movement code drop the fragile clamp hack.
+        (ZONE_DOOR_WALLS[zoneId] = ZONE_DOOR_WALLS[zoneId] || []).push(
+          { minX: wx - segW / 2, maxX: wx + segW / 2, minZ: wz - d / 2, maxZ: wz + d / 2 });
       }
       continue;
     }
@@ -929,7 +943,11 @@ function buildPortalRoom(zoneId, cx, wallZ, width, depth) {
   walls.push(wallEntry);
   const button = makeButton(cx + PORTAL_DOOR_WIDTH / 2 + 0.9, wallZ + 0.4);
 
-  ZONE_DOOR_WALLS[zoneId] = walls;
+  // Append, don't overwrite — buildArena() (called right before this for
+  // every zone that has a portal room) may have already pushed its own
+  // flanking-wall AABBs into ZONE_DOOR_WALLS[zoneId] for this same zone;
+  // clobbering that here would silently drop their collision again.
+  ZONE_DOOR_WALLS[zoneId] = (ZONE_DOOR_WALLS[zoneId] || []).concat(walls);
   ZONE_DOORS[zoneId] = { mesh: doorMesh, wallEntry, x: cx, z: wallZ, open: false, button, closedY: h / 2 };
   ZONE_PORTAL_ROOM[zoneId] = { cx, wallZ, width, depth };
 }
@@ -2301,11 +2319,20 @@ function makeEnemy(id, x, z, maxHp, isBoss, bossKind) {
   const bar = new THREE.Mesh(barGeo, new THREE.MeshBasicMaterial({ color: 0x33dd44 }));
   bar.position.set(-BAR_WIDTH / 2, barY, 0);
   group.add(bar);
+  // Status icons (per user request — "добавь отображение над противников
+  // статуса"): a small billboard sprite above the HP bar showing which of
+  // wet/burning/frozen are currently active, reusing wet/burning/frozenT
+  // fields the game already tracks and networks (already relied on for
+  // the body-tint in updateEnemyVisual below — this is a second, more
+  // explicit read of the same real data, not anything new to track).
+  const statusIcon = makeEnemyStatusSprite();
+  statusIcon.sprite.position.y = barY + 0.28;
+  group.add(statusIcon.sprite);
   group.position.set(x, 0, z);
   if (isBoss) group.scale.setScalar(bossKind === 'ranged' ? BOSS2_SCALE : BOSS_SCALE);
   scene.add(group);
   return { id, mesh: group, parts, skinMat, clothMat, materials, mixer, actions, current, isGoblin,
-           hpBar: bar, hp: maxHp, maxHp, wet: 0, alive: true,
+           hpBar: bar, statusIcon, hp: maxHp, maxHp, wet: 0, alive: true,
            burning: 0, burnDps: 0, burnCasterPid: null, // periodic fire damage — see hostSimulate's decay tick and hostResolveCast's Fire branch
            slowFactor: 1, frozenT: 0, // Плеск (Water tier-1) leveling — see hostResolveCast's Water branch and TIER1_MAX_LEVEL
            home: new THREE.Vector3(x, 0, z), wanderTarget: new THREE.Vector3(x, 0, z),
@@ -2372,10 +2399,45 @@ function hpFracColor(frac) {
   if (frac > 0.25) return HP_COLOR_MID;
   return HP_COLOR_LOW;
 }
+// A small billboard sprite (always faces the camera, same as THREE.Sprite
+// everywhere else in this file) above each enemy's HP bar, showing which
+// status effects are currently active. Canvas is only actually redrawn
+// when the active-icon combination changes (tracked via `lastKey`) — not
+// every frame — since a per-enemy canvas/texture rebuild 60x/sec for
+// every enemy on screen would be real, needless cost (the exact kind of
+// thing this session already had to fix once for the lobby-lag report).
+function makeEnemyStatusSprite() {
+  const cnv = document.createElement('canvas');
+  cnv.width = 96; cnv.height = 32;
+  const ctx = cnv.getContext('2d');
+  const tex = new THREE.CanvasTexture(cnv);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+  sprite.scale.set(0.9, 0.3, 1);
+  sprite.visible = false;
+  return { sprite, ctx, tex, lastKey: '' };
+}
+function updateEnemyStatusIcons(e) {
+  const key = (e.frozenT > 0 ? 'F' : '') + (e.burning > 0 ? 'B' : '') + (e.wet > 0 ? 'W' : '');
+  const si = e.statusIcon;
+  if (key === si.lastKey) return;
+  si.lastKey = key;
+  const ctx = si.ctx, cnv = ctx.canvas;
+  ctx.clearRect(0, 0, cnv.width, cnv.height);
+  if (key) {
+    const icons = (key.includes('F') ? '❄️' : '') + (key.includes('B') ? '🔥' : '') + (key.includes('W') ? '💧' : '');
+    ctx.font = '24px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(icons, cnv.width / 2, cnv.height / 2 + 2);
+  }
+  si.tex.needsUpdate = true;
+  si.sprite.visible = !!key;
+}
 function updateEnemyVisual(e) {
   e.mesh.visible = e.alive;
   e.hpBar.scale.x = Math.max(0.001, e.hp / e.maxHp);
   e.hpBar.material.color.setHex(hpFracColor(e.hp / e.maxHp));
+  updateEnemyStatusIcons(e);
   if (e.isGoblin) {
     for (const { mat, orig } of e.materials) {
       if (e.frozenT > 0) mat.color.copy(orig).lerp(GOBLIN_FROZEN_TINT, 0.7);
@@ -2582,6 +2644,21 @@ let goblinTemplate = null; // { root, runClip, attackClip }
     const runClip = runObj.animations[0];
     stripHorizontalRootMotion(runClip);
     goblinTemplate = { root: runObj, runClip, attackClip: attackObj.animations[0] };
+    // Same shader-compile lesson as warmupAllElementPreviews above (a
+    // throwaway/separate-context compile doesn't reliably pay this cost —
+    // only a real render through the actual production renderer/scene
+    // does): user-reported "5-7 seconds of lag right after the lobby"
+    // traced to buildLevelEnemies() spawning ~9-14 of these skinned
+    // meshes all at once, all brand new to this renderer, exactly when
+    // the level starts. Sitting one real instance in the actual game
+    // scene (far below the floor, permanently — cheap once frustum-culled,
+    // no need to ever remove it) means `renderer.render()`'s very next
+    // regular frame — which was already running continuously since page
+    // load, lobby included — pays that compile cost during idle lobby
+    // time instead of at the exact moment gameplay begins.
+    const warm = makeGoblinModel();
+    warm.object.position.set(0, -200, 0);
+    scene.add(warm.object);
   }).catch(err => console.error('Failed to load goblin assets', err));
 })();
 
@@ -4714,41 +4791,143 @@ function questInfoFor(zone, level, inShop) {
 }
 const MINIMAP_RADIUS = 16; // world units shown across the minimap
 const MINIMAP_SCALE = 46 / MINIMAP_RADIUS; // world units -> svg units (viewBox is 0..100, circle radius ~50)
+// buildArena() (used by every non-hub zone, mazes included) draws its own
+// 4 outer walls directly into the scene but never records their AABBs
+// anywhere — the player/enemies are kept inside via a cheap Math.min/max
+// clamp against ZONES[zone].half instead (see clampEnemyToArena), not
+// real wall-segment collision. That's exactly why those outer walls never
+// showed on the minimap (user report: "не отображаются внешние стены 1
+// уровня") — there was no data for it to draw them from. Synthesizing 4
+// thin boundary AABBs here from the same `half - 1` bound the real clamp
+// uses keeps this accurate to actual collision, not just decorative.
+function arenaBoundaryWalls(zone) {
+  const z = ZONES[zone];
+  if (!z) return [];
+  const b = z.half - 1, t = 0.3;
+  return [
+    { minX: z.cx - b - t, maxX: z.cx + b + t, minZ: z.cz - b - t, maxZ: z.cz - b + t }, // south
+    { minX: z.cx - b - t, maxX: z.cx + b + t, minZ: z.cz + b - t, maxZ: z.cz + b + t }, // north
+    { minX: z.cx - b - t, maxX: z.cx - b + t, minZ: z.cz - b - t, maxZ: z.cz + b + t }, // west
+    { minX: z.cx + b - t, maxX: z.cx + b + t, minZ: z.cz - b - t, maxZ: z.cz + b + t }, // east
+  ];
+}
+// Fog of war (per user request — "не будем показывать области, где
+// игроки еще не были"): a permanent, per-zone, per-LOCAL-player memory
+// of which grid cells the player has physically walked near. Purely
+// client-side rendering state, never networked — each player's own
+// exploration, not shared party-wide (nothing asked for that, and it'd
+// need a new synced field for no real gameplay benefit). This is
+// "have I been within FOG_REVEAL_RADIUS of here" memory, not true
+// line-of-sight (no raycasting against walls) — simpler, and reveals
+// straight through a wall if you walk right next to it, which is an
+// accepted simplification for a prototype minimap, not a bug.
+// Explored cells are never cleared, so a zone (the hub especially,
+// revisited constantly) stays revealed across the whole session once
+// walked.
+const FOG_CELL_SIZE = 2; // world units per fog grid cell
+const FOG_REVEAL_RADIUS = 10; // world units revealed around the player each frame — smaller than MINIMAP_RADIUS so exploring the map's full view radius takes actually walking around, not just glancing
+const exploredCells = {}; // zoneId -> Set of "cellX,cellZ" keys
+function fogCellKey(x, z) { return Math.floor(x / FOG_CELL_SIZE) + ',' + Math.floor(z / FOG_CELL_SIZE); }
+function revealFogAroundPlayer() {
+  const set = exploredCells[currentZone] || (exploredCells[currentZone] = new Set());
+  const pcx = Math.floor(playerPos.x / FOG_CELL_SIZE), pcz = Math.floor(playerPos.z / FOG_CELL_SIZE);
+  const r = Math.ceil(FOG_REVEAL_RADIUS / FOG_CELL_SIZE);
+  for (let dx = -r; dx <= r; dx++) {
+    for (let dz = -r; dz <= r; dz++) {
+      if (dx * dx + dz * dz > r * r) continue; // circular reveal, not a square
+      set.add((pcx + dx) + ',' + (pcz + dz));
+    }
+  }
+}
+function isFogExplored(x, z) {
+  const set = exploredCells[currentZone];
+  return !!set && set.has(fogCellKey(x, z));
+}
 // Real top-down projection of the current zone's own collision/pillar
 // data (already built for gameplay, not fabricated for this) — every
-// zone's outer walls live in ZONE_DOOR_WALLS[zoneId] (buildArena() fills
-// it for every zone 1-6), maze zones additionally have ZONE_MAZE[zoneId]
-// .walls for the inner maze, and the hub has its own flat hubWalls list.
-// Player-centered, world-axis-fixed (doesn't spin) — only the arrow
-// rotates to show facing.
+// zone's inner walls live in ZONE_DOOR_WALLS[zoneId] (the portal
+// antechamber) and, for maze zones, ZONE_MAZE[zoneId].walls; the hub has
+// its own flat hubWalls list; arenaBoundaryWalls() above fills the
+// previously-missing outer boundary. Player-centered, world-axis-fixed
+// (doesn't spin) — only the player marker rotates to show facing. Walls/
+// pillars/enemies are additionally gated by isFogExplored() — see the
+// fog-of-war comment above.
 function renderMinimapGeometry() {
+  revealFogAroundPlayer();
   const px = playerPos.x, pz = playerPos.z;
   const walls = currentZone === 'hub' ? hubWalls
-    : [...(ZONE_DOOR_WALLS[currentZone] || []), ...((ZONE_MAZE[currentZone] && ZONE_MAZE[currentZone].walls) || [])];
+    : [...(ZONE_DOOR_WALLS[currentZone] || []), ...((ZONE_MAZE[currentZone] && ZONE_MAZE[currentZone].walls) || []), ...arenaBoundaryWalls(currentZone)];
   const pillars = currentZone === 'hub' ? [] : (ZONE_PILLARS[currentZone] || []);
   let svg = '';
   for (const w of walls) {
     const cx = (w.minX + w.maxX) / 2, cz = (w.minZ + w.maxZ) / 2;
     if (Math.hypot(cx - px, cz - pz) > MINIMAP_RADIUS * 1.3) continue;
+    if (!isFogExplored(cx, cz)) continue;
     const x = 50 + (w.minX - px) * MINIMAP_SCALE, y = 50 + (w.minZ - pz) * MINIMAP_SCALE;
     const w2 = Math.max(1, (w.maxX - w.minX) * MINIMAP_SCALE), h2 = Math.max(1, (w.maxZ - w.minZ) * MINIMAP_SCALE);
     svg += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w2.toFixed(1)}" height="${h2.toFixed(1)}" fill="rgba(159,214,255,0.55)"/>`;
   }
   for (const [wx, wz] of pillars) {
     if (Math.hypot(wx - px, wz - pz) > MINIMAP_RADIUS) continue;
+    if (!isFogExplored(wx, wz)) continue;
     svg += `<circle cx="${(50 + (wx - px) * MINIMAP_SCALE).toFixed(1)}" cy="${(50 + (wz - pz) * MINIMAP_SCALE).toFixed(1)}" r="2.2" fill="rgba(130,150,180,0.6)"/>`;
   }
   for (const e of enemies) {
     if (!e.alive) continue;
     const ex = e.mesh.position.x, ez = e.mesh.position.z;
     if (Math.hypot(ex - px, ez - pz) > MINIMAP_RADIUS) continue;
+    if (!isFogExplored(ex, ez)) continue; // per user request — don't mark enemies the player hasn't been near yet
     svg += `<circle cx="${(50 + (ex - px) * MINIMAP_SCALE).toFixed(1)}" cy="${(50 + (ez - pz) * MINIMAP_SCALE).toFixed(1)}" r="2.4" fill="#ff4444"/>`;
   }
+  // Player marker: a dot at the exact position (always clear regardless of
+  // rotation) plus a dart/kite shape pointing the facing direction — per
+  // user request, replacing the old plain "▲" glyph which didn't read as
+  // clearly directional. rotate(deg,50,50) turns the whole group around
+  // the map's fixed center; -yaw matches the same facing convention the
+  // old CSS `rotate(${-yaw}rad)` used.
+  const deg = (-yaw * 180 / Math.PI).toFixed(1);
+  svg += `<g transform="rotate(${deg} 50 50)">
+    <polygon points="50,30 58,58 50,50 42,58" fill="#ffd76a" stroke="#3a2c05" stroke-width="1.2" stroke-linejoin="round"/>
+    <circle cx="50" cy="50" r="3.2" fill="#ffd76a" stroke="#3a2c05" stroke-width="1"/>
+  </g>`;
   document.getElementById('minimapSvg').innerHTML = svg;
 }
+// Fog was previously "real" (walls/pillars/enemies were already gated by
+// isFogExplored) but invisible — an unexplored cell and an explored-but-
+// currently-empty cell both just looked like the same dark compass
+// background, so there was nothing on screen that actually read as
+// "fog" (user report: "Тумана войны нет на миникарте" — correct
+// complaint, the hiding worked but had no visual signal). Painting an
+// actual dark overlay over unexplored cells (this canvas, layered above
+// #minimapSvg, below the N/E/S/W labels) is what makes the effect
+// visible: explored ground reads normally, unexplored ground reads
+// darker/hidden. A canvas (cheap fillRect loop) instead of more SVG
+// <rect> elements on purpose — up to ~300 cells can fall in view at
+// once, and that many freshly-built SVG DOM nodes every frame is exactly
+// the kind of per-frame cost this session already had to fix once.
+function renderMinimapFog() {
+  const canvas = document.getElementById('minimapFog');
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, 100, 100);
+  ctx.fillStyle = 'rgba(4,4,10,0.85)';
+  const px = playerPos.x, pz = playerPos.z;
+  const pcx = Math.floor(px / FOG_CELL_SIZE), pcz = Math.floor(pz / FOG_CELL_SIZE);
+  const rCells = Math.ceil(MINIMAP_RADIUS / FOG_CELL_SIZE) + 1;
+  const set = exploredCells[currentZone];
+  const cellPx = FOG_CELL_SIZE * MINIMAP_SCALE;
+  for (let dx = -rCells; dx <= rCells; dx++) {
+    for (let dz = -rCells; dz <= rCells; dz++) {
+      const cellWx = (pcx + dx) * FOG_CELL_SIZE, cellWz = (pcz + dz) * FOG_CELL_SIZE;
+      if (Math.hypot(cellWx - px, cellWz - pz) > MINIMAP_RADIUS) continue; // round map, matches the circular ring
+      if (set && set.has((pcx + dx) + ',' + (pcz + dz))) continue; // explored — no fog here
+      const x = 50 + (cellWx - px) * MINIMAP_SCALE, y = 50 + (cellWz - pz) * MINIMAP_SCALE;
+      ctx.fillRect(x, y, cellPx + 0.6, cellPx + 0.6); // +0.6 so adjacent fogged cells don't leave hairline seams
+    }
+  }
+}
 function updateMinimapAndQuest() {
-  document.getElementById('minimapArrow').style.transform = `translate(-50%, -50%) rotate(${-yaw}rad)`;
   renderMinimapGeometry();
+  renderMinimapFog();
   const q = questInfoFor(currentZone, currentLevel, shopPhase);
   document.getElementById('questTitle').textContent = q.title;
   document.getElementById('questObjective').textContent = q.objective;
@@ -4839,6 +5018,22 @@ function animate() {
       // normal z.cz+z.half wall on the north side — widen the clamp's
       // upper z bound just enough to actually reach that room, instead of
       // the generic per-zone square clamp invisibly walling it off.
+      // Two earlier attempts at gating this widened bound by X (only near
+      // the actual door) both leaked: a plain min/max clamp is a single
+      // directional bound, not a real wall — it can't represent "solid
+      // here, open there," and worse, it only ever blocks the ENTERING
+      // direction. A player who got into the room could always walk back
+      // out through the solid flanking wall going the other way (nothing
+      // stops a DEcreasing z at that boundary), matching the exact
+      // one-way-through-the-wall report. The real fix belongs in the
+      // wall DATA, not the clamp: buildArena() now gives the flanking
+      // wall segments either side of the door real AABBs in
+      // ZONE_DOOR_WALLS (see its own comment), resolved via
+      // resolveCircleWallCollision below exactly like every other wall in
+      // the file — that blocks correctly from both sides. With real
+      // collision doing the actual blocking, this clamp only needs to
+      // define how far the player CAN reach, unconditionally, same as
+      // originally.
       const room = ZONE_PORTAL_ROOM[currentZone];
       const zMax = z.cz + z.half + (room ? room.depth + 1 : 0);
       playerPos.x = Math.max(z.cx - z.half, Math.min(z.cx + z.half, playerPos.x));
@@ -5233,6 +5428,17 @@ function showElementPicker(onChosen) {
         const p = elementPreviews[el];
         if (p && p.dragMoved) { p.dragMoved = false; return; }
         myElement = el;
+        // Same "warm it via a real render, early, during idle wait time"
+        // fix as the goblin warmup (see loadGoblinAssets) applied to the
+        // other contributor traced to the post-lobby lag report:
+        // ensureDebugOwnBody() builds this player's own real mage-element
+        // model for the hub mirror's reflection, but was only ever called
+        // from inside animate()'s `if (inGame)` block — meaning it (and
+        // its shader compile) previously happened for the first time at
+        // the exact moment gameplay started. Calling it here instead, the
+        // moment the element is actually known, lets it get real-rendered
+        // during the lobby's own wait/chat time instead.
+        ensureDebugOwnBody();
         stopElementPreviewLoop();
         panel.classList.remove('epVisible');
         onChosen();
@@ -5347,6 +5553,9 @@ window.__debug = {
   get highestClearedLevel() { return highestClearedLevel; }, set highestClearedLevel(v) { highestClearedLevel = v; },
   get hubLevelMirrors() { return hubLevelMirrors; }, updateHubMirrors, MAX_LEVEL,
   get hubWalls() { return hubWalls; },
+  get ZONE_DOOR_WALLS() { return ZONE_DOOR_WALLS; }, get ZONE_PORTAL_ROOM() { return ZONE_PORTAL_ROOM; },
+  get ZONE_DOORS() { return ZONE_DOORS; }, resolveCircleWallCollision, startLevel, resetZoneDoor, openZoneDoor,
+  get yawLive() { return yaw; }, set yawLive(v) { yaw = v; }, get keys() { return keys; },
 };
 </script>
 </body>

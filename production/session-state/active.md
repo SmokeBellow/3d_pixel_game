@@ -1071,6 +1071,13 @@ old ring removed entirely.
 - Full detail in README Findings.
 - Not committed yet.
 
+## PUSHED to main (bc5150e): levels 4-6/BOSS2, mirror portals, menu/HUD redesign, lag fix
+
+- Everything accumulated up to that point pushed to origin/main per user
+  instruction ("Пушни в мейн"). Unity/Assets changes deliberately left
+  unstaged (unrelated, pre-existing working-tree state, not part of this
+  session's work).
+
 ## COMPLETE: 3 follow-up tweaks (1 ask)
 
 - "Играть" → "Создать" on the host button (same handler).
@@ -1083,5 +1090,110 @@ old ring removed entirely.
   1's real pillar layout — matched precisely.
 - Quest objective text is now "Победить противников" on every dungeon
   level (title still differs maze vs. boss); hub objective unchanged.
+- Full detail in README Findings.
+- Not committed yet.
+
+## COMPLETE: Fixed "lags hard for first 5-7s after lobby" (1 ask)
+
+- Root cause: `renderer.render()` runs continuously since page load, so
+  anything already in the scene by lobby time is already shader-compiled
+  — but `ensureDebugOwnBody()` (local player's own mage model) was only
+  ever called from inside `if (inGame)`, and `buildLevelEnemies()` spawns
+  ~9-14 brand-new goblin meshes all at once, both landing at the exact
+  moment gameplay starts. Same class of bug this codebase already fixed
+  once for the class-select screen (see `warmupAllElementPreviews`) —
+  same fix pattern: real-render each one early, during lobby idle time,
+  not a throwaway/separate-context compile (already proven not to work
+  reliably here).
+- Fix: `ensureDebugOwnBody()` now also fires the moment `myElement` is
+  set (class-picker click), and `loadGoblinAssets()` spawns one real
+  goblin instance into the actual scene (parked off-map) the moment its
+  assets finish loading — both now get real-rendered during lobby wait
+  time instead of at game start.
+- Could NOT reproduce or verify the actual lag/fix in this sandbox — FBX
+  assets never load here (`file://` relative-path limitation, long
+  disclosed this session), so neither warmup path ever fires. Confirmed
+  only that the file still parses/runs cleanly and the moved call
+  no-ops safely when assets aren't ready. Real verification needs a
+  browser where the model files actually resolve.
+- Full detail in README Findings.
+- Not committed yet.
+
+## COMPLETE: Minimap walls, clearer player marker, enemy status icons (3 asks)
+
+- Minimap was missing arena outer walls because `buildArena()` never
+  recorded their AABBs anywhere (unlike every other wall system) — real
+  collision is a cheap bounds clamp instead. Added `arenaBoundaryWalls()`
+  synthesizing the boundary from the same bound the real clamp uses;
+  verified live, exact rect coordinates matched the math.
+- Replaced the plain "▲" player marker with a dot+dart shape drawn
+  inside the minimap SVG itself (removed the old separate `#minimapArrow`
+  div/CSS). Verified the rendered markup at yaw=0; couldn't exercise
+  live rotation since `window.__debug.yaw` is a captured snapshot value,
+  not a live binding — the trig is a straight port of the already-
+  working CSS formula though, so low risk.
+- Added status icons (❄️🔥💧) above enemies, hooked into the existing
+  `updateEnemyVisual()` call site (no new call sites needed) — same
+  wet/burning/frozenT fields already driving the body-tint. Canvas only
+  redraws on actual change, not every frame. Verified live: toggled
+  wet/burning on a real spawned enemy via `hostApplyDamage`, confirmed
+  the sprite's visible/key state flips correctly for every combination.
+- Full detail in README Findings.
+- Not committed yet.
+
+## COMPLETE: Fog of war on minimap (1 ask)
+
+- Client-side only, per-local-player (not networked/shared party-wide).
+  2-unit grid per zone; cells within 10 units of the player's current
+  position get permanently marked explored every frame, never cleared.
+  Walls/pillars/enemies on the minimap now require both the existing
+  distance check AND "has been explored" to draw. Explicitly a "been
+  physically near" memory, not true line-of-sight (no wall raycasting) —
+  documented as a deliberate scope call, not a hidden gap.
+  Verified live: pillars ~11.3 units from spawn (just past the 10-unit
+  reveal radius) correctly stayed hidden until the player walked next to
+  one, then stayed revealed after walking back away.
+- Full detail in README Findings.
+- Not committed yet.
+
+## COMPLETE: Fog-of-war visual overlay + real level-1 wall collision fix (2 asks)
+
+- Fog-hiding logic from the previous entry was actually working, but
+  invisible — nothing on the minimap visually read as "fog" (unexplored
+  and explored-but-empty looked identical). Added a `<canvas>` fog
+  overlay (`renderMinimapFog()`) painting a dark fill over unexplored
+  cells only, leaving explored ones transparent. Verified via
+  `getImageData` — correct dark/transparent split at the right
+  distances.
+- Real, confirmed bug: level 1's portal-room Z-clamp widening ignored
+  X position, letting the player walk straight through the SOLID
+  flanking wall next to the door (not just the door itself) anywhere
+  along that wall. Took 2 attempts — the first fix's "already past the
+  wall" check used a margin on the wrong side (`z.half - 0.01`), which
+  the normal wall-blocked resting position (`z.half` exactly) already
+  satisfied, silently re-opening the tunnel one frame after any contact.
+  Fixed with a real margin past the wall's thickness (`z.half + 1`).
+  Verified live end-to-end: blocked away from the door even after 3s of
+  input; closed door still blocks at x=0; open door still passes through
+  at x=0; flanking wall still blocks at x=15 regardless of door state.
+- Full detail in README Findings.
+- Not committed yet.
+
+## COMPLETE: Real fix for the one-way wall (2nd attempt on this bug)
+
+- User caught that the previous fix only blocked ENTERING through the
+  solid wall, not exiting — because a positional clamp is a one-way
+  bound, not a real wall, and can never fully represent this shape.
+  Real fix: `buildArena()` now gives the flanking wall segments actual
+  AABB collision in `ZONE_DOOR_WALLS`, same as every other wall in the
+  file; `buildPortalRoom()`'s overwrite of that array (which would have
+  wiped it) is now an append. Movement clamp reverted to its original,
+  simpler unconditional form — no longer needed as a fake wall now that
+  real collision handles it.
+- Verified live in both directions this time: pushed from both sides via
+  direct collision calls, and full real-movement walk from inside the
+  room back out through the solid wall (previously the exact leak) now
+  correctly stops instead of sailing through. Door itself re-confirmed
+  still working normally.
 - Full detail in README Findings.
 - Not committed yet.

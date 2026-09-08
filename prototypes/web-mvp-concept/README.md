@@ -2394,3 +2394,256 @@ mirror-portal Findings entry.
   still differs, only the objective line was flattened; hub's objective
   text is untouched (still context-specific, since it was never part of
   this ask).
+
+- **Fixed "lags hard for the first 5-7 seconds right after the lobby"**
+  (user report). Root cause, found by re-reading `animate()`'s render
+  loop: `renderer.render(scene, camera)` runs unconditionally every
+  frame, has done so since page load (lobby included) — so any object
+  already sitting in the real scene by lobby time has long since paid its
+  one-time WebGL shader-compile cost (same "~2.3s per distinct model/
+  material, measured via PerformanceObserver longtask entries" this
+  codebase already discovered once, see `warmupAllElementPreviews`'s
+  comment). Two things were NOT already sitting in the scene by lobby
+  time, both first appearing at the exact moment gameplay actually
+  starts: (1) `ensureDebugOwnBody()` — builds the local player's own real
+  mage-element model (used for the hub self-view/level mirrors) — was
+  only ever called from inside `animate()`'s `if (inGame)` block, i.e.
+  first call = first frame of real gameplay. (2) `buildLevelEnemies()`
+  spawns ~9-14 brand-new skinned goblin meshes all at once at level
+  start. Stacked together, that's 2+ distinct first-time shader compiles
+  landing in the first few real frames after "Начать" — matches "5-7
+  seconds" as a plausible sum, not just one hitch.
+  Fix follows the exact pattern this codebase already proved works for
+  the identical class of bug (see `warmupAllElementPreviews`'s comment:
+  a throwaway/separate-context compile attempt demonstrably did NOT
+  reliably force compilation — only a real render through the actual
+  production renderer/scene did): (1) `ensureDebugOwnBody()` is now also
+  called the moment `myElement` is actually set (in the class-picker's
+  card click handler), well before the lobby even starts, so it rides
+  the render loop's continuous background rendering during lobby/chat
+  wait time instead of at game start. (2) `loadGoblinAssets()` now
+  spawns one real goblin instance via `makeGoblinModel()` into the actual
+  game scene (parked at y=-200, permanently — camera-frustum-culled and
+  cheap once placed, no need to ever remove it) the moment
+  `goblinTemplate` finishes loading, which happens well before any level
+  can start.
+  Could not reproduce/measure the actual lag or its fix in this sandbox
+  (FBX assets can't load here at all — the long-disclosed `file://`
+  relative-path limitation, so `mageTemplate`/`goblinTemplate` never
+  become truthy and neither warmup path ever fires in this environment).
+  Verified what IS checkable here: the file still parses and runs with
+  no new console errors beyond the pre-existing 2 known asset-load
+  failures; `window.__debug.ensureDebugOwnBody()` called directly
+  no-ops safely (as expected, its own `!mageTemplate` guard) rather than
+  throwing, confirming the moved call site doesn't break anything when
+  assets aren't ready. The actual before/after timing needs a real
+  browser with the model files reachable — flagging this rather than
+  claiming a live-verified fix.
+
+- **3 more follow-ups from a fresh playtest, all fixed.**
+
+  (1) "На миникарте не отображаются внешние стены 1 уровня" — real bug,
+  not a radius/zone-specific quirk. Re-reading `buildArena()` (used by
+  every non-hub zone, maze levels included) found that its 4 outer walls
+  are meshed straight into `scene` with no AABB ever recorded anywhere —
+  unlike every other wall system in the file (`buildMaze`, `hubWallSeg`,
+  `buildPortalRoom`), which all push `{minX,maxX,minZ,maxZ}` into a
+  queryable array. The player/enemies are kept inside these walls via a
+  cheap `Math.max/min` clamp against `ZONES[zone].half` instead (see
+  `clampEnemyToArena`) — real collision, just never exposed as data. The
+  minimap literally had nothing to draw them from. Added
+  `arenaBoundaryWalls(zone)`, synthesizing 4 thin boundary AABBs from the
+  exact same `half - 1` bound the real clamp uses (so the drawn boundary
+  matches actual collision, not just a decorative guess), included in
+  `renderMinimapGeometry()`'s wall list for every non-hub zone. Verified
+  live via `window.__debug`: placed the player at zone 1's center and
+  read `#minimapSvg`'s rendered markup — got exactly 4 new `<rect>`s at
+  `y≈-2.6`/`y≈100.9`/`x≈-2.6`/`x≈100.9` spanning ~105 svg units each,
+  which is precisely `50 ± 18×(46/16)` (`half=19` so `b=18`) framing the
+  full boundary square, plus the pre-existing portal-room door wall and
+  4 pillar dots still rendering correctly alongside it — no regression.
+
+  (2) "Замени маркер игрока на что-то более понятное, чем равносторонний
+  треугольник" — the old marker was a single `▲` glyph in a separate
+  `#minimapArrow` div, CSS-rotated. Replaced with a proper dot+dart
+  marker drawn directly inside `#minimapSvg` alongside the wall geometry
+  (removed `#minimapArrow` and its CSS entirely): a small filled circle
+  marks the exact position regardless of rotation, plus an elongated
+  kite/dart polygon (not equilateral — clearly asymmetric front/back)
+  pointing the facing direction, both inside one `<g transform="rotate(deg
+  50 50)">` recomputed from `yaw` every frame (same `-yaw` convention the
+  old CSS transform used, just converted rad→deg for SVG). Verified the
+  rendered markup live — correct polygon/circle at `rotate(0.0 50 50)`
+  with `yaw=0`; couldn't exercise a non-zero rotation live since
+  `window.__debug.yaw` turned out to be a plain captured number (a
+  primitive snapshot at the time `__debug` was built, not a live
+  getter/setter like `highestClearedLevel`), so writing to it doesn't
+  reach the real module-scope `yaw` the render function reads — the
+  trig itself (`-yaw * 180/Math.PI`) is a straight reuse of the already-
+  working CSS formula, just re-expressed for SVG's `rotate()` syntax, so
+  low-risk, but noting the gap honestly rather than claiming a live
+  rotation check that didn't actually happen.
+
+  (3) "Добавь отображение над противников статуса (мокрый, горящий и
+  тп)" — added `makeEnemyStatusSprite()`/`updateEnemyStatusIcons()`: a
+  small billboard `THREE.Sprite` (auto-faces camera, same trick as
+  `makeNameSprite`) sitting just above each enemy's existing HP bar,
+  showing ❄️/🔥/💧 for `frozenT`/`burning`/`wet` — fields the game
+  already tracks and networks (already driving the existing body-color
+  tint in `updateEnemyVisual`; this is a second, more explicit read of
+  the same real data, nothing fabricated). Hooked into the single
+  `updateEnemyVisual(e)` call already invoked from every place these
+  fields change on both host (`hostApplyDamage`, the per-tick decay in
+  `hostSimulate`) and client (`onClientData`'s `'state'` handler) — no
+  new call sites needed anywhere. The canvas backing the sprite's texture
+  is only actually redrawn when the active-icon combination changes
+  (tracked via a `lastKey` string), not every frame — a per-enemy canvas
+  rebuild 60x/sec for every enemy on screen would be exactly the kind of
+  needless per-frame cost the lobby-lag fix above just got rid of.
+  Verified live via `window.__debug`: spawned real enemies
+  (`buildLevelEnemies(1)`), set `e.wet = 3` then called the already-
+  exposed `hostApplyDamage(e, 0, null)` (which always ends with
+  `updateEnemyVisual(e)`) and confirmed the sprite's `lastKey`/`visible`
+  flipped to `'W'`/`true`; added `e.burning = 2` on top and confirmed it
+  became `'BW'` (both icons); cleared both and confirmed it dropped back
+  to `''`/`false`. Screenshot also shows the new minimap wall + red enemy
+  dots rendering correctly together with the new dot+dart player marker.
+
+- **Fog of war on the minimap** (per user request — hide unexplored
+  areas and enemies the player hasn't been near yet). Purely client-side,
+  per-LOCAL-player, never networked — each player remembers their own
+  exploration, not shared party-wide (nothing asked for that, and
+  syncing it would need a new field for no real gameplay benefit). A
+  `FOG_CELL_SIZE=2`-unit grid per zone; `revealFogAroundPlayer()` (called
+  every frame from `renderMinimapGeometry()`, before drawing) adds every
+  cell within `FOG_REVEAL_RADIUS=10` of the player's *current* position
+  into a permanent per-zone `Set` (`exploredCells[zoneId]`) — deliberately
+  smaller than `MINIMAP_RADIUS=16` so seeing the map's full view radius
+  takes actually walking around, not just glancing. Once a cell is
+  explored it stays explored for the rest of the session (never cleared)
+  — the hub especially is revisited constantly, and losing its map each
+  time would be annoying, not "more correct." Walls, pillars, and enemy
+  dots are now all additionally gated by `isFogExplored(x,z)` alongside
+  the existing distance check.
+  Explicitly scoped as "have I been physically near this" memory, NOT
+  true line-of-sight — no raycasting against walls, so standing right
+  next to a wall reveals a sliver of whatever's on the other side too.
+  Called out here rather than silently passed off as full line-of-sight,
+  since that's a materially bigger feature (wall raycasting or a flood-
+  fill) this ask didn't call for.
+  Verified live via `window.__debug`: spawned level 1's enemies, set the
+  player at the arena center (0,0) — zone 1's outer walls (~18-19 units
+  away) and all 4 pillars (~11.3 units away, just outside the 10-unit
+  reveal radius) correctly did NOT render, while 2 enemies that happened
+  to spawn within 10 units did. Moved the player to (-8,-8), right next
+  to one pillar — that pillar's circle appeared (1 pillar now drawn).
+  Moved back to (0,0) and confirmed that pillar's circle was STILL there
+  — exploration memory persists after walking away, not just "currently
+  in range," exactly as intended.
+
+- **Two real follow-up bugs from a fresh playtest, both fixed.**
+
+  (1) "Тумана войны нет на миникарте" — the fog *logic* from the entry
+  above was actually working (walls/pillars/enemies were genuinely
+  gated by `isFogExplored`), but there was nothing on screen that
+  visually read as "fog": an unexplored cell and an explored-but-
+  currently-empty cell both just looked like the same plain dark compass
+  background, so hiding things didn't register as "fog," just as
+  "nothing there." Added `#minimapFog`, a `<canvas>` layered above
+  `#minimapSvg` (below the N/E/S/W labels) — `renderMinimapFog()` paints
+  a dark `rgba(4,4,10,0.85)` fill over every in-view cell that ISN'T in
+  `exploredCells`, leaving explored cells transparent so the geometry
+  underneath shows through normally. Canvas chosen over more SVG `<rect>`
+  elements on purpose: up to ~300 cells can fall in view at once, and
+  that many fresh SVG DOM nodes every frame is exactly the kind of
+  per-frame cost this session's lobby-lag fix already had to eliminate
+  once — a canvas fillRect loop of the same size is comparatively free.
+  Verified live: sampled actual pixel data from the canvas via
+  `getImageData` — a point ~12 world units out (beyond the 10-unit
+  reveal radius, still within the 16-unit view radius) came back
+  `rgba(3,3,10,237)` (the fog fill, alpha-blended), a point ~1.7 units
+  from the player came back fully transparent `(0,0,0,0)` — exactly the
+  expected split. Screenshot also shows the darker unexplored ring
+  visible at the compass's outer edge.
+
+  (2) "Стены изначальной комнаты на 1 уровне нет коллизии — можно
+  пройти насквозь" — a real, confirmed bug, and a genuinely tricky one
+  (2 attempts to actually fix, both verified live rather than assumed).
+  Root cause: the portal antechamber's Z-clamp widening (`zMax`, added
+  long before this session to let the player reach that room past the
+  arena's normal `z.half` boundary) applied uniformly across ALL X
+  positions, not just near the actual door gap — so walking north
+  ANYWHERE along that wall, not just through the door, let the player
+  pass clean through the *solid* flanking wall segments on either side
+  of the door. Confirmed live before fixing: walked from world (15,10)
+  to (15,33) in a straight line, right through real stone (the door
+  gap's own X range is only ±1.6, nowhere near x=15).
+  First fix attempt gated the widened `zMax` on the player being aligned
+  with the door's real X range (`PORTAL_DOOR_WIDTH`) OR already having
+  gotten past the wall in a previous frame (so someone genuinely inside
+  the room can still drift sideways, constrained instead by the room's
+  own already-working side-wall collision). Re-testing that fix found it
+  didn't actually work — same (15,10)→(15,33) tunnel still happened.
+  Cause: the "already past" check used `playerPos.z > z.half - 0.01`,
+  but the CLAMPED RESTING position when correctly blocked at the wall is
+  exactly `z.half` — which already satisfies `> z.half - 0.01` on the
+  very next frame after hitting the wall, silently re-opening the tunnel
+  one frame after any blocked contact. Fixed by requiring the player be
+  meaningfully past the wall's own thickness (`z.half + 1`, not
+  `z.half - 0.01`) before "already inside" ever applies.
+  Verified live end-to-end this time: (a) walking at x=15 (away from the
+  door) now holds firmly at z=19 even after 3 full seconds of continuous
+  forward input; (b) walking at x=0 with the door still closed correctly
+  stops at the closed door itself (~18.95, matching the door slab's own
+  collision, independent of this fix); (c) opened the door via the
+  already-exposed `openZoneDoor(1)` debug hook and confirmed walking
+  through it at x=0 still reaches the room's far wall normally (31.95);
+  (d) re-tested x=15 with the door now OPEN and confirmed it's still
+  correctly blocked at z=19 — door state never affects the flanking
+  wall, exactly as it shouldn't.
+  Added several previously-missing debug exports while chasing this
+  (`ZONE_DOOR_WALLS`, `ZONE_PORTAL_ROOM`, `ZONE_DOORS`,
+  `resolveCircleWallCollision`, `startLevel`, `resetZoneDoor`,
+  `openZoneDoor`, a real live `yawLive` getter/setter — the plain `yaw`
+  export turned out to be a frozen snapshot value, not a live binding,
+  discovered while trying to test minimap rotation a few entries back —
+  and `keys`) — these made this investigation possible without real FBX
+  assets (collision is pure position math, doesn't need the models to
+  test) and stay useful for whatever gets debugged next.
+
+- **Same wall, actual root cause this time** — user report: "могу
+  пройти через стену в одну сторону (обратно зайти уже не получается)".
+  The previous entry's fix only ever addressed the ENTERING direction:
+  it's a plain `Math.min(zMax, playerPos.z)` clamp, which is a single
+  directional bound, not a real wall — it has no way to stop a
+  DEcreasing z at that same boundary. So a player who got into the
+  portal room (through the real door, legitimately) could walk straight
+  back OUT through the solid flanking wall going the other way, at any
+  X off the door — nothing there ever pushed them back. Once outside
+  again at that off-door X, trying to re-enter correctly failed (that
+  direction was fixed), which is exactly the reported "one-way" wall.
+  The actual, permanent fix: stopped trying to fake wall behavior with
+  clamp math entirely and gave the flanking wall segments real AABB
+  collision, same as literally every other wall in the file.
+  `buildArena()` now pushes each flanking segment's `{minX,maxX,minZ,
+  maxZ}` into `ZONE_DOOR_WALLS[zoneId]` (creating the array if it
+  doesn't exist yet) right where it builds their meshes. `buildPortalRoom
+  ()` — which runs right after `buildArena()` for zone 1 and used to
+  `ZONE_DOOR_WALLS[zoneId] = walls` (a flat overwrite that would have
+  silently wiped buildArena's contribution) — now appends instead
+  (`ZONE_DOOR_WALLS[zoneId] = (ZONE_DOOR_WALLS[zoneId] || []).concat
+  (walls)`). With real collision now doing the actual blocking, the
+  movement clamp's `zMax` widening reverted to unconditional (same as
+  the very original pre-session code) — the X-gating logic from the
+  last entry is gone entirely, because it's no longer needed AND was the
+  source of the one-way leak.
+  Verified live, this time explicitly including the direction that broke
+  last time: (a) `resolveCircleWallCollision` called directly against
+  the wall data from both sides at x=6 (off the door) — pushed back
+  correctly in BOTH directions (20.7→20.85 from the room side, 19.3→19.15
+  from the arena side); (b) real per-frame movement, starting already
+  inside the room at (6,25) and walking south (the direction that
+  previously leaked) — now correctly stops at z=21.05 instead of sailing
+  through to the far arena wall; (c) re-confirmed the door itself still
+  works normally — opened it via `openZoneDoor(1)` and walked through at
+  x=0, still reaching the room's far wall (31.95) same as before.
