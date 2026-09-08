@@ -2261,23 +2261,35 @@ function makeEnemy(id, x, z, maxHp, isBoss, bossKind) {
   const group = new THREE.Group();
   let parts = [], skinMat = null, clothMat = null, materials = null, limbs = null, mixer = null, actions = null, current = null;
   const isGoblin = !isBoss && !!goblinTemplate;
-  if (isGoblin) {
-    const model = makeGoblinModel();
+  // Level-3 boss only (bossKind !== 'ranged' excludes BOSS2/level 6, which
+  // keeps its own distinct ranged/kiting kit and stays the old box body) —
+  // see makeSkeletonBossModel()'s comment for the full asset backstory.
+  const isSkeletonBoss = isBoss && bossKind !== 'ranged' && !!skeletonTemplate;
+  if (isGoblin || isSkeletonBoss) {
+    // Both branches produce the exact same {object, mixer, actions, current}
+    // shape (see makeSkeletonBossModel()'s comment) — everything below,
+    // and every other place `isGoblin` gates real-skeletal-mixer behavior
+    // (updateEnemyVisual's tint blend, the animate()-loop crossfade/facing
+    // logic), is shared by both without needing its own branch. The stored
+    // field is still named `isGoblin` — it now really means "uses the real
+    // skinned/mixer animation path," not literally "is a goblin."
+    const model = isSkeletonBoss ? makeSkeletonBossModel() : makeGoblinModel();
     group.add(model.object);
     mixer = model.mixer; actions = model.actions; current = model.current;
     materials = [];
     model.object.traverse(o => {
-      if (!o.isMesh) return;
+      if (!o.isMesh && !o.isSkinnedMesh) return;
       o.userData.enemyId = id;
       parts.push(o);
       const mats = Array.isArray(o.material) ? o.material : [o.material];
       for (const m of mats) if (m.color) materials.push({ mat: m, orig: m.color.clone() });
     });
   } else {
-    // Old procedural box body — still used for the boss (untouched by this
-    // change) and as a fallback for regular enemies if goblinTemplate
-    // hasn't finished loading yet (a level shouldn't block starting on a
-    // ~19MB download — see loadGoblinAssets).
+    // Old procedural box body — still used for BOSS2 (ranged, level 6,
+    // untouched by this change) and as a fallback for regular enemies /
+    // the level-3 boss if their real model hasn't finished loading yet
+    // (a level shouldn't block starting on an in-flight download — see
+    // loadGoblinAssets / loadSkeletonAssets).
     skinMat = new THREE.MeshLambertMaterial({ color: isBoss ? 0x6a1010 : SKIN_COLOR });
     clothMat = new THREE.MeshLambertMaterial({ color: isBoss ? 0x2a0a0a : CLOTH_COLOR });
     function part(geo, material, px, py, pz) {
@@ -2301,7 +2313,7 @@ function makeEnemy(id, x, z, maxHp, isBoss, bossKind) {
     const legR = part(legGeo.clone(), clothMat, 0.16, 0.9, 0);
     limbs = { armL, armR, legL, legR };
   }
-  const barY = isGoblin ? GOBLIN_HP_BAR_Y : 2.4;
+  const barY = isSkeletonBoss ? SKELETON_HP_BAR_Y : isGoblin ? GOBLIN_HP_BAR_Y : 2.4;
   const BAR_WIDTH = 1.2;
   const barBg = new THREE.Mesh(new THREE.BoxGeometry(BAR_WIDTH, 0.12, 0.05), new THREE.MeshBasicMaterial({ color: 0x441111 }));
   barBg.position.y = barY;
@@ -2331,7 +2343,7 @@ function makeEnemy(id, x, z, maxHp, isBoss, bossKind) {
   group.position.set(x, 0, z);
   if (isBoss) group.scale.setScalar(bossKind === 'ranged' ? BOSS2_SCALE : BOSS_SCALE);
   scene.add(group);
-  return { id, mesh: group, parts, skinMat, clothMat, materials, mixer, actions, current, isGoblin,
+  return { id, mesh: group, parts, skinMat, clothMat, materials, mixer, actions, current, isGoblin: isGoblin || isSkeletonBoss,
            hpBar: bar, statusIcon, hp: maxHp, maxHp, wet: 0, alive: true,
            burning: 0, burnDps: 0, burnCasterPid: null, // periodic fire damage — see hostSimulate's decay tick and hostResolveCast's Fire branch
            slowFactor: 1, frozenT: 0, // Плеск (Water tier-1) leveling — see hostResolveCast's Water branch and TIER1_MAX_LEVEL
@@ -2661,6 +2673,116 @@ let goblinTemplate = null; // { root, runClip, attackClip }
     scene.add(warm.object);
   }).catch(err => console.error('Failed to load goblin assets', err));
 })();
+
+// Level-3 boss model — a real anatomical bone kit (18 separate SK_* meshes:
+// head, spine, ribcage, both clavicles/arms/hands, both legs/feet) with no
+// skin/rig of its own, rigged via Mixamo's Auto-Rigger (user uploaded
+// SkeletonBodyPart.fbx to mixamo.com, placed the chin/wrist/elbow/knee/
+// groin markers, downloaded "Sad Walk" back "With Skin") — skeleton_rigged
+// .fbx below is that download: same SK_* mesh names, now real skin weights
+// bound to a standard mixamorig skeleton, with the Sad Walk clip baked in
+// as its one animation. jump_attack.fbx is a separate, ordinary motion-only
+// Mixamo library clip ("Jump Attack") — works on this same skeleton with
+// zero retargeting math needed, purely because it shares mixamorig bone
+// names (same principle the mage's walk/cast clips already relied on).
+// An earlier attempt to fake this without a real rig — reparenting the
+// bare SK_* pieces into a hand-built rigid hierarchy and hand-applying
+// Mixamo's per-bone rotation deltas — produced visibly broken poses
+// (shoulder/arm rotations came out physically implausible) and was
+// abandoned once the properly auto-rigged file came back; see this
+// section's git history / README Findings for that dead end.
+const MODEL_BASE_SKELETON = 'models/skeleton/';
+// Calibrated so the boss's final height (this scale × BOSS_SCALE) lands
+// close to the original procedural box-boss's own height — the raw model
+// measured ~309 world-units tall (head to foot) in a standalone inspector,
+// and 4.3 / (309 × BOSS_SCALE) ≈ this value. Verify visually in-game and
+// retune if it reads noticeably bigger/smaller than the old box boss did.
+const SKELETON_SCALE = 0.00663;
+const SKELETON_ROTATION_OFFSET = Math.PI; // same forward-facing correction every other Mixamo-sourced model here needs — verify once spawned and flip if it walks backward
+// Verified live: with SKELETON_SCALE above, the skull sits at local
+// y≈2.07 (before BOSS_SCALE) — same ratio above the skull the original
+// box-boss's own bar keeps above ITS head (barY=2.4 vs its head at local
+// y=1.85, ×1.3) puts this at ≈2.7. First guess (3.4) measured out to
+// world-y 7.14 once BOSS_SCALE was applied — noticeably higher than the
+// box-boss's own ≈5.04 — so this was brought down to match proportion.
+const SKELETON_HP_BAR_Y = 2.7;
+let skeletonTemplate = null; // { root, walkClip, attackClip }
+(function loadSkeletonAssets() {
+  const loader = new FBXLoader();
+  const texLoader = new THREE.TextureLoader();
+  const loadOne = url => new Promise((resolve, reject) => loader.load(url, resolve, undefined, reject));
+  const loadTex = url => new Promise((resolve, reject) => texLoader.load(url, resolve, undefined, reject));
+  const TEX_BASE = MODEL_BASE_SKELETON + 'SkeletonBodyPart_Material.001mat_';
+  Promise.all([
+    loadOne(MODEL_BASE_SKELETON + 'skeleton_rigged.fbx'),
+    loadOne(MODEL_BASE_SKELETON + 'jump_attack.fbx'),
+    loadTex(TEX_BASE + 'BaseColor.png'),
+    loadTex(TEX_BASE + 'Normal.png'),
+    loadTex(TEX_BASE + 'Roughness.png'),
+    loadTex(TEX_BASE + 'Metallic.png'),
+    loadTex(TEX_BASE + 'Emissive.png'),
+  ]).then(([rootObj, attackObj, baseColor, normalMap, roughnessMap, metalnessMap, emissiveMap]) => {
+    baseColor.colorSpace = THREE.SRGBColorSpace;
+    emissiveMap.colorSpace = THREE.SRGBColorSpace;
+    const walkClip = rootObj.animations[0]; // "Sad Walk", baked in by the Auto-Rigger download
+    stripHorizontalRootMotion(walkClip);
+    const attackClip = attackObj.animations[0]; // "Jump Attack", motion-only
+    stripHorizontalRootMotion(attackClip);
+    // All 18 SK_* meshes share one material ("Material.001mat", confirmed
+    // via inspector) — set the real PBR maps on it once here；
+    // makeSkeletonBossModel() clones it per instance below, same as the
+    // goblin's per-instance material clone.
+    rootObj.traverse(o => {
+      if (!o.isMesh && !o.isSkinnedMesh) return;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) {
+        m.map = baseColor; m.normalMap = normalMap; m.roughnessMap = roughnessMap; m.metalnessMap = metalnessMap;
+        m.emissiveMap = emissiveMap; m.emissive.setHex(0xffffff); m.emissiveIntensity = 1.0;
+        m.needsUpdate = true;
+      }
+    });
+    skeletonTemplate = { root: rootObj, walkClip, attackClip };
+    // Same shader-compile warmup fix as loadGoblinAssets above (see its
+    // comment for the full lag-report backstory) — one real instance,
+    // parked off-map, so this pays its first-render compile cost during
+    // idle lobby time instead of at the exact moment level 3 starts.
+    const warm = makeSkeletonBossModel();
+    warm.object.position.set(20, -200, 0);
+    scene.add(warm.object);
+  }).catch(err => console.error('Failed to load skeleton boss assets', err));
+})();
+// Same {object, mixer, actions:{idle,run,attack}, current} shape as
+// makeGoblinModel() on purpose — every place that shape is consumed
+// (updateEnemyVisual's tint blending, the animate()-loop crossfade/facing
+// logic, triggerGoblinAttack) is already fully generic and works
+// unmodified for this boss too; see makeEnemy()'s isSkeletonBoss branch.
+function makeSkeletonBossModel() {
+  const tmpl = skeletonTemplate;
+  const clone = skeletonClone(tmpl.root);
+  clone.scale.setScalar(SKELETON_SCALE);
+  clone.rotation.y = SKELETON_ROTATION_OFFSET;
+  clone.traverse(o => {
+    if (o.isMesh || o.isSkinnedMesh) {
+      o.material = Array.isArray(o.material) ? o.material.map(m => m.clone()) : o.material.clone();
+    }
+  });
+  const mixer = new THREE.AnimationMixer(clone);
+  // No dedicated idle clip (only Sad Walk + Jump Attack exist) — freeze
+  // the walk clip's own first frame as a static idle pose, same trick
+  // makeGoblinModel() already uses for the identical reason.
+  const idleClip = tmpl.walkClip.clone();
+  const actions = {
+    idle: mixer.clipAction(idleClip),
+    run: mixer.clipAction(tmpl.walkClip),
+    attack: mixer.clipAction(tmpl.attackClip),
+  };
+  actions.attack.setLoop(THREE.LoopOnce, 1);
+  actions.attack.clampWhenFinished = true;
+  actions.idle.play();
+  actions.idle.paused = true; // frozen at time 0 — see the idleClip comment above
+  mixer.update(0);
+  return { object: clone, mixer, actions, current: 'idle' };
+}
 
 // Per-player spawn/despawn portals, one model per element/class. Loaded
 // lazily per element (not all up front) since only some of the 4 blend

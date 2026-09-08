@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<!-- Throwaway inspector, not part of the game. Loads the properly rigged
+     (Mixamo Auto-Rigger, "With Skin") skeleton_rigged.fbx and plays its
+     baked-in clip plus the other motion-only mixamorig clips through a
+     real THREE.AnimationMixer — no manual pose math, same pattern the
+     mage/goblin already use in prototype.html. -->
+<html><head><meta charset="utf-8"><title>Skeleton inspector</title>
+<style>html,body{margin:0;background:#222;color:#eee;font-family:monospace}
+#info{position:fixed;top:0;left:0;background:rgba(0,0,0,0.75);padding:10px;max-height:100vh;overflow:auto;font-size:12px;white-space:pre;z-index:2}
+canvas{display:block}</style>
+</head><body>
+<div id="info">loading...</div>
+<script type="importmap">
+{"imports": {"three": "https://unpkg.com/three@0.149.0/build/three.module.js",
+"three/addons/": "https://unpkg.com/three@0.149.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x222222);
+scene.add(new THREE.GridHelper(4, 20));
+scene.add(new THREE.AxesHelper(2));
+const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.01, 100);
+camera.position.set(3, 2, 3);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 1, 0);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x222222, 1.2));
+const dl = new THREE.DirectionalLight(0xffffff, 1.0); dl.position.set(2,4,3); scene.add(dl);
+
+const loader = new FBXLoader();
+const loadOne = url => new Promise((res, rej) => loader.load(url, res, undefined, rej));
+window.__loadOne = loadOne;
+
+let mixer = null, model = null;
+(async () => {
+  model = await loadOne('../models/skeleton/skeleton_rigged.fbx');
+  console.log('rigged model loaded', model);
+  const box = new THREE.Box3().setFromObject(model);
+  const size = box.getSize(new THREE.Vector3());
+  const scale = 1.6 / size.y;
+  model.scale.setScalar(scale);
+  scene.add(model);
+
+  let skinnedCount = 0, boneCount = 0;
+  model.traverse(o => { if (o.isSkinnedMesh) skinnedCount++; if (o.isBone) boneCount++; });
+  document.getElementById('info').textContent =
+    `skinnedMeshes: ${skinnedCount}  bones: ${boneCount}\n` +
+    `baked-in clips: ${model.animations.map(a=>a.name+' ('+a.duration.toFixed(2)+'s)').join(', ')}`;
+
+  mixer = new THREE.AnimationMixer(model);
+  window.__mixer = mixer;
+  window.__model = model;
+  if (model.animations.length) {
+    window.__currentAction = mixer.clipAction(model.animations[0]);
+    window.__currentAction.play();
+  }
+})();
+
+// Play any OTHER motion-only mixamorig clip (jump_attack / start_walking /
+// mutant_swiping) on this same skinned model — works because they all
+// share the standard mixamorig bone names, no retargeting math needed
+// now that the mesh itself carries a real mixamorig skeleton.
+window.playClip = async (url) => {
+  const obj = await loadOne(url);
+  const clip = obj.animations[0];
+  if (window.__currentAction) window.__currentAction.stop();
+  window.__currentAction = mixer.clipAction(clip);
+  window.__currentAction.play();
+  document.getElementById('info').textContent += `\nnow playing: ${url} (${clip.duration.toFixed(2)}s)`;
+};
+
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  const dt = clock.getDelta();
+  if (mixer) mixer.update(dt);
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body></html>

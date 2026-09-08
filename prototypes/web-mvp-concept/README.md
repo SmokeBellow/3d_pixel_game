@@ -2647,3 +2647,85 @@ mirror-portal Findings entry.
   through to the far arena wall; (c) re-confirmed the door itself still
   works normally — opened it via `openZoneDoor(1)` and walked through at
   x=0, still reaching the room's far wall (31.95) same as before.
+
+- **Level-3 boss got a real model: a Mixamo-auto-rigged skeleton, replacing
+  the procedural box body.** User supplied a real bone-anatomy asset kit
+  (`SkeletonBodyPart.fbx`: 18 separate, sensibly-named meshes — SK_Head,
+  SK_Spine, SK_Side/ribcage, SK_LClavicle/SK_RClavicle, SK_LArmUp/Down,
+  SK_HandL/R, SK_LLegUp/Down, SK_LFoot/RFoot — plus a full PBR texture set:
+  BaseColor/Normal/Roughness/Metallic/Emissive) with no rig/skin/animation
+  of its own (confirmed by grepping the FBX binary for bone/deformer/
+  animstack strings — none existed), and separately 4 stock Mixamo
+  animations (Sad Walk, Start Walking, Jump Attack, Mutant Swiping).
+  **First attempt (abandoned):** since the raw mesh had no rig, tried
+  reparenting the 18 SK_* pieces into a hand-built RIGID hierarchy (real
+  joints via `.attach()`, verified correct — a shoulder rotation swung the
+  whole arm+forearm+hand chain from the right pivot) and hand-applying
+  each Mixamo bone's rotation DELTA (current vs. its own rest pose) onto
+  the matching piece. Built and tested live in a throwaway inspector
+  (`tools/inspect-skeleton.html`) — produced visibly broken poses (the
+  shoulder rotation alone came out physically implausible, arm flung out
+  sideways) because a bare delta-copy assumes the two skeletons' local
+  joint axes already line up, which they don't without real retargeting
+  work. **User correctly pushed back** ("Почему ты собираешь анимации
+  сам? Разве mixamo это уже не сделал?") — right call: Mixamo's own
+  Auto-Rigger exists to solve exactly this, properly, but only if the
+  custom mesh is actually uploaded to mixamo.com and run through it —
+  which hadn't happened yet for the first batch of files (those were
+  just stock animations on Mixamo's generic rig, never applied to this
+  mesh). User did that (uploaded `SkeletonBodyPart.fbx`, placed the
+  Auto-Rigger's chin/wrist/elbow/knee/groin markers, downloaded "Sad
+  Walk" back "With Skin") and supplied the result. Confirmed via the same
+  binary-string check this new file now has real `Deformer`/skin data,
+  keeps the original SK_* mesh names, and is bound to a standard
+  `mixamorig:*` skeleton — copied in as `models/skeleton/
+  skeleton_rigged.fbx`. Loaded through a real `THREE.AnimationMixer` this
+  time (no manual pose math at all) — deforms correctly and smoothly;
+  confirmed live in the inspector both for its own baked-in Sad Walk clip
+  and for `jump_attack.fbx` (a separate, ordinary motion-only clip) played
+  on the same mixer — works with zero retargeting code since both just
+  share standard `mixamorig:*` bone names, the same principle the mage's
+  walk/cast clips already relied on.
+  Wired into `prototype.html` as `loadSkeletonAssets()` /
+  `makeSkeletonBossModel()`, deliberately mirroring `loadGoblinAssets()`/
+  `makeGoblinModel()`'s exact shape (`{object, mixer, actions:
+  {idle,run,attack}, current}`) — every place that shape is already
+  consumed generically (`updateEnemyVisual`'s status tint blending, the
+  animate()-loop crossfade/facing/attack-trigger logic, `parts`/
+  `userData.enemyId` tagging for hit detection) needed zero new branches,
+  just one added condition (`isSkeletonBoss = isBoss && bossKind!=='ranged'
+  && skeletonTemplate`) in `makeEnemy()` gating which model builder runs.
+  Per user request ("вся модель скелета была зоной, куда можно попасть
+  снарядом"): confirmed live that all 18 SK_* meshes end up in `parts`
+  with `userData.enemyId` set — since hit detection is a real
+  `raycaster.intersectObjects(enemies.flatMap(e=>e.parts))` against
+  those meshes (not a single hitbox), the whole skeleton — skull, ribs,
+  every limb — is a legitimate hit target already, no extra code needed
+  beyond correct tagging.
+  BOSS2 (level 6, ranged) is explicitly excluded (`bossKind!=='ranged'`)
+  and keeps the original box body — user chose level-3-only when asked,
+  and BOSS2's kiting kit was never part of this ask.
+  Applied the real PBR texture set (all 18 pieces share one material,
+  confirmed via inspector) once on the template, cloned per-instance same
+  as the goblin. Scale (`SKELETON_SCALE=0.00663`) and HP-bar height were
+  calibrated to roughly match the original box-boss's own proportions
+  (measured the box boss's local head/bar heights and matched the same
+  ratio) rather than guessed blind — verified/corrected once live: first
+  HP-bar guess measured out to world-y 7.14 (noticeably higher than the
+  box-boss's ≈5.04), brought down to a value that measures ≈5.67 by
+  reworking the constant from the actual measured skull height instead of
+  a flat guess.
+  Verified live end-to-end in the actual game (via the project's existing
+  `http.server` dev config, `.claude/launch.json` — used for the first
+  time this session; raw `file://` navigation was used for everything
+  before this, which is why every earlier finding in this doc had to
+  work around FBX assets never loading at all): `startLevel(3)` spawns a
+  real skinned/deforming skeleton, correctly facing the player; all 18
+  parts tagged for hit detection; `triggerGoblinAttack` correctly starts
+  and progresses the Jump Attack clip (screenshots show the pose visibly
+  changing frame to frame); manually driving position + `advanceGoblin
+  Animation(e,'run',dt)` correctly transitions `current` to `'run'`.
+  Not yet verified: real gameplay pacing (does the Jump Attack clip's
+  native ~3.8s duration feel right against `BOSS_SLAM_COOLDOWN`'s 4.5s),
+  and whether `SKELETON_ROTATION_OFFSET`/scale hold up from other camera
+  angles — worth a real playtest pass.

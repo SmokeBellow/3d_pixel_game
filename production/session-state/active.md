@@ -1197,3 +1197,36 @@ old ring removed entirely.
   still working normally.
 - Full detail in README Findings.
 - Not committed yet.
+
+## COMPLETE: Level-3 boss reskinned to a real Mixamo-rigged skeleton (new asset pipeline)
+
+- User supplied a real bone-anatomy mesh kit (18 named SK_* pieces + full
+  PBR textures) with no rig of its own, plus 4 stock Mixamo animations.
+  First attempt (manual rigid-hierarchy + hand-copied bone-rotation
+  deltas, no real rig) produced visibly broken poses — user correctly
+  called out that Mixamo's own Auto-Rigger should do this properly
+  instead of ad-hoc math. User uploaded the mesh to mixamo.com, ran the
+  Auto-Rigger, and supplied the result back "With Skin" — that loads and
+  deforms correctly through a real `THREE.AnimationMixer`, no manual pose
+  math needed at all.
+- Wired in as `models/skeleton/skeleton_rigged.fbx` (mesh+skeleton+Sad
+  Walk clip) + `jump_attack.fbx` (motion-only, retargets with zero extra
+  code since it shares standard mixamorig bone names). Mirrors
+  `loadGoblinAssets()`/`makeGoblinModel()`'s exact shape so every
+  existing generic system (status tints, animation crossfade/facing,
+  hit-detection tagging) needed zero new code — just one new condition
+  in `makeEnemy()`.
+  Level-3 boss only, per user's choice when asked — BOSS2 (level 6,
+  ranged) keeps its original box body.
+- Per user request, confirmed live that all 18 mesh pieces are tagged for
+  hit detection — the whole skeleton (skull, ribs, every limb) is now a
+  real projectile-hittable zone, not just a central hitbox.
+- Also discovered and started using the project's own dev server
+  (`.claude/launch.json`, `python -m http.server` on port 8743) instead
+  of raw `file://` navigation — this is what actually let real FBX
+  assets load for testing, for the first time this session.
+- Verified live end-to-end: model spawns correctly, all 18 parts tagged,
+  attack/walk animation states trigger and progress correctly. Not yet
+  playtested for real pacing/camera-angle feel.
+- Full detail in README Findings.
+- Not committed yet.
