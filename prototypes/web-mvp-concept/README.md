@@ -3061,3 +3061,331 @@ mirror-portal Findings entry.
   a real rendered frame shows one thick red bolt crashing down through the
   enemy from well above frame, not a net around it.
 - Not committed yet.
+
+## NEW (first pass, deliberately rough): Mountain Temple zone (2026-09-09)
+
+- User request: a new open-air, multi-level location (stairs/ramps, rock
+  boundaries instead of walls, a Buddhist-style red/gold temple, visible
+  sky+mountains, a couple of scenic viewpoints), entered via the existing
+  decorative pentagram circle in the Lightning hub room. Explicit
+  instruction: "делай пока не получится идеально" — iterate, don't block
+  on perfection.
+- **Placement**: `MOUNTAIN_CX=150, MOUNTAIN_CZ=-230` — far east of the
+  existing x≈0 dungeon/hub column, purely to avoid any geometry overlap
+  (same "all zones coexist statically" convention as every other zone).
+- **Real vertical movement — a first for this game.** Every zone before
+  this was flat (`playerPos.y` existed, was networked, but nothing ever
+  set it to anything but 0, and the camera Y was a hardcoded constant
+  ignoring it entirely). Added `terrainHeightAt(zoneId,x,z)` (0 everywhere
+  except 'mountain') and wired `playerPos.y` into it every frame in the
+  movement block, then fixed every place that silently assumed y=0:
+  the FP camera position, the debug third-person orbit head-pivot, the
+  debug eye marker, and the local player's own debug-body mesh. Deliberately
+  did NOT extend this to remote players' Y (still 0) — computing a remote
+  player's height needs to know THEIR zone, which isn't currently tracked/
+  broadcast per-player, and a wrong guess there risked a real bug in the
+  live dungeon (see the discarded "just call mountainHeightAt on any world
+  x/z" approach in the thinking — a dungeon-level-6 player's world z
+  happens to fall in the temple-platform-height branch of the mountain's
+  own height function, which would have been silently wrong). Flagged as a
+  known gap, not fixed this round.
+- **Terrain**: one displaced-vertex `PlaneGeometry` ground mesh
+  (`buildMountainGround`) whose per-vertex height comes from the exact
+  same `mountainHeightAt` function collision uses — visual and collision
+  can't disagree by construction. A spine climbs by `dz` (entrance 0 →
+  ramp → platform 4 → ramp → temple platform 8) with two side branches
+  (west→2, east→6) gated by `dx`, all continuous via `smoothstep01` at
+  the seams. Real boundary is 4 AABB segments in `ZONE_MAZE['mountain']`
+  (reusing the exact same generic wall-collision hook every maze zone
+  already goes through) — the outer `ZONES.mountain.half` is just the
+  usual generous fallback, not real containment (same hub convention).
+  Decorative carved-stone steps (`buildStairSteps`) laid over the two main
+  ramps only; the two viewpoint branches stay natural smooth slopes.
+- **Rocks**: low-poly boulders (`makeBoulder` — icosahedron with per-
+  vertex jitter) scattered along all 4 boundary walls plus a few loose
+  accents near the ramps — visually why the player can't go further, not
+  a brick wall, per the user's explicit ask.
+- **Temple**: fully procedural (boxes/cones/cylinders + the same canvas-
+  texture approach as everything else in this file) — red walls, gold
+  trim/pillars/roof-ring/finial, a 2-tier pagoda roof, entrance steps.
+  Sits on the temple platform (dz≈-41, y=8).
+- **Sky**: a gradient-texture dome (`buildMountainSky`, radius 180, inside
+  the camera's far=200) + a ring of 16 hazy low-poly distant peaks at
+  radius 130-160. Only the mountain zone gets bright fog/lighting —
+  `applyLightingMode()` (previously identical everywhere except the L-
+  debug cheat) now branches on `currentZone==='mountain'` for sky-blue
+  fog/hemi/dir/background, restored by the same function's `else` branch
+  the instant either portal fires.
+- **Portals**: the Lightning room's existing decorative pentagram (see
+  `makeElementPentagram('Lightning', hLightX, hLightZ+2.2)`, already
+  there from an earlier session) is now also a real proximity trigger
+  (walk-through, not E — per user request "вход через круг"). A new
+  return portal (`buildMountainReturnPortal`, reusing the same asset/
+  instantiation code) sits near the mountain zone's own entrance. Both
+  directions debounced via `mountainPortalCooldown`; destinations are
+  placed a safe distance from each trigger circle as a second margin.
+  Purely local/per-client state — no host-authority needed, consistent
+  with how `currentZone` already worked per-player before this.
+- **Verified this round** (via `window.__debug` — new exports:
+  `terrainHeightAt`, `mountainHeightAt`, `MOUNTAIN_CX/CZ/RETURN_DZ`,
+  `teleportToMountain`/`teleportBackFromMountain`, `hLightX/hLightZ`):
+  every named height (entrance/ramp/platform/temple/both viewpoints)
+  matches the design exactly; walking into the west boundary wall gets
+  pushed back correctly; both portal directions teleport and restore
+  fog/lighting correctly; a real rendered frame (small-offscreen-canvas-
+  JPEG technique) shows the temple, stairs, sky, and distant mountains all
+  actually rendering together as intended. **Not verified**: the real E2E
+  walk-in trigger via actual WASD movement (sandbox pointer-lock/rAF
+  limitations, same as everywhere else in this file) — only the exact
+  same distance-check logic run manually; a second render at a wider
+  angle also failed (corrupted while saving the base64 through this
+  session's tools, a known recurring limitation, not a code issue).
+- **Known rough edges, left as-is per "делай пока не получится идеально"**:
+  minimap's `arenaBoundaryWalls('mountain')` draws a misleading square
+  (based on the generous outer `half`, not the real irregular footprint);
+  remote players don't get real Y (see above); no sound; boulder
+  placement/terrain texture repeat values are eyeballed, not tuned; the
+  two viewpoint platforms have a lantern marker but no explicit "look at
+  this" framing/composition check from a real playtest angle.
+- Not committed yet.
+
+## FIXED: Mountain sky bleeding into the dungeon (real bug, user-reported) (2026-09-09)
+
+- User screenshot: a large curved blue ribbon artifact visible in level 1
+  (dungeon), before ever entering the new mountain zone. Root cause: the
+  sky dome mesh (`buildMountainSky`) was added to the scene once at page
+  load with default `visible=true` and `fog: false` on its material —
+  nothing gated it to the mountain zone at all. `fog:false` meant it
+  ignored the dungeon's own tight dark fog (`FOG_FAR=30`) entirely, and
+  its 180-unit radius easily reaches level 1 (nearest point ~94 units from
+  world origin — well inside the camera's far=200 plane), so any
+  unobstructed sightline rendered a chunk of the sphere's gradient texture
+  at full brightness, regardless of zone or darkness.
+- Fixed with both: dropped `fog:false` (now respects scene fog like every
+  other mesh in the file) AND real visibility gating — `mountainSkyObjects`
+  (the dome + 16 distant peaks) default to `visible=false` right after
+  creation, flipped true only in `teleportToMountain()` and back to false
+  in `teleportBackFromMountain()` (same pattern `setZoneLightsVisible`
+  already uses for torches, just for these few big meshes).
+- Verified live: fresh level-1 entry now shows the sky sphere and all 16
+  peaks as `visible:false`; `teleportToMountain()` flips them to `true`;
+  `teleportBackFromMountain()` flips them back to `false`.
+- Not committed yet.
+
+## FIXED: Boulders looked like shattered glass, not rocks (user feedback, screenshot) (2026-09-09)
+
+- Root cause: `makeBoulder` used smooth-shaded normals (`computeVertexNormals`
+  default) on a mesh with fully independent per-vertex jitter (0.75-1.25)
+  plus wild independent per-axis scale — smoothly interpolating normals
+  between very differently-angled adjacent faces on an irregular mesh is
+  exactly what produces that faceted-gem/broken-glass look, not rock.
+- Fixed: `flatShading: true` (distinct rough facets — the standard
+  technique for readable low-poly rock art) + much gentler jitter
+  (0.88-1.1) + a near-uniform scale (only a little vertical squash left,
+  the old wild per-axis stretch removed).
+- Verified visually via the same render technique as the rest of this
+  session — a real frame now shows a believable clustered boulder/cliff
+  formation instead of angular shards.
+- Not committed yet.
+
+## NEW: Real rock models — Kenney "Nature Kit" (CC0), replacing procedural boulders (2026-09-09)
+
+- User question: how do first-person games usually handle this — generated
+  or real 3D assets? Answered (real models almost always, scattered from a
+  small library), then user asked to find and integrate real models for
+  this project's own rocks.
+- Downloaded Kenney's **Nature Kit** (CC0 license — same family as the
+  particle textures already used in this file), confirmed via its
+  `License.txt`. Picked 8 rock/boulder variants (`rock_largeA/C/E`,
+  `rock_tallB/E/H`, `rock_smallA/D`) into `models/rocks/` (+ its own
+  `LICENSE.txt` copy).
+- **Real compatibility bug found and fixed during integration**: Kenney's
+  `.fbx` exports in this pack are ASCII (text) FBX 7.3 — confirmed via
+  `file`, and confirmed the actual failure via console:
+  `THREE.FBXLoader` (r0.149.0, the version this project's importmap
+  pins) threw `Cannot read properties of undefined` on every one of
+  these files, a real parse crash, not a 404/config issue. Kenney also
+  ships `.glb` (binary glTF) for every model — switched to those instead,
+  added a `GLTFLoader` import (new, alongside the existing `FBXLoader`)
+  scoped to only this asset set; every other model in the file keeps
+  using FBX as before.
+- `buildMountainRocks()`'s call sites didn't need to change shape —
+  `placeRock(x, y, z, worldSize)` replaces the old `makeBoulder(...,
+  color)`, queuing placements until the async GLTF loads finish (same
+  lazy-ready pattern the portal assets already use), then picking a
+  random one of the 8 loaded templates per spot.
+- **Sizes measured via a real THREE.Box3 in the browser** (not guessed,
+  per this file's own convention): raw models range ~0.36 (small) to
+  ~1.1 units (large) across their longest axis, base sitting right at
+  y≈0. `ROCK_MODEL_SCALE_UNIT=1.2` calibrated against the large variants;
+  small/tall variants ending up smaller-than-nominal at the same
+  `worldSize` reads as natural formation variety, not a bug.
+- Verified: all 8 templates report `loaded` (not `null`) via
+  `window.__debug.rockTemplates`; bounding-box measurements above came
+  from real spawned instances. **Could not get a rendered screenshot
+  through this session's tools** — every attempt (3 tries, different
+  sizes/qualities) produced a JPEG that `PIL.Image.load()` confirms is
+  actually corrupted (not just an API-side hiccup — this is stricter than
+  the earlier "media removed" cases this session, which turned out to be
+  real files) — a session-tooling limitation transcribing very long
+  base64 through several hops, not a game bug. Visual confirmation still
+  needed from a real browser.
+- Not committed yet.
+
+## FIXED: 3 real problems from user feedback + screenshot (too few rocks, walk-through, no relief) (2026-09-09)
+
+User's screenshot showed: distant mountains visibly floating (gap between
+their base and the horizon), a nearly flat ground plane despite the zone
+being "multi-level", and sparse individual rocks reading as debris, not a
+real cliff boundary. All three were real bugs, not just taste:
+
+- **Floating peaks — real bug**: the ground mesh only covers the actual
+  playable footprint (~35×65 units), but the 16 distant peak cones sit at
+  radius 130-160 — nothing filled that ~100-unit gap, so they visibly hung
+  in empty air over a gap down to the horizon. Fixed with a large flat
+  "skirt" disc (`CircleGeometry(220,...)`, same rock material as the real
+  ground) sitting a hair below the real terrain (y=-0.15, so the real
+  terrain's edge wins the depth test at the seam) filling the gap out past
+  the peaks. Peaks' own base also pushed further down (`h/2-10`, was
+  `h/2-4`) so a wide cone's flat bottom edge is guaranteed buried, not
+  sitting visibly on top.
+- **No real relief — real gap, not just polish**: the "flat" shelves
+  (entrance clearing, platform B, both viewpoint plateaus) were exactly
+  flat (h=0 / h=4 / h=2 / h=6), so most of the walkable area read as a
+  dead-flat courtyard with only the two explicit ramps showing any
+  elevation change. Added `terrainNoise(dx,dz)` — a small deterministic
+  (not `Math.random`, since this has to agree between the baked mesh
+  vertices and the every-frame collision/player-height read) two-octave
+  sine bump field, applied to every flat shelf but deliberately excluded
+  from the ramps and the temple's own foundation (noise there would make
+  stairs feel uneven or tilt the building). Sampled range across the
+  entrance: -0.27 to 1.52 (was a flat 0 everywhere).
+- **Rocks: too sparse + zero collision — real bug, not just density**.
+  `spawnRockModel` never added any collider at all — every placed rock was
+  purely visual, so the boundary "cliffs" were walk-through air with rocks
+  floating around for decoration (user: "через часть текстур можно
+  пройти"). Fixed: `collide` param appends one AABB to
+  `ZONE_MAZE.mountain.walls` (same collision list/mechanism the outer
+  boundary already used) sized off the rock's own worldSize — picked up
+  for free by the existing `resolveCircleWallCollision` call, no new
+  collision code needed. Also replaced single isolated rocks with
+  `placeRockPile` (2-4 overlapping models per spot, one shared collider per
+  pile, not one per rock — avoids a jagged wall of tiny separate colliders)
+  and roughly doubled scatter counts along all 4 boundary edges (evenly
+  spread + jitter instead of fully random, to avoid big gaps). Total
+  collision segments in the zone: 4 (outer boundary) + 63 piles = 67.
+- Verified: `resolveCircleWallCollision` demonstrably pushes the player out
+  when standing on a rock pile's own collider (tested against a real wall
+  entry from `ZONE_MAZE.mountain.walls`, not a hypothetical); sampled
+  `mountainHeightAt` across the entrance confirms real elevation variance
+  instead of a flat 0; wall count confirmed at 67. **Could not get a
+  working screenshot this round** — multiple JPEG/PNG attempts at various
+  sizes all came back either corrupted (`PIL` `broken data stream`) or
+  successfully decoded but with implausible/abstracted colors at very
+  small resolution — a session-tooling limitation transcribing long
+  base64 through several hops (documented earlier this session too), not
+  a game bug. Real visual confirmation still needed from the user's own
+  browser.
+- Not committed yet.
+
+## Second round of fixes — texture the temple, real rock density, real models for the horizon (2026-09-09)
+
+User feedback on the previous round, with another screenshot: "Части
+текстур не хватает" (parts of the texture are missing) + "скал все еще
+мало" (still too few rocks) + explicitly asked for the distant mountains
+to use the same real-model approach discussed earlier in this session.
+
+- **Temple's flat colors read as missing textures** — `buildTemple`'s
+  walls/roof/plinth/steps were plain `MeshStandardMaterial({color})`,
+  visually flat next to the richly brick-textured ground/dungeon. Swapped
+  in this file's existing `stoneMaterial()` (the same brick-pattern canvas
+  generator every dungeon wall already uses) tinted red/stone instead of
+  writing a new texture function — same technique, just recolored.
+- **Rock density, round 2**: added a second staggered row of piles a few
+  units further out along the west/east/south boundary cliffs (inner row
+  keeps the real collider, outer row is decoration-only) instead of one
+  thin line of piles, plus more accent rocks near the ramps/platforms.
+  Boundary pile counts: west/east 20→26 (×2 rows), south 14→20 (×2 rows),
+  north 9→13.
+- **Distant horizon mountains now use real rock models, not procedural
+  cones** — per the user's explicit callback to the earlier "how do real
+  games actually do this" discussion. `spawnMountainPeaks()` reuses the
+  same 8 loaded Kenney rock GLTFs, scaled ~30-90x (a rock model at that
+  scale reads as a whole mountain) around the horizon ring. Had to defer
+  this past page-load: `buildMountainSky()` runs synchronously very early,
+  well before the async GLTF fetch resolves, so a new `rockAssetsReadyPromise`
+  (exposed from `loadRockAssets()`) lets this hook run only once the
+  models are actually loaded — new peaks default their `visible` to the
+  *current* zone state (not hardcoded false) in case the player is already
+  standing in the mountain zone by the time the async load finishes.
+- Verified: wall count went 67→89 (new outer decorative row + more accent/
+  boundary piles); 38 large-scale (>20x) objects present in the scene
+  after teleporting into the zone, consistent with 20 giant rock-model
+  peaks each contributing a scaled group + mesh. Screenshot again not
+  attempted this round given the repeated tooling failures earlier — real
+  visual confirmation needed from the user's own browser, as before.
+- Not committed yet.
+
+## FIXED: Player floated above the visible stairs (real curve mismatch, user-reported) (2026-09-09)
+
+- User: "рядом с лестницей игрок поднимается, но визуально висит в
+  воздухе" — the player's height DOES rise correctly on the ramps, but
+  looked disconnected from the visible stair-step boxes.
+- Root cause confirmed numerically before fixing: `buildStairSteps` derived
+  each decorative step's Y via plain linear interpolation between the
+  ramp's two endpoints, while the real walkable height (both
+  `playerPos.y` and the ground mesh's own vertex displacement) comes from
+  `mountainSpineHeight`'s `smoothstep01` ease curve. The two curves only
+  agree at the endpoints and the exact midpoint — reproduced the old
+  formula against the real curve and measured up to **0.38 units of gap**
+  in between (steps sitting above the real ground near the bottom of a
+  ramp, below it near the top).
+- Fixed by deleting the separate linear formula entirely — each step's Y
+  now comes from the exact same `mountainHeightAt()` call the ground mesh
+  and player collision already use, so it's structurally impossible for
+  them to diverge regardless of what shape the height curve is (dropped
+  the now-redundant `yFrom`/`yTo` params from `buildStairSteps`).
+- Verified: read back all 20 spawned step boxes (both ramps) directly from
+  the scene and confirmed every one sits at exactly
+  `mountainHeightAt(dx,dz)+0.1` — zero gap, not just close.
+- Not committed yet.
+
+## Diagnosed and addressed: "floats in the air everywhere", not a height bug (2026-09-09)
+
+- User reported the floating sensation persisted after the stair-curve fix,
+  and clarified (via a targeted question) that it happens **everywhere** —
+  on the ramps, near them, and across the whole map, not just at specific
+  spots. That ruled out a height-data bug: re-verified by reading back
+  every ground-mesh vertex directly (not just the height function) and
+  confirming zero deviation from `mountainHeightAt` — the geometry itself
+  is correct.
+- Diagnosis: this was a **shading/depth-cue problem**, not a height
+  problem. Under this scene's flat, ambient-heavy lighting and a fairly
+  high-frequency repeating rock texture, the ground's real 3D shape
+  produced almost no visible gradient — it read as a flat painted
+  backdrop. Separate objects sitting on it (rocks, stair boxes, the
+  temple) get normal per-face directional shading and looked like
+  distinct floating cutouts by comparison, everywhere at once — which
+  matches exactly what was reported.
+- Fixed with three changes, none touching height data (already correct):
+  1. **Per-vertex hypsometric + slope tinting** baked directly into the
+     ground mesh's vertex colors (`rockMaterial(repeat, vertexColors)` now
+     takes a `vertexColors` flag) — low ground shades darker, high ground
+     lighter (classic terrain-map technique), plus a slope term (steeper
+     ground shades a bit darker, like a soft contact shadow). This is a
+     real depth cue independent of the scene's actual light angle.
+     Measured real contrast on the live mesh: shade values ranged 0.66 to
+     1.13 (was a uniform flat tone with zero per-vertex variation before).
+  2. Ground texture tiling roughly halved (18→9) — the previous
+     high-frequency repeat was visually fighting with (drowning out) any
+     shading gradient.
+  3. Rebalanced the mountain zone's lighting: hemi (flat ambient fill)
+     lowered 1.1→0.65, dir (directional "sun") raised 0.9→1.5 — a strong
+     flat ambient light was itself part of the problem, since ambient
+     light don't produce shading gradients the way directional light does.
+- **Not personally visually re-confirmed this round** — this session's
+  screenshot tooling has been unreliable throughout (documented
+  repeatedly above); the fix is grounded in verified geometry data +
+  sound rendering reasoning, not a screenshot. Real confirmation needed
+  from the user's own browser, same as recent rounds.
+- Not committed yet.

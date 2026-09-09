@@ -366,6 +366,13 @@
 // Everything below still reads as plain `THREE.Foo` thanks to this import.
 import * as THREE from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+// GLTFLoader — only for the Kenney "Nature Kit" rock models (see
+// models/rocks/). Their .fbx counterparts are ASCII (text) FBX, which
+// this version of THREE.FBXLoader fails to parse at all (a real,
+// reproducible crash, not a config issue) — their .glb counterparts load
+// cleanly, so glTF is used for these specifically rather than switching
+// every model in the file.
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as skeletonClone } from 'three/addons/utils/SkeletonUtils.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 // ============================================================
@@ -768,6 +775,28 @@ camera.add(playerGlow);
 // Cheat: press L to fully disable darkness/vignette for debugging.
 let lightsDebugFull = false;
 function applyLightingMode() {
+  if (currentZone === 'mountain' && !lightsDebugFull) {
+    // Open-air daylight — a real departure from the dungeon/hub's always-
+    // dark fog (previously global/unconditional; this is the first zone
+    // that needs to look different). Restored by the `else` branch below
+    // the instant the player leaves, via the same function called at both
+    // teleport points (see teleportToMountain/teleportBackFromMountain).
+    // Hemi (ambient-ish fill) intentionally lower than before and dir
+    // (the directional "sun") higher — a strong flat ambient was washing
+    // out any directional shading, which is part of why the terrain read
+    // as flat (see buildMountainGround's comment for the fuller story).
+    hemiLight.intensity = 0.65; hemiLight.color.setHex(0xbfe0ff); hemiLight.groundColor.setHex(0x6a5a3a);
+    dirLight.intensity = 1.5; dirLight.color.setHex(0xfff4e0);
+    scene.fog.color.setHex(0xbfe0ff);
+    scene.fog.near = 45; scene.fog.far = 190;
+    scene.background.setHex(0xbfe0ff);
+    document.getElementById('vignette').style.display = 'none';
+    return;
+  }
+  hemiLight.color.setHex(0x554a77); hemiLight.groundColor.setHex(0x0a0810);
+  dirLight.color.setHex(0xffeedd);
+  scene.fog.color.setHex(0x030308);
+  scene.background.setHex(0x030308);
   if (lightsDebugFull) {
     hemiLight.intensity = 1.0; dirLight.intensity = 0.6;
     scene.fog.near = 300; scene.fog.far = 600;
@@ -2301,7 +2330,8 @@ function respawnLocalPlayer() {
   // stack everyone on the exact same point, while still reading as "the same place".
   const spawn = ZONES[currentZone].spawn;
   const angle = Math.random() * Math.PI * 2, r = Math.random() * 1.0;
-  playerPos.set(spawn[0] + Math.cos(angle) * r, 0, spawn[1] + Math.sin(angle) * r);
+  const sx = spawn[0] + Math.cos(angle) * r, sz = spawn[1] + Math.sin(angle) * r;
+  playerPos.set(sx, terrainHeightAt(currentZone, sx, sz), sz);
 }
 
 // ============================================================
@@ -3053,6 +3083,571 @@ function makeElementPentagram(element, x, z) {
 makeElementPentagram('Lightning', hFireX, hFireZ + 2.2);
 makeElementPentagram('Lightning', hWaterX, hWaterZ + 2.2);
 makeElementPentagram('Lightning', hLightX, hLightZ + 2.2);
+
+// ============================================================
+// Mountain Temple zone — open-air multi-level area reached via the
+// Lightning hub room's own pentagram circle ("вход через круг в комнате
+// молний", per user request — the existing decorative portal there
+// becomes a real proximity teleport, see mountainPortalCooldown below).
+// Placed far east of everything else (MOUNTAIN_CX=150) purely to avoid
+// intersecting the dungeon/hub geometry that already occupies the x≈0
+// column — same "all zones coexist statically, spacing is just about not
+// overlapping" convention as every other zone (see the ZONES comment).
+// No combat here — a vista/exploration space, not a dungeon level.
+// First pass, explicitly not polished (per user: "делай пока не
+// получится идеально") — see README Findings for known rough edges.
+// ============================================================
+const MOUNTAIN_CX = 150, MOUNTAIN_CZ = -230;
+// Terrain is a handful of flat "shelves" at rising heights connected by
+// ramps — real vertical movement (see the playerPos.y integration in
+// animate()), not the flat dungeon floor every other zone has. Two side
+// branches lead to scenic overlook platforms. All heights/positions below
+// are in LOCAL (dx,dz) space relative to (MOUNTAIN_CX,MOUNTAIN_CZ); world
+// position is always (MOUNTAIN_CX+dx, h, MOUNTAIN_CZ+dz).
+function smoothstep01(edge0, edge1, x) {
+  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+// Main spine, purely a function of dz (south/-Z climbs higher):
+//   dz>-8        entrance clearing, h=0
+//   -8..-16      ramp 0->4
+//   -16..-26     platform, h=4
+//   -26..-34     ramp 4->8
+//   dz<=-34      temple platform, h=8
+function mountainSpineHeight(dz) {
+  if (dz > -8) return 0;
+  if (dz > -16) return 4 * smoothstep01(-8, -16, dz);
+  if (dz > -26) return 4;
+  if (dz > -34) return 4 + 4 * smoothstep01(-26, -34, dz);
+  return 8;
+}
+// Cheap deterministic (not Math.random — this gets evaluated both when
+// baking the ground mesh's vertices AND every frame for collision/player
+// height, and those two have to agree pixel-for-pixel) two-octave sine
+// bump field. Per user feedback ("нет реального рельефа") — the shelves
+// were dead-flat geometric plateaus with zero texture of their own; this
+// gives the "flat" areas a believable uneven mountainside surface without
+// touching the stairs/ramps or the temple's own foundation.
+function terrainNoise(dx, dz) {
+  return Math.sin(dx * 0.15) * Math.cos(dz * 0.17) * 0.3 + Math.sin(dx * 0.4 + 2) * Math.cos(dz * 0.33 - 1) * 0.15;
+}
+function mountainHeightAt(dx, dz) {
+  let h;
+  // West branch off the entrance clearing — rises to a 2-high overlook.
+  if (dx < -6 && dz > -8 && dz < 10) h = 2 * smoothstep01(-6, -18, dx);
+  // East branch off platform B — rises to a 6-high overlook. Range matches
+  // platform B's own flat-4 band exactly (dz in -26..-16) so there's no
+  // seam where the branch meets the spine.
+  else if (dx > 6 && dz > -26 && dz < -16) h = 4 + 2 * smoothstep01(6, 18, dx);
+  else h = mountainSpineHeight(dz);
+  // Ramps (0->4 and 4->8) and the temple's own foundation stay clean —
+  // noise there would make stairs feel uneven or tilt the building.
+  const onRamp = (dz <= -8 && dz > -16) || (dz <= -26 && dz > -34);
+  const onTemple = dz <= -34;
+  if (!onRamp && !onTemple) h += terrainNoise(dx, dz);
+  return h;
+}
+// Only 'mountain' has real terrain — every other zone stays flat (y=0),
+// matching how playerPos.y always behaved before this zone existed.
+function terrainHeightAt(zoneId, x, z) {
+  return zoneId === 'mountain' ? mountainHeightAt(x - MOUNTAIN_CX, z - MOUNTAIN_CZ) : 0;
+}
+ZONES.mountain = { cx: MOUNTAIN_CX, cz: MOUNTAIN_CZ, half: 34, spawn: [MOUNTAIN_CX, MOUNTAIN_CZ] };
+// Real containment via the same generic wall-collision hook every maze
+// zone already uses (see the `if (maze) resolveCircleWallCollision(...)`
+// line in animate()) — visually these are rock cliffs (buildMountainRocks
+// below), not the brick walls that mechanism was originally written for,
+// but the AABB check itself doesn't care what the geometry looks like.
+ZONE_MAZE['mountain'] = { walls: [
+  { minX: MOUNTAIN_CX - 32, maxX: MOUNTAIN_CX + 32, minZ: MOUNTAIN_CZ - 58, maxZ: MOUNTAIN_CZ - 56 }, // south, behind the temple
+  { minX: MOUNTAIN_CX - 32, maxX: MOUNTAIN_CX + 32, minZ: MOUNTAIN_CZ + 16, maxZ: MOUNTAIN_CZ + 18 }, // north, past the entrance
+  { minX: MOUNTAIN_CX - 32, maxX: MOUNTAIN_CX - 30, minZ: MOUNTAIN_CZ - 58, maxZ: MOUNTAIN_CZ + 18 }, // west
+  { minX: MOUNTAIN_CX + 30, maxX: MOUNTAIN_CX + 32, minZ: MOUNTAIN_CZ - 58, maxZ: MOUNTAIN_CZ + 18 }, // east
+] };
+
+function makeRockTexture() {
+  const size = 256;
+  const cnv = document.createElement('canvas');
+  cnv.width = cnv.height = size;
+  const ctx = cnv.getContext('2d');
+  ctx.fillStyle = '#5c5850';
+  ctx.fillRect(0, 0, size, size);
+  for (let i = 0; i < 260; i++) {
+    const shade = 0.55 + Math.random() * 0.6;
+    ctx.fillStyle = `rgba(${Math.floor(90 * shade)},${Math.floor(85 * shade)},${Math.floor(76 * shade)},1)`;
+    const rx = Math.random() * size, ry = Math.random() * size, rr = 4 + Math.random() * 18;
+    ctx.beginPath(); ctx.ellipse(rx, ry, rr, rr * (0.6 + Math.random() * 0.5), Math.random() * Math.PI, 0, Math.PI * 2); ctx.fill();
+  }
+  // Faint moss/grass tint patches — reads as open mountainside, not dungeon stone.
+  for (let i = 0; i < 40; i++) {
+    ctx.fillStyle = `rgba(70,90,45,${(0.08 + Math.random() * 0.12).toFixed(2)})`;
+    const rx = Math.random() * size, ry = Math.random() * size, rr = 6 + Math.random() * 20;
+    ctx.beginPath(); ctx.ellipse(rx, ry, rr, rr * 0.6, Math.random() * Math.PI, 0, Math.PI * 2); ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(cnv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+function rockMaterial(repeat, vertexColors) {
+  const tex = makeRockTexture();
+  tex.repeat.set(repeat, repeat);
+  return new THREE.MeshStandardMaterial({ map: tex, roughness: 1, metalness: 0, vertexColors: !!vertexColors });
+}
+
+// Terrain mesh: a displaced grid matching mountainHeightAt exactly, so
+// collision (playerPos.y, see animate()) and what's actually drawn
+// underfoot never disagree. Local plane X/Y map straight to world dx/dz —
+// mesh.rotation.x=-PI/2 turns local +Z into world +Y, the same convention
+// every other flat floor in this file already relies on, just displaced
+// here instead of left flat.
+//
+// Real problem found from user feedback ("висит в воздухе... везде — на
+// пролёте лестницы, рядом с лестницей и по всей карте"): the vertex
+// *heights* were independently confirmed correct (sampled every vertex
+// directly from the live mesh, zero deviation from mountainHeightAt), so
+// this was never a height bug. It's a shading/depth-cue problem instead —
+// under this scene's flat ambient-heavy lighting and a fairly busy
+// repeating rock texture, the ground's real 3D shape produced almost no
+// visible gradient, so it read as a flat painted backdrop, while separate
+// objects sitting on it (rocks, stair boxes, the temple) got normal
+// per-face shading and looked like distinct floating cutouts by
+// comparison — everywhere, not just on the ramps, which matches exactly
+// what was reported. Fixed with cheap per-vertex "hypsometric" tinting
+// (classic terrain-map technique: low ground reads darker, high ground
+// lighter) plus a slope term (steeper ground shades darker, like a soft
+// contact shadow) baked directly into vertex colors — a real depth cue
+// that doesn't depend on the scene's actual light angle at all. Texture
+// tiling also cut roughly in half (18→9) since the previous high-frequency
+// repeat was visually fighting with (drowning out) any shading gradient.
+function buildMountainGround() {
+  const segW = 35, segH = 65; // must match the PlaneGeometry call below
+  const geo = new THREE.PlaneGeometry(70, 130, segW, segH);
+  const pos = geo.attributes.position;
+  const heights = new Float32Array(pos.count);
+  for (let i = 0; i < pos.count; i++) {
+    const h = mountainHeightAt(pos.getX(i), pos.getY(i));
+    pos.setZ(i, h);
+    heights[i] = h;
+  }
+  geo.computeVertexNormals();
+  const colorAttr = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const col = i % (segW + 1), row = Math.floor(i / (segW + 1));
+    const down = row > 0 ? heights[i - (segW + 1)] : heights[i];
+    const up = row < segH ? heights[i + (segW + 1)] : heights[i];
+    const base = 0.78 + (heights[i] / 8) * 0.35;        // low ground darker, high ground lighter
+    const slope = Math.min(0.25, Math.abs(up - down) * 0.05); // steeper ground shades a bit darker
+    const shade = Math.max(0.5, Math.min(1.2, base - slope));
+    colorAttr[i * 3] = colorAttr[i * 3 + 1] = colorAttr[i * 3 + 2] = shade;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colorAttr, 3));
+  const mesh = new THREE.Mesh(geo, rockMaterial(9, true));
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(MOUNTAIN_CX, 0, MOUNTAIN_CZ);
+  scene.add(mesh);
+}
+// Decorative carved-stone steps laid over a ramp region — visual only, the
+// smooth displaced terrain above already handles real collision/height
+// (same "simple collision, detailed visual separately" split the rest of
+// this file uses for pillars/walls).
+// Real bug found from user feedback ("игрок поднимается, но визуально
+// висит в воздухе"): these decorative step boxes used to derive their own
+// Y via plain linear interpolation between the ramp's two endpoints, while
+// the actual walkable height (both the collision/player Y AND the ground
+// mesh's own vertex displacement, see buildMountainGround) comes from
+// mountainSpineHeight's `smoothstep01` ease curve — a different curve
+// shape that only agrees with the linear one at the very ends and the
+// exact midpoint. In between, the smoothstep curve is measurably lower
+// than the linear one (or higher, depending on which half), so the player
+// (following the correct smoothstep ground) visibly floated above or sank
+// below these boxes. Fixed by deriving each step's Y from the exact same
+// mountainHeightAt() call collision/ground use — one source of truth,
+// impossible to diverge regardless of what the height curve's shape is.
+function buildStairSteps(dxCenter, width, dzFrom, dzTo) {
+  const stepCount = 10;
+  const stepMat = new THREE.MeshStandardMaterial({ color: 0x736a5e, roughness: 0.9 });
+  const stepDepth = Math.abs(dzTo - dzFrom) / stepCount + 0.15;
+  for (let i = 0; i < stepCount; i++) {
+    const t = (i + 0.5) / stepCount;
+    const dz = dzFrom + (dzTo - dzFrom) * t;
+    const y = mountainHeightAt(dxCenter, dz);
+    const step = new THREE.Mesh(new THREE.BoxGeometry(width, 0.25, stepDepth), stepMat);
+    step.position.set(MOUNTAIN_CX + dxCenter, y + 0.1, MOUNTAIN_CZ + dz);
+    scene.add(step);
+  }
+}
+buildMountainGround();
+buildStairSteps(0, 5, -8, -16);
+buildStairSteps(0, 5, -26, -34);
+
+// Boundary rock formations — real low-poly rock models scattered along the
+// 4 collision walls above (visually why the player can't walk further, not
+// a brick wall), plus a few loose accents scattered inside the play area.
+// First version was procedural (jittered icosahedra) — read as shattered
+// glass/crystal shards even after tuning (flat shading, gentler jitter),
+// not real rock (user feedback, with screenshot). Replaced with actual
+// models: Kenney's "Nature Kit" (CC0 — models/rocks/LICENSE.txt), same
+// license family as the particle textures already used elsewhere in this
+// file. Each FBX's own material already carries a flat rock-brown/grey
+// DiffuseColor (measured in the files — no texture file needed, so this
+// loads exactly like the portal assets: FBXLoader, no separate texture
+// fetch).
+const MODEL_BASE_ROCKS = 'models/rocks/';
+const ROCK_FILES = ['rock_largeA', 'rock_largeC', 'rock_largeE', 'rock_tallB', 'rock_tallE', 'rock_tallH', 'rock_smallA', 'rock_smallD'];
+const rockTemplates = {}; // name -> Object3D | null (null = confirmed failed to load)
+let rockAssetsReady = false;
+const rockPlacementQueue = []; // {x,y,z,worldSize} queued while assets are still loading
+// Measured via a real THREE.Box3 in the browser (not guessed) — raw model
+// sizes range ~0.36 (small) to ~1.1 units (large) across their longest
+// axis, base sitting right at y≈0. This converts a caller's intended
+// world-size (matching the old procedural boulders' `scale` param, so
+// buildMountainRocks below didn't need to change its numbers) into the
+// right mesh.scale factor, calibrated against the large variants (the
+// small/tall ones ending up smaller-than-nominal at the same worldSize is
+// fine — it reads as natural formation variety, not a bug).
+const ROCK_MODEL_SCALE_UNIT = 1.2;
+// Exposed so code further down the file (buildMountainSky, declared after
+// this point) can defer its own rock-model spawning until assets are
+// actually ready, the same way rockPlacementQueue does for placeRock —
+// without this, code textually later in the file that calls
+// rockTemplates[...] synchronously at page-load time would just find
+// empty templates (the GLTF fetch hasn't resolved yet).
+let rockAssetsReadyPromise;
+function loadRockAssets() {
+  const loader = new GLTFLoader(); // .glb, not .fbx — see the GLTFLoader import comment
+  rockAssetsReadyPromise = Promise.all(ROCK_FILES.map(name => new Promise(resolve => {
+    loader.load(MODEL_BASE_ROCKS + name + '.glb',
+      gltf => { rockTemplates[name] = gltf.scene; resolve(); },
+      undefined,
+      err => { console.error('Failed to load rock asset', name, err); rockTemplates[name] = null; resolve(); });
+  }))).then(() => {
+    rockAssetsReady = true;
+    for (const p of rockPlacementQueue) spawnRockModel(p.x, p.y, p.z, p.worldSize, p.collide);
+    rockPlacementQueue.length = 0;
+  });
+}
+loadRockAssets();
+function spawnRockModel(x, y, z, worldSize, collide) {
+  const names = ROCK_FILES.filter(n => rockTemplates[n]);
+  if (names.length === 0) return; // every asset failed — silently skip, same graceful-miss pattern as ensurePortalTemplate
+  const name = names[Math.floor(Math.random() * names.length)];
+  const clone = rockTemplates[name].clone(true);
+  clone.scale.setScalar(worldSize * ROCK_MODEL_SCALE_UNIT * (0.85 + Math.random() * 0.3));
+  clone.position.set(x, y, z);
+  clone.rotation.y = Math.random() * Math.PI * 2;
+  scene.add(clone);
+  // Real collision — first version was visual-only (user feedback: "через
+  // часть текстур можно пройти"). Approximated as one AABB per rock sized
+  // off its own worldSize, appended to the same wall list the boundary/
+  // door collision already uses (ZONE_MAZE['mountain'].walls), so it's
+  // picked up for free by the existing `resolveCircleWallCollision` call
+  // in animate() — no new collision code needed. Only the boundary/cliff
+  // scatter passes `collide:true`; the small loose accents near the
+  // walkable stairs stay passable on purpose (pebbles underfoot, not
+  // obstacles blocking the path).
+  if (collide) {
+    const r = worldSize * 0.4;
+    ZONE_MAZE.mountain.walls.push({ minX: x - r, maxX: x + r, minZ: z - r, maxZ: z + r });
+  }
+}
+// Queues the placement if assets aren't loaded yet (the common case, since
+// buildMountainRocks runs synchronously at page load) — same lazy-ready
+// pattern as the portal/goblin asset loaders elsewhere in this file.
+function placeRock(x, y, z, worldSize, collide) {
+  if (rockAssetsReady) spawnRockModel(x, y, z, worldSize, collide);
+  else rockPlacementQueue.push({ x, y, z, worldSize, collide });
+}
+// A "pile" of 2-4 overlapping rocks instead of one isolated model — reads
+// as a real rock formation instead of scattered debris (user feedback:
+// "скал слишком мало, нет ощущения, что они реальны"). Only the pile's
+// own footprint gets collision (one shared AABB, not one per rock in the
+// pile — avoids a wall of tiny separate colliders that would snag movement
+// oddly along the seams between them).
+function placeRockPile(x, z, worldSize, collide) {
+  const count = 2 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < count; i++) {
+    const ox = (Math.random() - 0.5) * worldSize * 0.8, oz = (Math.random() - 0.5) * worldSize * 0.8;
+    const y = mountainHeightAt(x - MOUNTAIN_CX + ox, z - MOUNTAIN_CZ + oz);
+    placeRock(x + ox, y, z + oz, worldSize * (0.55 + Math.random() * 0.6), false);
+  }
+  if (collide) {
+    const r = worldSize * 0.9;
+    ZONE_MAZE.mountain.walls.push({ minX: x - r, maxX: x + r, minZ: z - r, maxZ: z + r });
+  }
+}
+function buildMountainRocks() {
+  // Boundary cliffs — dense, overlapping piles right along the collision
+  // walls (see ZONE_MAZE.mountain.walls above) so the wall the player
+  // actually hits is visually the rock formation blocking them, not empty
+  // air next to a sparse rock 5 units away. TWO staggered rows (inner
+  // right on the collision line, outer a few units further out) instead
+  // of one thin line — per user feedback ("скал все еще мало") a single
+  // row of piles still read as sparse from most angles; a real cliff has
+  // depth/thickness, not a one-rock-deep fence.
+  const scatterAlongZ = (dx, dzFrom, dzTo, count) => {
+    for (let i = 0; i < count; i++) {
+      const dz = dzFrom + (i + Math.random() * 0.7) * ((dzTo - dzFrom) / count); // spread evenly + jitter, not fully random (avoids big gaps)
+      const wz = MOUNTAIN_CZ + dz;
+      placeRockPile(MOUNTAIN_CX + dx + (Math.random() - 0.5) * 3, wz, 3 + Math.random() * 3, true);
+      placeRockPile(MOUNTAIN_CX + dx + (dx > 0 ? 5 : -5) + (Math.random() - 0.5) * 4, wz, 4 + Math.random() * 4, false);
+    }
+  };
+  scatterAlongZ(-30, -58, 16, 26); // west cliff, along the whole spine
+  scatterAlongZ(30, -58, 16, 26);  // east cliff
+  for (let i = 0; i < 20; i++) {   // south cliff, behind the temple — tallest, most dramatic
+    const dx = -30 + (i + Math.random() * 0.7) * (60 / 20);
+    placeRockPile(MOUNTAIN_CX + dx, MOUNTAIN_CZ - 57 - Math.random() * 2, 5 + Math.random() * 4, true);
+    placeRockPile(MOUNTAIN_CX + dx + (Math.random() - 0.5) * 5, MOUNTAIN_CZ - 61 - Math.random() * 3, 6 + Math.random() * 5, false);
+  }
+  for (let i = 0; i < 13; i++) {    // north cliff, past the entrance/return portal
+    const dx = -22 + (i + Math.random() * 0.7) * (44 / 13);
+    placeRockPile(MOUNTAIN_CX + dx, MOUNTAIN_CZ + 17 + Math.random() * 2, 3 + Math.random() * 3, true);
+  }
+  // Loose accent rocks near the ramps/platforms, clear of the walkable
+  // centerline — no collision, they read as terrain texture underfoot.
+  const accents = [[-8, -13], [8, -13], [-9, -30], [9, -30], [15, -1], [-15, -2], [4, 6], [-4, 7], [-6, -20], [6, -22], [-11, -37], [11, -38]];
+  for (const [dx, dz] of accents) {
+    const y = mountainHeightAt(dx, dz);
+    placeRock(MOUNTAIN_CX + dx, y, MOUNTAIN_CZ + dz, 1.2 + Math.random(), false);
+  }
+}
+buildMountainRocks();
+
+// Temple — Buddhist-pagoda-inspired silhouette (tiered roof, red walls,
+// gold trim), on the highest platform. Purely geometric (boxes/cones/
+// cylinders + a canvas rock texture elsewhere), matching this whole
+// file's established "procedural, no external 3D asset unless supplied"
+// approach.
+function buildTemple(x, baseY, z) {
+  const group = new THREE.Group();
+  // Real flat-color materials read as "missing texture" next to the
+  // richly-textured ground/rocks (user feedback: "Части текстур не
+  // хватает"). Reused this file's existing brick-pattern canvas generator
+  // (stoneMaterial/makeStoneTexture, already used for every dungeon wall)
+  // tinted red/stone instead of writing a new texture function — same
+  // technique, just recolored.
+  const redMat = stoneMaterial(0x9c2b28, 0x5a1512, 3, 2);
+  const darkRedMat = stoneMaterial(0x6e1e1c, 0x3a0f0d, 3, 2);
+  const goldMat = new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.8, roughness: 0.3, emissive: 0x3a2c05, emissiveIntensity: 0.25 });
+  const stoneMat = stoneMaterial(0x8a8478, 0x5a5650, 4, 4);
+
+  const plinth = new THREE.Mesh(new THREE.BoxGeometry(11, 1, 11), stoneMat);
+  plinth.position.set(0, 0.5, 0);
+  group.add(plinth);
+
+  for (let i = 0; i < 4; i++) { // entrance steps, north face toward the approach
+    const step = new THREE.Mesh(new THREE.BoxGeometry(4, 0.22, 0.9), stoneMat);
+    step.position.set(0, 0.11 + i * 0.22, 6 - i * 0.9);
+    group.add(step);
+  }
+
+  const walls = new THREE.Mesh(new THREE.BoxGeometry(7, 4, 7), redMat);
+  walls.position.set(0, 1 + 2, 0);
+  group.add(walls);
+
+  const trim = new THREE.Mesh(new THREE.BoxGeometry(7.3, 0.3, 7.3), goldMat);
+  trim.position.set(0, 1 + 4, 0);
+  group.add(trim);
+  const doorway = new THREE.Mesh(new THREE.BoxGeometry(1.6, 2.6, 0.2), new THREE.MeshStandardMaterial({ color: 0x2a1008 }));
+  doorway.position.set(0, 1 + 1.5, 3.55);
+  group.add(doorway);
+  for (const sx of [-1, 1]) {
+    const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.26, 4, 10), goldMat);
+    pillar.position.set(sx * 2.6, 1 + 2, 3.6);
+    group.add(pillar);
+  }
+
+  // Tiered pagoda roof — 2 tiers, each an octagonal low pyramid + a gold
+  // ring band between tiers, finished with a tall gold finial.
+  const roof1 = new THREE.Mesh(new THREE.ConeGeometry(6.4, 2, 8), darkRedMat);
+  roof1.position.set(0, 1 + 4 + 1, 0);
+  roof1.rotation.y = Math.PI / 8;
+  group.add(roof1);
+  const ring1 = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 0.35, 8), goldMat);
+  ring1.position.set(0, 1 + 4 + 2 + 0.6, 0);
+  group.add(ring1);
+  const roof2 = new THREE.Mesh(new THREE.ConeGeometry(3.4, 1.5, 8), darkRedMat);
+  roof2.position.set(0, 1 + 4 + 2 + 0.6 + 0.75, 0);
+  roof2.rotation.y = Math.PI / 8;
+  group.add(roof2);
+  const finialBase = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.3, 8), goldMat);
+  finialBase.position.set(0, 1 + 4 + 2 + 0.6 + 1.5 + 0.15, 0);
+  group.add(finialBase);
+  const finial = new THREE.Mesh(new THREE.ConeGeometry(0.28, 1.6, 8), goldMat);
+  finial.position.set(0, 1 + 4 + 2 + 0.6 + 1.5 + 0.3 + 0.8, 0);
+  group.add(finial);
+  const finialTip = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 8), goldMat);
+  finialTip.position.set(0, 1 + 4 + 2 + 0.6 + 1.5 + 0.3 + 1.6 + 0.1, 0);
+  group.add(finialTip);
+
+  const glow = new THREE.PointLight(0xffcc77, 1.4, 20, 2);
+  glow.position.set(0, 1 + 5, 0);
+  group.add(glow);
+  registerZoneLight('mountain', glow);
+
+  group.position.set(x, baseY, z);
+  scene.add(group);
+}
+buildTemple(MOUNTAIN_CX, 8, MOUNTAIN_CZ - 41);
+
+// Scenic viewpoint markers — a simple stone lantern at each overlook
+// platform (per user request — "добавь пару точек с красивым видом").
+function makeViewpointLantern(x, y, z) {
+  const group = new THREE.Group();
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 1.4, 8), new THREE.MeshStandardMaterial({ color: 0x736a5e, roughness: 0.9 }));
+  pole.position.y = 0.7;
+  group.add(pole);
+  const cap = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.5, 0.55), new THREE.MeshStandardMaterial({ color: 0x8a8478, roughness: 0.9 }));
+  cap.position.y = 1.55;
+  group.add(cap);
+  const glow = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 8), new THREE.MeshStandardMaterial({ color: 0xffcc77, emissive: 0xffaa44, emissiveIntensity: 0.8 }));
+  glow.position.y = 1.55;
+  group.add(glow);
+  const light = new THREE.PointLight(0xffaa55, 1.2, 10, 2);
+  light.position.y = 1.55;
+  group.add(light);
+  registerZoneLight('mountain', light);
+  group.position.set(x, y, z);
+  scene.add(group);
+}
+makeViewpointLantern(MOUNTAIN_CX + 22, 6, MOUNTAIN_CZ - 21); // east overlook
+makeViewpointLantern(MOUNTAIN_CX - 22, 2, MOUNTAIN_CZ + 1);  // west overlook
+
+// Sky — a gradient dome + a ring of hazy distant peaks, real geometry (not
+// just a flat scene.background) so it reads properly from the elevated
+// viewpoints too. Only ever visible from within/near the mountain zone —
+// everywhere else stays hidden behind the dungeon's own tight fog (see
+// applyLightingMode's 'mountain' branch).
+function makeSkyGradientTexture() {
+  const w = 8, h = 256;
+  const cnv = document.createElement('canvas');
+  cnv.width = w; cnv.height = h;
+  const ctx = cnv.getContext('2d');
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, '#2f6fd8');
+  grad.addColorStop(0.55, '#8fc3ee');
+  grad.addColorStop(1, '#dff0ff');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+  return new THREE.CanvasTexture(cnv);
+}
+// `mountainSkyObjects` are hidden by default and only toggled visible by
+// teleportToMountain/teleportBackFromMountain below (same idea as
+// setZoneLightsVisible for torches, just for these few big meshes instead
+// of lights). Real bug found in testing: the sky dome's original
+// `fog: false` made it completely ignore the dungeon's own tight dark fog
+// — with nothing else gating it, a bright blue sphere-fragment was
+// visible from level 1 (94 units away is still inside its own radius-180
+// bounds, well under the camera's far=200 plane, and `fog:false` meant
+// the dungeon's fog.far=30 never dimmed it). Fixed with both: dropped
+// `fog:false` (lets scene fog handle it normally, same as every other
+// mesh in the file) AND explicit visibility gating, since there's no
+// reason to render a giant sphere + 16 cones at all while nowhere near them.
+const mountainSkyObjects = [];
+function buildMountainSky() {
+  const sky = new THREE.Mesh(
+    new THREE.SphereGeometry(180, 20, 14),
+    new THREE.MeshBasicMaterial({ map: makeSkyGradientTexture(), side: THREE.BackSide }));
+  sky.position.set(MOUNTAIN_CX, 0, MOUNTAIN_CZ);
+  scene.add(sky);
+  mountainSkyObjects.push(sky);
+
+  // Real bug found from a user screenshot: the ground mesh only spans the
+  // actual playable footprint (~35x65 units), but the peaks sit way out
+  // at radius 130-160 — nothing but void (and the sky dome's own pale
+  // horizon color) filled that ~100-unit gap, so the distant mountains
+  // visibly floated with a hole under them instead of rising from the
+  // ground. This flat "skirt" disc (rock-textured, same material as the
+  // real ground) fills that gap out past the peaks; it sits a hair below
+  // the real ground (y=-0.15) so the real terrain's own edge — not this
+  // flat filler — wins the depth test right at the seam.
+  const skirt = new THREE.Mesh(new THREE.CircleGeometry(220, 32), rockMaterial(40));
+  skirt.rotation.x = -Math.PI / 2;
+  skirt.position.set(MOUNTAIN_CX, -0.15, MOUNTAIN_CZ);
+  scene.add(skirt);
+  mountainSkyObjects.push(skirt);
+
+  for (const obj of mountainSkyObjects) obj.visible = false;
+  // Distant horizon "mountains" — per user request, the same real-3D-model
+  // approach discussed earlier (real games scatter a small model library,
+  // not procedural primitives) applied to the horizon too, not just the
+  // nearby boulders: the same 8 Kenney rock models, scaled up ~30-90x, so
+  // a rock model reads as a whole mountain from this distance. Deferred
+  // until the GLTF assets actually finish loading (rockAssetsReadyPromise
+  // — this function itself runs synchronously at page load, well before
+  // that fetch resolves) since ConeGeometry primitives (the previous
+  // version) is exactly what real games avoid for this.
+  rockAssetsReadyPromise.then(spawnMountainPeaks);
+}
+buildMountainSky();
+function spawnMountainPeaks() {
+  const names = ROCK_FILES.filter(n => rockTemplates[n]);
+  if (names.length === 0) return; // every asset failed — fall back to nothing rather than crash; the skirt alone still reads as a horizon
+  const peakCount = 20;
+  for (let i = 0; i < peakCount; i++) {
+    const ang = (i / peakCount) * Math.PI * 2 + Math.random() * 0.15;
+    const r = 120 + Math.random() * 45;
+    const name = names[Math.floor(Math.random() * names.length)];
+    const clone = rockTemplates[name].clone(true);
+    const s = 30 + Math.random() * 60; // huge — these read as whole mountains, not boulders
+    clone.scale.setScalar(s);
+    // Raw models sit with their own base right at local y≈0 (measured
+    // earlier via Box3) — at this scale a small negative offset is enough
+    // to bury the base in the skirt plane rather than resting visibly on
+    // top of it.
+    clone.position.set(MOUNTAIN_CX + Math.cos(ang) * r, -s * 0.08, MOUNTAIN_CZ + Math.sin(ang) * r);
+    clone.rotation.y = Math.random() * Math.PI * 2;
+    // Matches current zone state directly (not hardcoded false) — this
+    // runs async, after the GLTF fetch resolves, so the player could
+    // already be standing in the mountain zone by the time this fires.
+    clone.visible = (currentZone === 'mountain');
+    scene.add(clone);
+    mountainSkyObjects.push(clone);
+  }
+}
+
+// Return portal — reuses the same portal asset/instantiation as the hub's
+// decorative pentagrams (see makeElementPentagram), placed in the mountain
+// zone as an actual functional return point (proximity-teleport, see
+// mountainPortalCooldown below) rather than a purely decorative prop.
+const MOUNTAIN_RETURN_DZ = 9;
+function buildMountainReturnPortal() {
+  ensurePortalTemplate('Lightning');
+  const place = () => {
+    if (!portalTemplates.Lightning) return;
+    const p = instantiatePortal(portalTemplates.Lightning, MOUNTAIN_CX, MOUNTAIN_CZ + MOUNTAIN_RETURN_DZ);
+    p.object.scale.setScalar(0.6);
+    hubPentagrams.push(p); // free spin update — see the hubPentagrams loop in animate()
+  };
+  if ('Lightning' in portalTemplates) place();
+  else (portalWaiters.Lightning || (portalWaiters.Lightning = [])).push(place);
+}
+buildMountainReturnPortal();
+
+// Walk-through portal transitions (per user request — "вход через круг",
+// not an E-press). Debounced via mountainPortalCooldown so arriving on one
+// side doesn't immediately re-trigger the trip back — the destination
+// spawn points are already placed a safe distance from each trigger circle,
+// this is just a second safety margin.
+let mountainPortalCooldown = 0;
+const MOUNTAIN_PORTAL_RADIUS = 1.4;
+function teleportToMountain() {
+  currentZone = 'mountain';
+  setZoneLightsVisible(currentZone);
+  for (const obj of mountainSkyObjects) obj.visible = true;
+  respawnLocalPlayer();
+  applyLightingMode();
+  mountainPortalCooldown = 1.5;
+}
+function teleportBackFromMountain() {
+  currentZone = 'hub';
+  setZoneLightsVisible(currentZone);
+  for (const obj of mountainSkyObjects) obj.visible = false;
+  respawnLocalPlayer();
+  applyLightingMode();
+  mountainPortalCooldown = 1.5;
+}
+
 async function warmupAllElementPreviews() {
   ensureElementPreviews(); // builds each card's scene/camera + the shared renderer if not already
   for (const el of ELEMENTS) {
@@ -5134,6 +5729,7 @@ function renderPartyFrames() {
 // system needed for what's just "find the exit" / "beat the boss" today.
 function questInfoFor(zone, level, inShop) {
   if (zone === 'hub') return { title: 'Хаб', objective: inShop ? 'Прокачайтесь и выберите портал' : 'Выберите портал следующего уровня' };
+  if (zone === 'mountain') return { title: 'Горный храм', objective: 'Осмотритесь — портал назад в комнате молний' };
   const isBoss = BOSS_LEVELS.includes(level);
   // Per user request, every dungeon level shares one objective for now
   // ("Пока оставим на всех уровнях задание Победить противников") — the
@@ -5394,6 +5990,22 @@ function animate() {
       if (maze) resolveCircleWallCollision(playerPos, PLAYER_RADIUS, maze.walls);
       const doorWalls = ZONE_DOOR_WALLS[currentZone];
       if (doorWalls) resolveCircleWallCollision(playerPos, PLAYER_RADIUS, doorWalls);
+      // Terrain height — a no-op (always 0) everywhere except the mountain
+      // zone, where it's what actually makes the stairs/platforms real
+      // instead of just decoration (see terrainHeightAt).
+      playerPos.y = terrainHeightAt(currentZone, playerPos.x, playerPos.z);
+    }
+    // Mountain Temple walk-through portal (per user request — "вход через
+    // круг", not an E-press): the Lightning hub room's own pentagram
+    // becomes a real proximity teleport one way, a dedicated return portal
+    // in the mountain zone the other way. Purely local/per-player state —
+    // like every other zone transition, each client tracks its own
+    // currentZone independently (see the ZONES comment).
+    if (mountainPortalCooldown > 0) mountainPortalCooldown -= dt;
+    else if (currentZone === 'hub' && Math.hypot(playerPos.x - hLightX, playerPos.z - (hLightZ + 2.2)) < MOUNTAIN_PORTAL_RADIUS) {
+      teleportToMountain();
+    } else if (currentZone === 'mountain' && Math.hypot(playerPos.x - MOUNTAIN_CX, playerPos.z - (MOUNTAIN_CZ + MOUNTAIN_RETURN_DZ)) < MOUNTAIN_PORTAL_RADIUS) {
+      teleportBackFromMountain();
     }
     // Arrow-key look (touchpad fallback) — scales with the same shared `sensitivity`
     const keyLookSpeed = LOOK_KEY_SPEED * (sensitivity / BASE_SENSITIVITY);
@@ -5418,7 +6030,7 @@ function animate() {
     fpArmL.position.y = FP_ARM_BASE_Y + bobY;
     fpArmR.position.y = FP_ARM_BASE_Y - bobY;
     fpArmR.position.z = FP_ARM_BASE_Z + recoilZ;
-    if (debugThirdPerson) debugEyeMarker.position.set(playerPos.x, EYE_HEIGHT, playerPos.z);
+    if (debugThirdPerson) debugEyeMarker.position.set(playerPos.x, playerPos.y + EYE_HEIGHT, playerPos.z);
 
     // Keep a real world-space body for the local player positioned/animated
     // every frame, not just while the V-key debug third-person view is on —
@@ -5436,7 +6048,7 @@ function animate() {
       // Same facing rule as remote players — face actual movement direction
       // while moving (only one directional Running clip), otherwise face
       // the camera/aim yaw.
-      debugOwnBody.mesh.position.set(playerPos.x, 0, playerPos.z);
+      debugOwnBody.mesh.position.set(playerPos.x, playerPos.y, playerPos.z);
       debugOwnBody.mesh.rotation.y = isMoving ? Math.atan2(-move.x, -move.z) : yaw;
       advanceCharacterAnimation(debugOwnBody, isMoving ? 'walk' : 'idle', dt);
       debugOwnBody.mesh.visible = debugThirdPerson;
@@ -5452,7 +6064,7 @@ function animate() {
         Math.sin(debugOrbitPitch),
         -Math.cos(debugOrbitYaw) * Math.cos(debugOrbitPitch)
       );
-      const headPivot = new THREE.Vector3(playerPos.x, EYE_HEIGHT, playerPos.z);
+      const headPivot = new THREE.Vector3(playerPos.x, playerPos.y + EYE_HEIGHT, playerPos.z);
       camera.position.copy(headPivot).addScaledVector(orbitDir, -DEBUG_TP_DISTANCE);
       camera.lookAt(headPivot);
     } else {
@@ -5462,7 +6074,7 @@ function animate() {
       const camFwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
       camera.position.set(
         playerPos.x + camFwd.x * FP_CAMERA_FORWARD_OFFSET,
-        EYE_HEIGHT + FP_CAMERA_HEIGHT_OFFSET,
+        playerPos.y + EYE_HEIGHT + FP_CAMERA_HEIGHT_OFFSET,
         playerPos.z + camFwd.z * FP_CAMERA_FORWARD_OFFSET
       );
       camera.rotation.set(0, 0, 0);
@@ -5556,7 +6168,8 @@ function animate() {
     document.getElementById('status').textContent =
       `${myName} · ${conn}\n${spellLabel}` +
       (cooldowns[activeSlot] > 0 ? ' (кд...)' : ' — готово') +
-      `\n💡 Вода → Молния = CHAIN SHOCK x${SYNERGY_MULT}\n💨 Вода ↔ Огонь = ОБЛАКО ПАРА (стан)\n⚡🔥 Молния → Огонь = ДЕТОНАЦИЯ\nУровень подземелья: ${currentLevel}`;
+      `\n💡 Вода → Молния = CHAIN SHOCK x${SYNERGY_MULT}\n💨 Вода ↔ Огонь = ОБЛАКО ПАРА (стан)\n⚡🔥 Молния → Огонь = ДЕТОНАЦИЯ\n` +
+      (currentZone === 'mountain' ? 'Горный храм' : `Уровень подземелья: ${currentLevel}`);
     renderPartyFrames();
     updateMinimapAndQuest();
   }
@@ -5867,6 +6480,9 @@ wireChatBox('waitingChatInput', 'waitingChatSend');
 window.__debug = {
   get renderer() { return renderer; }, get particleBursts() { return particleBursts; },
   get connections() { return connections; },
+  MOUNTAIN_CX, MOUNTAIN_CZ, MOUNTAIN_RETURN_DZ, terrainHeightAt, mountainHeightAt,
+  get rockTemplates() { return rockTemplates; }, get rockAssetsReady() { return rockAssetsReady; },
+  teleportToMountain, teleportBackFromMountain, get hLightX() { return hLightX; }, get hLightZ() { return hLightZ; },
   get mageTemplate() { return mageTemplate; }, get mageTemplateFire() { return mageTemplateFire; },
   get mageTemplateWater() { return mageTemplateWater; },
   get elementPreviews() { return elementPreviews; },
