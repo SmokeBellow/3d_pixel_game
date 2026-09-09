@@ -2897,3 +2897,167 @@ mirror-portal Findings entry.
 - Menu's `menu-bg.jpg` placeholder is still a real 404 (expected — art not
   supplied yet, code already picks it up automatically once the file exists).
 - Not committed yet (no code changed this session — verification only).
+
+## COMPLETE: Water+Fire synergy reworked — steam cloud (de-aggro + stun), not just extinguish (2026-09-09)
+
+- Per user request: Water meeting a burning target (or Fire hitting a wet
+  one) no longer just cancels the two statuses out — it now bursts into a
+  steam cloud (`triggerSteamCloud`, `STEAM_CLOUD_RADIUS=5`) that immediately
+  de-aggroes every enemy caught in it (drops chase, forgets its target) and
+  leaves them `STEAM_STUN_DURATION_S=2.5` "ошеломлён" (stunned) — same
+  "skip AI entirely" gate `hostSimulate` already used for Плеск's max-level
+  freeze, just its own `e.stunned` flag so the two don't collide. New status
+  icon (💨) and a pale grey-blue tint, both following the same pattern as
+  wet/burning/frozen. Wired into every place the old extinguish lived:
+  Плеск (single-target), Искра/Огненный шар hitting a wet target (incl.
+  splash), and Волна's AoE nova.
+- **Real bug found and fixed while verifying** (not a guess — caught by
+  actually re-simulating after the trigger): `hostApplyDamage`'s existing
+  "any damage re-aggros the target onto the attacker" logic ran *after*
+  `triggerSteamCloud` in both the Water-single-target and Волна branches,
+  silently undoing the de-aggro one line later — the enemy would show
+  `stunned: 2.5` but `aiState: 'chase'` again immediately. Fixed with a
+  single guard in `hostApplyDamage` itself (`!(e.stunned > 0)`) rather than
+  patching every call site — an enemy already stunned doesn't get bumped
+  back to chase by further damage this same tick/AoE. (The Fire-hits-wet
+  and splash branches never had this bug — there, `triggerSteamCloud` runs
+  *after* `hostApplyDamage`, so the ordering was already correct; only
+  found asymmetrically once tested.)
+- Verified live via `hostResolveCast`/`hostSimulate(dt)` calls in both
+  directions: Fire-then-Water and Water-then-Fire both correctly zero
+  `burning`/`wet`, set `stunned=2.5`, reset `aiState` to `'patrol'` and
+  `targetPeerId` to `null` — confirmed the fix by manually re-aggroing the
+  target right before the synergy call (worst case) and watching it still
+  end up de-aggroed after. Ran 30+ manual `hostSimulate` ticks to confirm:
+  stunned enemy doesn't reacquire a player standing right next to it, then
+  correctly resumes chase the instant `stunned` decays past 2.5s. Also
+  incidentally confirmed the cloud is a true AoE, not single-target-only —
+  a second enemy that had wandered within `STEAM_CLOUD_RADIUS` of the hit
+  point got caught in the same cloud. Combat log ("💨 ...: ОБЛАКО ПАРА!
+  ошеломлены и потеряли цель: N") and the new HUD hint line both confirmed
+  on screen, not just via debug reads.
+- Not committed yet.
+
+## COMPLETE: Steam cloud visual reworked — many soft puffs, not one solid sphere (2026-09-09)
+
+- User feedback on the first version: the cloud was a single opaque
+  `SphereGeometry` mesh — at `STEAM_CLOUD_RADIUS=5` that's large enough to
+  fully hide every enemy caught in it, which reads as "an enemy vanished"
+  rather than "a cloud you can see into". Replaced entirely with
+  `spawnSteamFx` calling `spawnParticleBurst` ~9 times at randomized
+  positions spread across the cloud radius (instead of one burst from the
+  center) — each a small handful of soft, slow-drifting sprites using the
+  existing glow texture, sized ~1.6-2.8 and living roughly
+  `STEAM_STUN_DURATION_S`.
+- Extended `spawnParticleBurst`/`updateParticleBursts` with two new opt-in
+  params, defaulted to the exact old behavior so every other caller
+  (impacts, explosions, chain sparks, etc.) is unaffected: `blending`
+  (steam uses `THREE.NormalBlending` instead of the default
+  `AdditiveBlending` — additive would make overlapping puffs build up into
+  a bright glow, wrong for grey mist) and `opacityScale` (steam uses 0.3,
+  capping how solid any single puff ever gets so gaps between puffs stay
+  genuinely see-through, not just momentarily during fade-out).
+- Also added `renderer` and `particleBursts` to the `window.__debug` export
+  — needed to actually verify this visually in this sandbox, where the live
+  render loop doesn't reliably tick (long-documented limitation). Used the
+  established small-offscreen-canvas-JPEG technique (this time via a
+  `renderer.setSize(160,160,false)` + manual `renderer.render()` call) to
+  get a real frame instead of a stale one.
+- Verified via a real rendered frame (160×160 JPEG, decoded and inspected
+  directly, not just debug-value reads): multiple distinct soft grey puffs
+  visible around both enemies, both enemy bodies clearly visible through
+  and around the cloud rather than hidden behind a solid shape.
+- Not committed yet.
+
+## COMPLETE: Fire + Lightning synergy — Detonation (2026-09-09)
+
+- Third elemental combo per user request: Lightning striking a burning
+  target instantly dumps its entire remaining burn (the rest of
+  `applyBurn`'s DoT tail — `e.burning * e.burnDps`) as one immediate hit,
+  instead of ticking it out over the rest of `BURN_DURATION_S`. Lightning's
+  own normal hit damage still lands too (this stacks on top, doesn't
+  replace it) — new branch sits alongside the existing Chain Shock
+  (Water-on-Lightning) branch in `hostResolveCast`, mutually exclusive
+  since a target is never both wet and burning at once.
+- Visual: `spawnDetonateFx` — a ~1s tangled net of jagged red bolts
+  encircling the target (7 anchor points around a ring at chest height,
+  each connected to two non-adjacent anchors so it reads as a net, not a
+  clean circle), reusing the same zigzag-tube technique as
+  `spawnLightningBolt` but with its own longer `DETONATE_FX_DURATION_S=1`
+  life instead of a normal bolt's instant 0.15s flash.
+- Verified live via `hostResolveCast`: ignite (Fire, `burning=4`,
+  `burnDps=2.25`) then Lightning on the same target — hp dropped by exactly
+  21 (12 base Разряд damage + 9 remaining burn, `4×2.25`), `burning`/
+  `burnDps` correctly zeroed. Combat log ("⚡🔥 ...: ДЕТОНАЦИЯ! +9") and the
+  new HUD hint line both confirmed on screen. Rendered a real frame (same
+  small-offscreen-canvas-JPEG technique as the steam cloud verification,
+  via the `renderer`/`particleBursts` debug exports added last round) and
+  visually confirmed the red net encircling a still-visible enemy.
+- Not committed yet.
+
+## COMPLETE: Two fixes — shared door/button, thinner form-fitting detonation net (2026-09-09)
+
+- **Real bug found and fixed: level-1 antechamber door/button was per-player
+  local state, never networked.** `openZoneDoor()` only ever mutated the
+  calling client's own `ZONE_DOORS[1]` object — the host and every joined
+  client each had their own independent copy, so one player pressing the
+  button never opened it for anyone else, exactly as the user reported.
+  Fixed by making it shared/host-authoritative, the same pattern already
+  used for enemies/levels/hub mirrors: `tryInteract()`'s door branch now
+  also sends `{t:'openDoor', zoneId}` to the host when the presser isn't
+  the host (opens its own copy immediately too, so it still feels instant
+  for the presser); the host's existing periodic `'state'` broadcast
+  (`hostSimulate`, ~12Hz) now includes `openDoors` (only the actually-open
+  zoneIds, since applying "open" is a one-way ratchet); `onClientData`
+  applies any zoneId in `openDoors` via the same idempotent `openZoneDoor()`.
+  Added a new `openDoor` case to the host's client-message switch.
+  Verified live end-to-end with two real tabs (host + a real joined
+  client): client-presses-button → host's own copy opens (network
+  round-trip, not just the presser's local copy) → confirmed via
+  `ZONE_DOORS[1].open` read directly on the host tab. Also verified the
+  reverse direction in isolation (host opens directly, client receives it
+  purely from the next periodic broadcast, no explicit action from the
+  client) to confirm the broadcast path itself works, not just the
+  request path.
+- **Detonation net redesigned to hug the enemy model and read as thin
+  wire, not a thick cable floating a full arm's-length away.** User
+  feedback on the first version. `spawnDetonateFx` (Fire+Lightning
+  synergy): ring radius 1.1→0.55 (0.55×1.8 for bosses, via a new `big`
+  param carried over the network same as other fx), vertical anchor jitter
+  1.3→0.9, tube radius 0.045→0.018 (both also scaled for bosses). Center
+  height 1.1→0.95 to sit lower on a goblin's shorter frame.
+  Also added `connections` to the `window.__debug` export (needed to drive
+  the door test above from a real second client tab rather than only
+  through debug state reads) alongside last round's `renderer`/
+  `particleBursts`.
+- Verified visually via the same small-offscreen-canvas-JPEG render
+  technique as the earlier synergy checks: a real rendered frame shows
+  thin red bolts wrapped tightly around the goblin body instead of a wide
+  generic ring.
+- Not committed yet.
+
+## COMPLETE: Detonation visual replaced — one big bolt from above (2026-09-09)
+
+- User feedback on the net-around-the-target version: wanted a single big
+  red bolt striking down from above instead. `spawnDetonateFx` rewritten:
+  a zigzag tube from ~9 units above the target straight down to its feet
+  (scaled ×1.8 for bosses via the existing `big` param), red
+  (`0xff2222`), flickering as `DETONATE_STRIKE_COUNT=4` short (0.2s) quick
+  re-strikes spread across `DETONATE_FX_DURATION_S=1` via `setTimeout` —
+  a single tube frozen static for a full second would look wrong for
+  lightning, so it re-jags and re-fires instead. Plus one particle burst
+  at the impact point on the first strike. Old ring-net code and its
+  `ringPoints`/`ringRadius` sizing removed entirely.
+- Verification hit a real environment snag, not a code bug: the first two
+  render attempts came back solid black — `read_console_messages` showed
+  `WebGL: CONTEXT_LOST_WEBGL`, from hammering `renderer.setSize()` +
+  `renderer.render()` back-to-back too many times across the session's
+  earlier verification rounds. Reloading the page (fresh WebGL context)
+  and rendering once cleanly fixed it — noting this here since it's a
+  reusable lesson for the next round of manual-render verification in
+  this sandbox: don't chain more than one or two forced renders per page
+  load.
+- Verified visually via the same small-offscreen-canvas-JPEG technique:
+  a real rendered frame shows one thick red bolt crashing down through the
+  enemy from well above frame, not a net around it.
+- Not committed yet.

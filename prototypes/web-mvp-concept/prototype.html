@@ -434,6 +434,36 @@ function applyBurn(e, hitDmg, casterPid) {
   e.burnCasterPid = casterPid;
   updateEnemyVisual(e);
 }
+// ⭐ SYNERGY: Water + Fire — steam cloud. Per user request, Water meeting a
+// burning target (or Fire hitting a wet one) no longer just cancels the two
+// statuses out — it bursts into a steam cloud that immediately de-aggroes
+// every enemy caught in it (drops chase, forgets its target) and leaves them
+// STEAM_STUN_DURATION_S "ошеломлён" (stunned — same "skip AI entirely" gate
+// hostSimulate already uses for Плеск's max-level freeze, just its own flag
+// so the two don't collide visually/mechanically).
+const STEAM_CLOUD_RADIUS = 5;
+const STEAM_STUN_DURATION_S = 2.5;
+function triggerSteamCloud(centerPos, casterPid) {
+  const affected = [];
+  for (const other of enemies) {
+    if (!other.alive) continue;
+    if (other.mesh.position.distanceTo(centerPos) < STEAM_CLOUD_RADIUS) {
+      other.burning = 0; other.burnDps = 0; other.burnCasterPid = null;
+      other.wet = 0; other.slowFactor = 1;
+      other.stunned = STEAM_STUN_DURATION_S;
+      other.aiState = 'patrol';
+      other.targetPeerId = null;
+      updateEnemyVisual(other);
+      affected.push(other.id);
+    }
+  }
+  if (affected.length > 0) {
+    hostLog(`💨 ${nameFor(casterPid)}: ОБЛАКО ПАРА! ошеломлены и потеряли цель: ${affected.length}`);
+  }
+  broadcast({ t: 'fx', kind: 'steam', pos: centerPos.toArray() });
+  spawnSteamFx(centerPos);
+  return affected;
+}
 const CHAIN_RADIUS = 6;
 const ENEMY_WANDER_SPEED = 1.2;
 const ENEMY_CHASE_SPEED = 2.6;
@@ -467,6 +497,7 @@ const GOBLIN_ROTATION_OFFSET = Math.PI;
 const GOBLIN_WET_TINT = new THREE.Color(0x3a5fb0);
 const GOBLIN_BURN_TINT = new THREE.Color(0xff5522);
 const GOBLIN_FROZEN_TINT = new THREE.Color(0xaeeeff); // Плеск mastery max level — see TIER1_MAX_LEVEL comment
+const GOBLIN_STEAM_TINT = new THREE.Color(0xd8dde6); // Water+Fire steam-stun — see triggerSteamCloud
 const BOSS_HP = 900;
 const BOSS_SCALE = 2.1;
 // How close a player must get before a boss notices them at all — see the
@@ -2188,7 +2219,22 @@ function updateDoorPrompt() {
   }
 }
 function tryInteract() {
-  if (activeDoorAction) { openZoneDoor(currentZone); return; }
+  if (activeDoorAction) {
+    // Shared world state, not per-player (per user request): the host
+    // opens its own authoritative copy immediately and the door's `open`
+    // flag now rides the normal periodic 'state' broadcast (see
+    // hostSimulate) so every other client picks it up the same way they
+    // already do for enemies/levels/hub mirrors. A non-host presser opens
+    // its own local door right away too (feels instant, same as before)
+    // but also tells the host, so the host's broadcast — and therefore
+    // every OTHER player — actually reflects it instead of staying closed
+    // for everyone but the presser.
+    openZoneDoor(currentZone);
+    if (!isHost && connections[0] && connections[0].open) {
+      connections[0].send(JSON.stringify({ t: 'openDoor', zoneId: currentZone }));
+    }
+    return;
+  }
   if (!shopPhase || !activeStandAction) return;
   const a = activeStandAction;
   if (a.kind === 'tree') {
@@ -2266,6 +2312,7 @@ const SKIN_COLOR = 0x8a8075, CLOTH_COLOR = 0x4a3f5c;
 const SKIN_WET = 0x4d79c9, CLOTH_WET = 0x33507a;
 const SKIN_BURN = 0xdd5522, CLOTH_BURN = 0x992211;
 const SKIN_FROZEN = 0xaeeeff, CLOTH_FROZEN = 0x7fb8cc;
+const SKIN_STEAM = 0xd8dde6, CLOTH_STEAM = 0xaab2c0; // Water+Fire steam-stun tint
 let enemies = [];
 function makeEnemy(id, x, z, maxHp, isBoss, bossKind) {
   const group = new THREE.Group();
@@ -2357,6 +2404,7 @@ function makeEnemy(id, x, z, maxHp, isBoss, bossKind) {
            hpBar: bar, statusIcon, hp: maxHp, maxHp, wet: 0, alive: true,
            burning: 0, burnDps: 0, burnCasterPid: null, // periodic fire damage — see hostSimulate's decay tick and hostResolveCast's Fire branch
            slowFactor: 1, frozenT: 0, // Плеск (Water tier-1) leveling — see hostResolveCast's Water branch and TIER1_MAX_LEVEL
+           stunned: 0, // Water+Fire steam-cloud synergy — see triggerSteamCloud
            home: new THREE.Vector3(x, 0, z), wanderTarget: new THREE.Vector3(x, 0, z),
            limbs, walkPhase: Math.random() * 6.28,
            lastPos: new THREE.Vector3(x, 0, z),
@@ -2439,14 +2487,14 @@ function makeEnemyStatusSprite() {
   return { sprite, ctx, tex, lastKey: '' };
 }
 function updateEnemyStatusIcons(e) {
-  const key = (e.frozenT > 0 ? 'F' : '') + (e.burning > 0 ? 'B' : '') + (e.wet > 0 ? 'W' : '');
+  const key = (e.frozenT > 0 ? 'F' : '') + (e.stunned > 0 ? 'S' : '') + (e.burning > 0 ? 'B' : '') + (e.wet > 0 ? 'W' : '');
   const si = e.statusIcon;
   if (key === si.lastKey) return;
   si.lastKey = key;
   const ctx = si.ctx, cnv = ctx.canvas;
   ctx.clearRect(0, 0, cnv.width, cnv.height);
   if (key) {
-    const icons = (key.includes('F') ? '❄️' : '') + (key.includes('B') ? '🔥' : '') + (key.includes('W') ? '💧' : '');
+    const icons = (key.includes('F') ? '❄️' : '') + (key.includes('S') ? '💨' : '') + (key.includes('B') ? '🔥' : '') + (key.includes('W') ? '💧' : '');
     ctx.font = '24px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -2463,13 +2511,14 @@ function updateEnemyVisual(e) {
   if (e.isGoblin) {
     for (const { mat, orig } of e.materials) {
       if (e.frozenT > 0) mat.color.copy(orig).lerp(GOBLIN_FROZEN_TINT, 0.7);
+      else if (e.stunned > 0) mat.color.copy(orig).lerp(GOBLIN_STEAM_TINT, 0.6);
       else if (e.burning > 0) mat.color.copy(orig).lerp(GOBLIN_BURN_TINT, 0.6);
       else if (e.wet > 0) mat.color.copy(orig).lerp(GOBLIN_WET_TINT, 0.55);
       else mat.color.copy(orig);
     }
   } else {
-    e.skinMat.color.setHex(e.frozenT > 0 ? SKIN_FROZEN : e.burning > 0 ? SKIN_BURN : e.wet > 0 ? SKIN_WET : SKIN_COLOR);
-    e.clothMat.color.setHex(e.frozenT > 0 ? CLOTH_FROZEN : e.burning > 0 ? CLOTH_BURN : e.wet > 0 ? CLOTH_WET : CLOTH_COLOR);
+    e.skinMat.color.setHex(e.frozenT > 0 ? SKIN_FROZEN : e.stunned > 0 ? SKIN_STEAM : e.burning > 0 ? SKIN_BURN : e.wet > 0 ? SKIN_WET : SKIN_COLOR);
+    e.clothMat.color.setHex(e.frozenT > 0 ? CLOTH_FROZEN : e.stunned > 0 ? CLOTH_STEAM : e.burning > 0 ? CLOTH_BURN : e.wet > 0 ? CLOTH_WET : CLOTH_COLOR);
   }
 }
 
@@ -3522,6 +3571,47 @@ function spawnLightningBolt(fromArr, toArr, colorHex, thick) {
   flash.position.copy(to);
   fx.push({ obj: flash, life: 0.12, pooled: true });
 }
+// ⭐ SYNERGY: Fire + Lightning — Detonation. One big red bolt crashing
+// straight down onto the target from well above, instead of a net wrapping
+// around it (per user feedback: the net read as generic decoration around
+// the model, not an actual strike). Flickers as a few quick successive
+// strikes over DETONATE_FX_DURATION_S — reuses the same zigzag-tube
+// technique as spawnLightningBolt, but a single frozen tube held static
+// for a full second would look wrong for lightning, so this re-jags and
+// re-fires a short-lived (0.2s) bolt a few times instead.
+const DETONATE_FX_DURATION_S = 1;
+const DETONATE_STRIKE_COUNT = 4;
+function spawnDetonateFx(centerPos, big) {
+  const scale = big ? 1.8 : 1;
+  const ground = centerPos.clone().add(new THREE.Vector3(0, 0.05, 0));
+  const top = centerPos.clone().add(new THREE.Vector3(0, 9 * scale, 0));
+  const strike = () => {
+    const segments = 8;
+    const points = [top.clone()];
+    for (let i = 1; i < segments; i++) {
+      const t = i / segments;
+      const p = top.clone().lerp(ground, t);
+      p.x += (Math.random() - 0.5) * 0.5 * scale;
+      p.z += (Math.random() - 0.5) * 0.5 * scale;
+      points.push(p);
+    }
+    points.push(ground.clone());
+    const curve = new THREE.CatmullRomCurve3(points);
+    const tubeGeo = new THREE.TubeGeometry(curve, 20, 0.05 * scale, 5, false);
+    const boltMesh = new THREE.Mesh(tubeGeo, new THREE.MeshBasicMaterial({ color: 0xff2222, transparent: true }));
+    scene.add(boltMesh);
+    fx.push({ obj: boltMesh, life: 0.2 });
+    const flash = borrowFlashLight(0xff2222, 4, 9 * scale);
+    flash.position.copy(centerPos).add(new THREE.Vector3(0, 0.6, 0));
+    fx.push({ obj: flash, life: 0.18, pooled: true });
+  };
+  strike();
+  spawnParticleBurst(ground.clone().add(new THREE.Vector3(0, 0.3, 0)),
+    { count: 16, texture: PARTICLE_TEX.glow, color: 0xff2222, speed: 3.2, size: 0.32, life: 0.4, upBias: 0.5 });
+  for (let i = 1; i < DETONATE_STRIKE_COUNT; i++) {
+    setTimeout(strike, i * (DETONATE_FX_DURATION_S * 1000 / DETONATE_STRIKE_COUNT));
+  }
+}
 function spawnChainFx(centerEnemyId, targetIds) {
   const c = enemies[centerEnemyId];
   if (!c) return;
@@ -3556,7 +3646,12 @@ const PARTICLE_TEX = {
 const particleBursts = []; // {points, velocities, life, maxLife, gravity}
 function spawnParticleBurst(pos, opts) {
   const { count = 20, texture = PARTICLE_TEX.glow, color = 0xffffff, speed = 3,
-          upBias = 0.4, size = 0.35, life = 0.5, gravity = 0 } = opts;
+          upBias = 0.4, size = 0.35, life = 0.5, gravity = 0,
+          // blending/opacityScale: both default to the original look (full
+          // additive glow) so every existing caller is unaffected — added
+          // for spawnSteamFx, which wants soft normal-blended puffs capped
+          // well under full opacity instead of a bright flare.
+          blending = THREE.AdditiveBlending, opacityScale = 1 } = opts;
   const positions = new Float32Array(count * 3);
   const velocities = [];
   for (let i = 0; i < count; i++) {
@@ -3567,12 +3662,12 @@ function spawnParticleBurst(pos, opts) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   const mat = new THREE.PointsMaterial({
-    map: texture, color, size, transparent: true, opacity: 1,
-    depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true,
+    map: texture, color, size, transparent: true, opacity: opacityScale,
+    depthWrite: false, blending, sizeAttenuation: true,
   });
   const points = new THREE.Points(geo, mat);
   scene.add(points);
-  particleBursts.push({ points, velocities, life, maxLife: life, gravity });
+  particleBursts.push({ points, velocities, life, maxLife: life, gravity, opacityScale });
 }
 function updateParticleBursts(dt) {
   for (let i = particleBursts.length - 1; i >= 0; i--) {
@@ -3586,7 +3681,7 @@ function updateParticleBursts(dt) {
       pos[j * 3 + 2] += b.velocities[j].z * dt;
     }
     b.points.geometry.attributes.position.needsUpdate = true;
-    b.points.material.opacity = Math.max(0, b.life / b.maxLife);
+    b.points.material.opacity = Math.max(0, b.life / b.maxLife) * (b.opacityScale ?? 1);
     if (b.life <= 0) {
       scene.remove(b.points);
       b.points.geometry.dispose();
@@ -3619,6 +3714,31 @@ function spawnExplosionFx(pos, colorHex, radius) {
   fx.push({ obj: flash, life: 0.3, pooled: true });
   spawnParticleBurst(pos, { count: 26, texture: PARTICLE_TEX.flame, color: colorHex, speed: 4.5, size: 0.6, life: 0.45, upBias: 0.6 });
   spawnParticleBurst(pos, { count: 14, texture: PARTICLE_TEX.glow, color: 0xffcc66, speed: 3, size: 0.25, life: 0.5, upBias: 0.4, gravity: 4 });
+}
+
+// Water+Fire synergy — a haze of many small, soft, slowly-drifting puffs
+// spread across STEAM_CLOUD_RADIUS, instead of one solid sphere. A single
+// opaque mesh that size would just hide every enemy caught in the cloud —
+// per user request, the cloud has to actually read as a cloud you can see
+// enemies *through*, with gaps between puffs, not a wall. Uses normal (not
+// additive) blending and a low opacityScale so overlapping puffs stay soft
+// and grey instead of building up into a bright glow.
+function spawnSteamFx(pos) {
+  const puffCount = 9;
+  for (let i = 0; i < puffCount; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const r = Math.random() * STEAM_CLOUD_RADIUS * 0.75;
+    const origin = new THREE.Vector3(
+      pos.x + Math.cos(ang) * r,
+      0.3 + Math.random() * 1.8,
+      pos.z + Math.sin(ang) * r);
+    spawnParticleBurst(origin, {
+      count: 3, texture: PARTICLE_TEX.glow, color: 0xd8dde6,
+      speed: 0.35, upBias: 0.5, gravity: -0.1,
+      size: 1.6 + Math.random() * 1.2, life: STEAM_STUN_DURATION_S * (0.7 + Math.random() * 0.3),
+      blending: THREE.NormalBlending, opacityScale: 0.3,
+    });
+  }
 }
 
 // Волна's nova — an expanding ring on the floor centered on the caster,
@@ -3856,12 +3976,20 @@ function onHostData(conn, msg) {
     if (shopPhase) closeShopAndAdvance();
   } else if (msg.t === 'cheatKillAll') {
     hostKillAllEnemies(conn.peer);
+  } else if (msg.t === 'openDoor') {
+    // Shared world state (per user request — "one opens it, everyone sees
+    // it open"), not per-player: the host is authoritative here the same
+    // way it already is for enemies/levels/hub mirrors. openZoneDoor()
+    // itself no-ops if already open, so a race between two players
+    // pressing E at once is harmless.
+    openZoneDoor(msg.zoneId);
   }
 }
 
 // --- client receives from host
 function onClientData(msg) {
   if (msg.t === 'state') {
+    if (msg.openDoors) for (const zid of msg.openDoors) openZoneDoor(zid); // shared door state — see hostSimulate's broadcast
     for (const e of msg.enemies) {
       const local = enemies[e.id];
       if (!local) continue;
@@ -3934,9 +4062,14 @@ function hostLog(text) {
 function hostApplyDamage(e, amount, casterPid) {
   e.hp = Math.min(e.maxHp, Math.max(0, e.hp - amount)); // hp_clamp
   if (e.hp <= 0 && e.alive) hostOnEnemyKilled(e, casterPid); // must flip e.alive BEFORE the visual refresh below
-  else if (e.alive && casterPid) {
+  else if (e.alive && casterPid && !(e.stunned > 0)) {
     // Getting hit always aggros the attacker, even from outside AGGRO_RADIUS
     // or mid-patrol — matches "enemies should start chasing if attacked".
+    // Exception: a steamed target (Water+Fire synergy, see triggerSteamCloud)
+    // stays de-aggroed even if it takes more damage this same tick/AoE —
+    // without this guard, the Water/Волна branches that call
+    // triggerSteamCloud *before* this function's own unconditional damage
+    // silently got their own de-aggro undone one line later.
     e.aiState = 'chase';
     e.targetPeerId = casterPid;
   }
@@ -4004,13 +4137,10 @@ function hostResolveCast(msg, casterPid) {
 
   if (spell.school === 'Water') {
     // Плеск (tier 1) only — Волна (tier 2) doesn't fly at a target at all,
-    // see hostResolveNova(). Extinguishes fire instead of soaking a target
-    // that's already burning (per user request) — the two statuses never
-    // coexist.
+    // see hostResolveNova(). ⭐ SYNERGY: hitting a burning target no longer
+    // just extinguishes it — see triggerSteamCloud (Water+Fire).
     if (e.burning > 0) {
-      e.burning = 0; e.burnDps = 0; e.burnCasterPid = null;
-      updateEnemyVisual(e);
-      hostLog(`${nameFor(casterPid)}: 💧 потушил огонь`);
+      triggerSteamCloud(e.mesh.position, casterPid);
     } else {
       // Tier-1 mastery (see TIER1_MAX_LEVEL comment): longer soak per
       // level, slow from level 2, a full 1s freeze at max level.
@@ -4034,6 +4164,18 @@ function hostResolveCast(msg, casterPid) {
     hostLog(`⚡💥 ${nameFor(casterPid)}: CHAIN SHOCK! x${SYNERGY_MULT} + цепь на ${chained.length}`);
     broadcast({ t: 'fx', kind: 'chain', center: e.id, targets: chained });
     spawnChainFx(e.id, chained);
+  } else if (spell.school === 'Lightning' && e.burning > 0) {
+    // ⭐ SYNERGY: Detonation — Lightning striking a burning target instantly
+    // dumps its entire remaining burn (the rest of applyBurn's DoT tail) as
+    // one immediate hit instead of ticking it out over the rest of
+    // BURN_DURATION_S. Per user request: visually a one-second net of red
+    // bolts around the target (spawnDetonateFx), not just a number popping.
+    const remainingBurn = e.burning * e.burnDps;
+    e.burning = 0; e.burnDps = 0; e.burnCasterPid = null;
+    hostApplyDamage(e, remainingBurn, casterPid);
+    hostLog(`⚡🔥 ${nameFor(casterPid)}: ДЕТОНАЦИЯ! +${Math.round(remainingBurn)}`);
+    broadcast({ t: 'fx', kind: 'detonate', pos: e.mesh.position.toArray(), big: e.isBoss });
+    spawnDetonateFx(e.mesh.position, e.isBoss);
   } else if (spell.school === 'Lightning' && spell.tier === 2 && spell.autoChainRadius) {
     // Цепная молния — chains on its own at reduced damage even without a
     // Water setup, unlike the single-target Разряд.
@@ -4056,7 +4198,10 @@ function hostResolveCast(msg, casterPid) {
     for (const other of enemies) {
       if (other !== e && other.alive && other.mesh.position.distanceTo(e.mesh.position) < spell.splashRadius) {
         hostApplyDamage(other, dmg * spell.splashDmgMult, casterPid);
-        if (other.alive) applyBurn(other, dmg * spell.splashDmgMult, casterPid);
+        if (other.alive) {
+          if (other.wet > 0) triggerSteamCloud(other.mesh.position, casterPid);
+          else applyBurn(other, dmg * spell.splashDmgMult, casterPid);
+        }
         splashed.push(other.id);
       }
     }
@@ -4074,7 +4219,13 @@ function hostResolveCast(msg, casterPid) {
     spawnImpactFx(hitCenter, spell.color);
   }
   hostApplyDamage(e, dmg, casterPid);
-  if (spell.school === 'Fire' && e.alive) applyBurn(e, dmg, casterPid); // every Fire hit ignites — both tiers
+  if (spell.school === 'Fire' && e.alive) {
+    // ⭐ SYNERGY: a wet target catching fire steams instead of just igniting
+    // — see triggerSteamCloud (Water+Fire). Otherwise every Fire hit
+    // ignites, both tiers, same as before.
+    if (e.wet > 0) triggerSteamCloud(e.mesh.position, casterPid);
+    else applyBurn(e, dmg, casterPid);
+  }
 
   // Разряд (Lightning tier 1) mastery: extra strikes at level 2+ (2 hits at
   // level 2, 3 at level 3 — max level replaces this whole instant-cast path
@@ -4143,7 +4294,7 @@ function hostResolveNova(msg, casterPid) {
   for (const e of enemies) {
     if (!e.alive) continue;
     if (e.mesh.position.distanceTo(center) < spell.selfNova) {
-      if (e.burning > 0) { e.burning = 0; e.burnDps = 0; e.burnCasterPid = null; updateEnemyVisual(e); }
+      if (e.burning > 0) { triggerSteamCloud(e.mesh.position, casterPid); }
       else e.wet = WET_DURATION_S;
       hostApplyDamage(e, dmg, casterPid);
       hitCount++;
@@ -4289,6 +4440,7 @@ function hostSimulate(dt) {
       if (!e.alive) continue;
       if (e.wet > 0) { e.wet -= dt; if (e.wet <= 0) { e.wet = 0; e.slowFactor = 1; updateEnemyVisual(e); } }
       if (e.frozenT > 0) { e.frozenT -= dt; if (e.frozenT <= 0) { e.frozenT = 0; updateEnemyVisual(e); } }
+      if (e.stunned > 0) { e.stunned -= dt; if (e.stunned <= 0) { e.stunned = 0; updateEnemyVisual(e); } }
       if (e.burning > 0) {
         hostApplyDamage(e, e.burnDps * dt, e.burnCasterPid);
         if (e.alive) { e.burning -= dt; if (e.burning <= 0) { e.burning = 0; updateEnemyVisual(e); } }
@@ -4462,8 +4614,12 @@ function hostSimulate(dt) {
 
       // Плеск (Water tier-1) mastery, max level: a full 1s freeze — enemy
       // skips target acquisition, movement and attacking entirely while
-      // e.frozenT > 0 (decremented above alongside wet/burning).
-      if (e.frozenT <= 0) {
+      // e.frozenT > 0 (decremented above alongside wet/burning). Same gate
+      // now also covers e.stunned (Water+Fire steam synergy) — a steamed
+      // enemy already had its aiState reset to 'patrol'/no target the
+      // instant the cloud hit (see triggerSteamCloud), so this just keeps
+      // it standing there dazed instead of re-acquiring a target mid-stun.
+      if (e.frozenT <= 0 && e.stunned <= 0) {
       if (e.aiState === 'patrol') {
         const target = players.find(p => !p.downed && e.mesh.position.distanceTo(p.pos) < AGGRO_RADIUS);
         if (target) { e.aiState = 'chase'; e.targetPeerId = target.pid; }
@@ -4539,7 +4695,7 @@ function hostSimulate(dt) {
           e.mesh.position.addScaledVector(dir, ENEMY_WANDER_SPEED * (e.slowFactor || 1) * dt);
         }
       }
-      } // e.frozenT <= 0
+      } // e.frozenT <= 0 && e.stunned <= 0
 
       clampEnemyToArena(e, currentLevel); // keep enemies inside the walls and off the pillars — chase/wander above has no collision of its own
     }
@@ -4569,6 +4725,12 @@ function hostSimulate(dt) {
       t: 'state',
       party: { level: partyLevel, xp: partyXp },
       highestClearedLevel, // drives which hub mirror is active/broken on clients too — see updateHubMirrors()
+      // Shared door state (per user request — door/button is world state,
+      // not per-player): only zoneIds with an actually-open door are sent,
+      // since a client applying "open" is a one-way ratchet anyway
+      // (openZoneDoor no-ops once open) — no need to also carry `false`
+      // entries for every closed door every tick.
+      openDoors: Object.entries(ZONE_DOORS).filter(([, d]) => d.open).map(([zid]) => zid),
       players: outPlayers,
       enemies: enemies.map(e => {
         const out = { id: e.id, hp: e.hp, maxHp: e.maxHp, wet: e.wet, burning: e.burning, frozenT: e.frozenT, alive: e.alive, p: [e.mesh.position.x, 0, e.mesh.position.z], attacking: e.justAttacked };
@@ -4776,6 +4938,8 @@ function handleFx(msg) {
   else if (msg.kind === 'explosion') spawnExplosionFx(new THREE.Vector3().fromArray(msg.pos), msg.color, msg.radius);
   else if (msg.kind === 'nova') spawnNovaFx(new THREE.Vector3().fromArray(msg.pos), msg.radius, msg.color);
   else if (msg.kind === 'impact') spawnImpactFx(new THREE.Vector3().fromArray(msg.pos), msg.color);
+  else if (msg.kind === 'steam') spawnSteamFx(new THREE.Vector3().fromArray(msg.pos));
+  else if (msg.kind === 'detonate') spawnDetonateFx(new THREE.Vector3().fromArray(msg.pos), msg.big);
   else if (msg.kind === 'spikeWarn') spawnGroundSpikeWarning(new THREE.Vector3().fromArray(msg.pos), msg.radius);
   else if (msg.kind === 'spikeBurst') spawnGroundSpikeBurst(new THREE.Vector3().fromArray(msg.pos), msg.radius);
   if (msg.pid && msg.pid !== myPeerId) triggerRemoteCast(msg.pid, msg.tier);
@@ -5392,7 +5556,7 @@ function animate() {
     document.getElementById('status').textContent =
       `${myName} · ${conn}\n${spellLabel}` +
       (cooldowns[activeSlot] > 0 ? ' (кд...)' : ' — готово') +
-      `\n💡 Вода → Молния = CHAIN SHOCK x${SYNERGY_MULT}\nУровень подземелья: ${currentLevel}`;
+      `\n💡 Вода → Молния = CHAIN SHOCK x${SYNERGY_MULT}\n💨 Вода ↔ Огонь = ОБЛАКО ПАРА (стан)\n⚡🔥 Молния → Огонь = ДЕТОНАЦИЯ\nУровень подземелья: ${currentLevel}`;
     renderPartyFrames();
     updateMinimapAndQuest();
   }
@@ -5701,6 +5865,8 @@ wireChatBox('waitingChatInput', 'waitingChatSend');
 // read-only debug hook exists purely so the browser console (or automated
 // QA) can inspect live state. Harmless for players; not used by the game.
 window.__debug = {
+  get renderer() { return renderer; }, get particleBursts() { return particleBursts; },
+  get connections() { return connections; },
   get mageTemplate() { return mageTemplate; }, get mageTemplateFire() { return mageTemplateFire; },
   get mageTemplateWater() { return mageTemplateWater; },
   get elementPreviews() { return elementPreviews; },

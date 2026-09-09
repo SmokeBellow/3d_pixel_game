@@ -1315,3 +1315,82 @@ old ring removed entirely.
 - Full detail in `prototypes/web-mvp-concept/README.md` Findings ("Real
   2-client network test (2026-09-09)").
 - No code changed — verification only. Nothing to commit from this round.
+
+## COMPLETE: Water+Fire synergy reworked — steam cloud, not extinguish (2026-09-09)
+
+- User request: Water+Fire meeting should create a steam cloud that
+  de-aggroes and stuns nearby enemies, instead of just cancelling out.
+  Implemented as `triggerSteamCloud()` — new `e.stunned` status (radius 5,
+  duration 2.5s), wired into every spot the old "extinguish" lived (Плеск,
+  Искра/Огненный шар on a wet target incl. splash, Волна's nova).
+- **Real bug caught while verifying**: `hostApplyDamage`'s unconditional
+  "damage re-aggros onto attacker" logic ran *after* `triggerSteamCloud` in
+  the Water/Волна branches, silently undoing the de-aggro. Fixed with one
+  guard in `hostApplyDamage` (skip re-aggro while `e.stunned > 0`) rather
+  than patching each call site.
+- Verified live via `hostResolveCast`/`hostSimulate(dt)`, both directions
+  (Fire→Water and Water→Fire), including the worst-case (force-re-aggro
+  right before the synergy fires) — confirmed it still ends up de-aggroed.
+  Confirmed stun correctly blocks target reacquisition then expires and
+  resumes chase. Confirmed real AoE (a second nearby enemy got caught too).
+  Combat log and new HUD hint line both confirmed on screen.
+- Full detail in README Findings ("Water+Fire synergy reworked — steam
+  cloud... (2026-09-09)").
+- Not committed yet.
+
+## COMPLETE: Steam cloud visual reworked — many soft puffs (2026-09-09)
+
+- User feedback: облако было одной сплошной непрозрачной сферой, полностью
+  скрывающей врагов внутри. Заменено на ~9 мелких мягких дрейфующих клочков
+  (переиспользует существующую систему частиц `spawnParticleBurst`,
+  разбросанных по радиусу STEAM_CLOUD_RADIUS вместо одного взрыва из
+  центра), с обычным (не аддитивным) блендингом и низкой прозрачностью —
+  враги видны сквозь просветы между клочками.
+- Добавил `renderer`/`particleBursts` в `window.__debug` для верификации
+  (рендер-цикл ненадёжен в песочнице) — отрендерил кадр вручную в маленький
+  offscreen-канвас, декодировал как JPEG, визуально подтвердил: несколько
+  отдельных серых клочков, оба врага видны сквозь них.
+- Full detail in README Findings ("Steam cloud visual reworked... (2026-09-09)").
+- Not committed yet.
+
+## COMPLETE: Fire + Lightning synergy — Detonation (2026-09-09)
+
+- Третья пара стихий: Молния по горящей цели мгновенно детонирует весь
+  оставшийся урон от поджога (одним хитом), плюс собственный урон Молнии —
+  не заменяет, а складывается. Визуал: ~1с сеть красных зигзагообразных
+  молний вокруг цели (`spawnDetonateFx`, 7 точек по кольцу, каждая
+  соединена с двумя несоседними — читается как сеть, а не ровный круг).
+- Верифицировано: поджёг (burning=4, burnDps=2.25) → Молния снесла ровно 21
+  hp (12 базовый Разряд + 9 оставшегося горения), статус корректно обнулён.
+  Лог боя и HUD-подсказка подтверждены на экране; реальный рендер-кадр
+  подтвердил сеть молний вокруг видимого врага.
+- Full detail in README Findings ("Fire + Lightning synergy — Detonation
+  (2026-09-09)").
+- Not committed yet.
+
+## COMPLETE: Shared door/button + thinner form-fitting detonation net (2026-09-09)
+
+- Реальный баг: дверь/кнопка антешамбера были локальным состоянием каждого
+  игрока (никогда не синхронизировались). Исправлено по паттерну
+  hostAuthoritative (как враги/уровни/зеркала): клиент шлёт `openDoor`
+  хосту, хост включает в периодическую `state`-рассылку `openDoors`,
+  клиенты применяют. Проверено вживую двумя реальными вкладками в обе
+  стороны (клиент→хост и хост→клиент через обычную рассылку).
+- Сеть молний детонации уменьшена и утончена: радиус кольца 1.1→0.55,
+  толщина трубки 0.045→0.018 (у боссов ×1.8 через новый параметр `big`).
+  Подтверждено визуально — тонкие молнии плотно облегают модель врага.
+- Full detail in README Findings ("Two fixes — shared door/button, thinner
+  form-fitting detonation net (2026-09-09)").
+- Not committed yet.
+
+## COMPLETE: Detonation visual replaced — one big bolt from above (2026-09-09)
+
+- По просьбе пользователя сеть молний вокруг цели заменена на одну
+  большую красную молнию, бьющую сверху вниз (~9 юнитов), мерцающую 4
+  быстрых удара за 1с (не статичный объект). У боссов шире (×1.8).
+- Верифицировано визуально реальным рендер-кадром — молния пробивает
+  противника сверху. По пути словил WebGL context lost от слишком частых
+  ручных рендеров подряд — перезагрузка страницы решает, не баг кода.
+- Full detail in README Findings ("Detonation visual replaced — one big
+  bolt from above (2026-09-09)").
+- Not committed yet.
