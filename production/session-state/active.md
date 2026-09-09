@@ -1,6 +1,6 @@
 # Session State — Covenant of Mages
 
-*Last updated: 2026-09-07*
+*Last updated: 2026-09-09*
 
 ## User Preferences (durable — apply every session)
 
@@ -1290,3 +1290,28 @@ old ring removed entirely.
   log shows the expected jump → land-and-hit sequence.
 - Full detail in README Findings.
 - Not committed yet.
+
+## COMPLETE: Real 2-client network test — first time (2026-09-09)
+
+- Used the project's own dev server (`web-mvp` in `.claude/launch.json`,
+  port 8743) with two genuinely separate browser tabs instead of `file://`
+  — real FBX assets loaded for the first time in this sandbox as a side
+  effect (the old `file://` restriction never applied to `localhost`).
+- Host (Lightning) created room `5JMD`; a second real tab joined by code as
+  Water — confirmed via host's own UI (party panel, "Друг присоединился"
+  log line), not just debug state. Satisfies the long-standing "real
+  2-player test" follow-up from the original co-op-spellcasting prototype —
+  first time it's actually happened, though both tabs were driven by this
+  session rather than two independent humans. **Still open**: a real second
+  *human* playing independently hasn't happened yet.
+- **Water→Lightning synergy (Chain Shock ×3) confirmed over the real network
+  path**: Плеск (12 dmg, applies Wet 6s) then Разряд on the same enemy dealt
+  36 dmg (exactly 3×) and cleared Wet — confirmed both via direct state read
+  and independently via the game's own combat log ("CHAIN SHOCK! x3").
+- Level-1 door: `open` state flips correctly but the visual slide animation
+  couldn't be verified — same long-documented unreliable `requestAnimationFrame`
+  limitation as every other animation-timing check in this sandbox, not a
+  new bug.
+- Full detail in `prototypes/web-mvp-concept/README.md` Findings ("Real
+  2-client network test (2026-09-09)").
+- No code changed — verification only. Nothing to commit from this round.

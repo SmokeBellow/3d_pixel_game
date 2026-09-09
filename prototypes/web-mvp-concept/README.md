@@ -2860,3 +2860,40 @@ mirror-portal Findings entry.
   the teleport-on-crossfade is gone. Combat log shows the expected
   "🦴 Босс прыгает в атаку!" → "🌋 Босс приземлился и ударил волной!
   (задето: N)" sequence per attack, confirmed on screen.
+
+## Real 2-client network test (2026-09-09)
+
+- First time this prototype was tested with two genuinely separate browser
+  tabs (two `preview_start`/`navigate` instances) hitting the project's own
+  dev server (`.claude/launch.json`'s `web-mvp` config) instead of `file://`
+  — this is also the first session where real FBX assets actually loaded in
+  this sandbox, since the earlier `file://` relative-path restriction never
+  applied to `http://localhost:8743`.
+- Host created a room (code `5JMD`, Lightning), a second real tab joined by
+  code (Water) — confirmed via the host's own UI, not just debug state: party
+  panel showed "Друг" with a live HP bar, and the combat log printed "Друг
+  присоединился". This satisfies the long-outstanding "real 2-player test"
+  follow-up from the original co-op-spellcasting prototype and from this
+  file's own MVP notes — first time it's actually happened, even though both
+  tabs were driven by the same tool rather than two separate humans.
+  **Still open**: a real *second human* playing independently (mouse/keyboard
+  timing, not driven by the same script) hasn't happened yet — recommend
+  scheduling that specifically, since two tabs driven by one script can't
+  exercise independent-discovery timing.
+- **Water→Lightning synergy confirmed working over the real network path**:
+  called `hostResolveCast` for the Water player's Плеск on an enemy (60→48
+  HP, `wet` set to 6), then the Lightning player's Разряд on the same enemy
+  (48→12 HP — exactly 3× the base 12 dmg, `wet` correctly cleared after).
+  Independently corroborated by the game's own combat log printing "Тестер:
+  CHAIN SHOCK! x3 + цепь на 0" — not just a debug-value read, the actual
+  player-facing feedback fired correctly too.
+- Level-1 antechamber door: `openZoneDoor(1)` flips `door.open` to `true`
+  correctly, but `door.mesh.position.y` never moved off `closedY` even after
+  a 2s real wait — consistent with this sandbox's long-documented unreliable
+  `requestAnimationFrame` ticking (nothing new; same limitation noted
+  throughout this file). The slide-down animation and the button's
+  press-visual therefore still need a real browser session to verify, same
+  as everything else animation-timing-dependent in this project.
+- Menu's `menu-bg.jpg` placeholder is still a real 404 (expected — art not
+  supplied yet, code already picks it up automatically once the file exists).
+- Not committed yet (no code changed this session — verification only).
